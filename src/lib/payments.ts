@@ -77,6 +77,7 @@ export async function createPlatformPayment(opts: {
 
 /** Marks a payment paid and applies its side effects. Idempotent. */
 export async function settlePayment(paymentId: string) {
+  const { onRequestPaid } = await import("./requests");
   const payment = await db.payment.findUniqueOrThrow({ where: { id: paymentId } });
   if (payment.status === "PAID") return payment;
   const year = new Date();
@@ -100,6 +101,8 @@ export async function settlePayment(paymentId: string) {
       where: { id: payment.requesterId },
       data: { subscriptionEndsAt: next },
     });
+  } else if (payment.purpose === "PER_REQUEST" && payment.requestId) {
+    await onRequestPaid(payment.requestId);
   }
   return updated;
 }

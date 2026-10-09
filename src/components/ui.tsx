@@ -110,12 +110,18 @@ export function Card({
   className,
   children,
   strong,
+  id,
 }: {
   className?: string;
   children: ReactNode;
   strong?: boolean;
+  id?: string;
 }) {
-  return <div className={cn(strong ? "glass-strong" : "glass", "p-5 sm:p-6", className)}>{children}</div>;
+  return (
+    <div id={id} className={cn(strong ? "glass-strong" : "glass", "p-5 sm:p-6", className)}>
+      {children}
+    </div>
+  );
 }
 
 export function SectionTitle({
