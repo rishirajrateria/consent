@@ -9,7 +9,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
       </Link>
       <div className="w-full max-w-sm">{children}</div>
       <p className="mt-8 max-w-sm text-center text-xs text-ink-faint">
-        Documented, verifiable permission for names, images, voices and likenesses.
+        The internet asks first now.
       </p>
     </div>
   );

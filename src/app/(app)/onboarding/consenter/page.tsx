@@ -100,8 +100,8 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
     <div className="mx-auto max-w-2xl space-y-6">
       <PageHeader
         kicker="Consenter onboarding"
-        title="Protect your likeness or IP"
-        desc="Strict manual verification: documents, official account proof and a verification meeting. One entity = one account."
+        title="Set the terms for your identity"
+        desc="You are verified manually — real documents, official account proof, a real meeting, one account per entity — so a yes is provably from you."
       />
       <ErrorNote error={sp.error as string | undefined} />
       <form action={submitConsenterApplicationAction} className="space-y-5">

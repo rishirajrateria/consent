@@ -54,7 +54,7 @@ export default async function PublicLayout({ children }: { children: ReactNode }
 
       <footer className="hidden border-t hairline py-10 md:block">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-sm text-ink-faint">
-          <div>consent. — documented, verifiable permission.</div>
+          <div>consent. — nothing about you moves without you.</div>
           <nav className="flex gap-4" aria-label="Footer">
             <Link href="/terms" className="hover:text-ink">Terms</Link>
             <Link href="/privacy" className="hover:text-ink">Privacy</Link>

@@ -127,14 +127,14 @@ This agreement is made between {{consenterLegalName}} ("Consenter") and {{reques
 
   console.log("Seeding CMS pages…");
   const pages: [string, string, string][] = [
-    ["pricing-note", "Pricing notes", "Consenters never pay. Requesters pay a one-time onboarding fee, a yearly subscription and a small per-request fee. No refunds on per-request fees in any outcome."],
-    ["faq", "FAQ", "### Is Consent a payment platform?\nNo. If a consenter asks for a fee, you agree on the amount in the app, then settle it directly between yourselves.\n\n### What do I get after approval?\nA tamper-proof consent certificate with a public verification link, bound to the exact file hashes you uploaded.\n\n### What if someone breaks the rules?\nEither side can file a report. Upheld reports lower the offender's public Consent Score. Legal action remains between the parties — export the Consent History Dossier as evidence."],
+    ["pricing-note", "Pricing notes", "Consenters never pay anything. Requesters pay a one-time onboarding fee, a yearly subscription and a per-request fee. Per-request fees are non-refundable in every outcome. Agreed fees between parties settle directly — money never moves through Consent."],
+    ["faq", "FAQ", "### Why does this matter now?\nA voice can be cloned and a likeness generated in an afternoon, and for decades whoever hit publish set the terms. Consent reverses it: the owner writes the terms — platform by platform, use by use — and every approved use is signed, on the record, and verifiable by anyone.\n\n### Is Consent a payment platform?\nNo. Money never moves through Consent. If an owner asks for a fee, you agree on the amount in the app, then settle it directly between yourselves.\n\n### What do I get after approval?\nAn Ed25519-signed certificate bound to the SHA-256 hashes of the exact files you uploaded, with a public verification link anyone can check, forever.\n\n### What if someone breaks the rules?\nEither side can file a report. Upheld reports lower the offender's public Consent Score. Legal action stays between the parties — export the Consent History Dossier as evidence. Consent gives no legal advice."],
     ["terms", "Terms of Service", "By using Consent you agree to: (1) only upload content you have rights to; (2) include the consent verification link in published content that received a grant; (3) per-request fees are non-refundable in every outcome; (4) Consent never processes payments between consenters and requesters."],
-    ["privacy", "Privacy Policy", "We store UTC timestamps, hashed documents numbers and encrypted sensitive fields. You may export your data or request deletion; certificates and audit logs are retained as legally required. GDPR and India DPDP aware."],
+    ["privacy", "Privacy Policy", "We store UTC timestamps, hashed document numbers and encrypted sensitive fields. You may export your data or request deletion; certificates and audit logs are retained as legally required. GDPR and India DPDP aware."],
     ["contact", "Contact", "Email support@consent.app — we answer within 2 business days."],
   ];
   for (const [slug, title, body] of pages) {
-    await db.cmsPage.upsert({ where: { slug }, update: {}, create: { slug, title, body } });
+    await db.cmsPage.upsert({ where: { slug }, update: { title, body }, create: { slug, title, body } });
   }
 
   console.log("Seeding demo admin…");
@@ -500,7 +500,7 @@ async function seedDemo() {
       messages: {
         create: [
           { senderId: clipsOwner.id, senderSide: "requester", body: "Big fan of the show — can we talk about a fair rate for three short scenes?" },
-          { senderId: showOwner.id, senderSide: "consenter", body: "Thanks! Finale scenes are premium for the next quarter, hence the number." },
+          { senderId: showOwner.id, senderSide: "consenter", body: "Thanks — finale scenes are premium for the next quarter, hence the number." },
         ],
       },
     },

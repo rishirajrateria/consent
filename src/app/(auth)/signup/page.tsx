@@ -13,7 +13,7 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Create your account</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          One login works for both sides — protect your likeness, or request consent as a creator.
+          One account, both sides — write the terms for your own identity, or create with someone else&apos;s, with permission.
         </p>
       </div>
       <ErrorNote error={sp.error as string | undefined} />

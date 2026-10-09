@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, PageHeader, StatusBadge, ButtonLink, ScoreRing } from "@/components/ui";
@@ -40,22 +39,22 @@ export default async function DashboardPage() {
             <ShieldCheck className="size-6 text-ink" strokeWidth={1.5} aria-hidden />
             <h2 className="text-lg font-semibold">I&apos;m a consenter</h2>
             <p className="text-sm text-ink-soft">
-              You&apos;re a public figure, show, brand or rights holder. Control exactly how your
-              name, image, voice and content may be used — platform by platform.
+              You set the terms here. Nothing with your name, face or voice on it moves until
+              you say yes.
             </p>
             <ButtonLink href="/onboarding/consenter" variant="secondary">
-              Protect my likeness <ArrowRight className="size-4" aria-hidden />
+              Set your terms <ArrowRight className="size-4" aria-hidden />
             </ButtonLink>
           </Card>
           <Card className="space-y-3">
             <Inbox className="size-6 text-ink" strokeWidth={1.5} aria-hidden />
             <h2 className="text-lg font-semibold">I&apos;m a requester</h2>
             <p className="text-sm text-ink-soft">
-              You&apos;re a creator, news channel, podcast or media house. Get documented,
-              verifiable permission before you publish.
+              Ask for exactly what you intend to publish — and leave holding proof anyone
+              can verify.
             </p>
             <ButtonLink href="/onboarding/requester" variant="secondary">
-              Request consent <ArrowRight className="size-4" aria-hidden />
+              Create with permission <ArrowRight className="size-4" aria-hidden />
             </ButtonLink>
           </Card>
         </div>
@@ -112,8 +111,8 @@ export default async function DashboardPage() {
           <Card className="flex flex-col items-start justify-center gap-3 border-dashed">
             <Sparkles className="size-5 text-ink-faint" aria-hidden />
             <p className="text-sm text-ink-soft">
-              One account can hold both sides — an influencer who also creates content can add the
-              other profile any time.
+              One account can hold both sides — an owner who also creates with other identities
+              can add the second profile any time.
             </p>
             <ButtonLink href="/onboarding" variant="ghost">
               Add another profile <ArrowRight className="size-4" aria-hidden />

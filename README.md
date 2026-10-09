@@ -1,9 +1,10 @@
 # Consent — Likeness & IP Permission Platform
 
-Consent is a platform where **famous people and IP owners** (people, TV shows, movies, brands,
-characters) record **platform-wise permissions** for how their name, picture, video references,
-voice and other identity assets may be used — and where **creators, news channels, meme pages,
-podcasts and media houses** get documented, verifiable approval before publishing.
+**A face is property. A voice is property. A story is property.** Consent is a platform where
+**identity owners** (people, TV shows, movies, brands, characters) record **platform-wise
+permissions** for how their name, picture, video references, voice and other identity assets may
+be used — and where **creators, news channels, meme pages, podcasts and media houses** get
+documented, verifiable approval before publishing.
 
 Every approval produces a **tamper-proof consent certificate**: bound to the SHA-256 hashes of the
 exact approved files, signed with the platform's Ed25519 key, verifiable by anyone at a public link.

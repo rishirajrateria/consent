@@ -104,8 +104,8 @@ export default async function RequesterOnboarding({ searchParams }: PageProps<"/
     <div className="mx-auto max-w-2xl space-y-6">
       <PageHeader
         kicker="Requester onboarding"
-        title="Apply as a requester"
-        desc="Tell us who you are. Applications are manually reviewed; you pay only after approval."
+        title="Create with permission"
+        desc="Tell us who you are. Applications are reviewed manually, and you pay only after approval."
       />
       <ErrorNote error={sp.error as string | undefined} />
       <form action={submitRequesterApplicationAction} className="space-y-5">

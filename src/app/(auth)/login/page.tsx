@@ -12,7 +12,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
     <Card strong className="fade-up space-y-5">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Welcome back</h1>
-        <p className="mt-1 text-sm text-ink-soft">Sign in to your Consent account.</p>
+        <p className="mt-1 text-sm text-ink-soft">Sign in — your terms are where you left them.</p>
       </div>
       <ErrorNote error={sp.error as string | undefined} />
       <form action={loginAction} className="space-y-4">
