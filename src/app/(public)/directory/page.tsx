@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { searchConsenters } from "@/lib/search";
 import { PageHeader, Card, Input, VerifiedBadge, EmptyState } from "@/components/ui";
+import { InvitePanel } from "@/components/invite-panel";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { titleCase, scoreBand } from "@/lib/utils";
 import { Search, UserRound } from "lucide-react";
 
@@ -31,6 +33,13 @@ export default async function DirectoryPage({ searchParams }: PageProps<"/direct
           aria-label="Search consenters"
         />
       </form>
+
+      <ErrorNote error={sp.error as string | undefined} />
+      {sp.invited && (
+        <SuccessNote
+          msg={`Invite recorded for ${sp.invited}.${Number(sp.demand) > 1 ? ` ${sp.demand} people are now waiting for them.` : " You'll hear the moment they join."}`}
+        />
+      )}
 
       {results.length === 0 ? (
         <EmptyState
@@ -64,6 +73,8 @@ export default async function DirectoryPage({ searchParams }: PageProps<"/direct
           ))}
         </div>
       )}
+
+      <InvitePanel query={q} returnTo={q ? `/directory?q=${encodeURIComponent(q)}` : "/directory"} />
     </div>
   );
 }

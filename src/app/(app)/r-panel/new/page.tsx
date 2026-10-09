@@ -5,6 +5,8 @@ import { SubmitButton } from "@/components/form";
 import { ErrorNote } from "@/components/error-note";
 import { createDraftAction } from "../requests/actions";
 import { requesterActive } from "@/lib/payments";
+import { InvitePanel } from "@/components/invite-panel";
+import { SuccessNote } from "@/components/error-note";
 import { titleCase } from "@/lib/utils";
 import { Search, UserRound } from "lucide-react";
 
@@ -35,6 +37,11 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
         <Input name="q" defaultValue={q} placeholder="Search verified people, shows, brands…" className="pl-10" aria-label="Search consenters" />
       </form>
 
+      {sp.invited && (
+        <SuccessNote
+          msg={`Invite recorded for ${sp.invited}. You'll be notified when they join and when they're verified.`}
+        />
+      )}
       {results.length === 0 ? (
         <EmptyState icon={UserRound} title="No verified profiles found" desc="Try another name, alias or handle." />
       ) : (
@@ -61,6 +68,11 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
           ))}
         </div>
       )}
+
+      <InvitePanel
+        query={q}
+        returnTo={q ? `/r-panel/new?q=${encodeURIComponent(q)}` : "/r-panel/new"}
+      />
     </div>
   );
 }

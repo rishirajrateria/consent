@@ -57,6 +57,21 @@ export async function decideConsenterAction(formData: FormData) {
     UNDER_REVIEW: { title: "Verification in progress", body: "Your documents are being reviewed.", href: "/onboarding/consenter" },
   } as const;
   await notifyConsenterTeam(id, { ...messages[status], critical: status === "APPROVED" });
+  if (status === "APPROVED") {
+    // Tell everyone who invited this entity that they're now live.
+    const { claimInvitesForConsenter } = await import("@/app/(app)/invites/actions");
+    const owner = await db.consenterMember.findFirst({
+      where: { consenterId: id, role: "OWNER" },
+      include: { user: true },
+    });
+    await claimInvitesForConsenter({
+      consenterId: id,
+      displayName: profile.displayName,
+      normalizedLegalName: profile.normalizedLegalName,
+      ownerEmail: owner?.user.email ?? "",
+      stage: "verified",
+    });
+  }
   redirect(`/admin/consenters/${id}?done=1`);
 }
 

@@ -216,6 +216,15 @@ export async function submitConsenterApplicationAction(formData: FormData) {
     targetId: profile.id,
     detail: { duplicateFlag },
   });
+  // Close the loop with everyone who invited this person to Consent.
+  const { claimInvitesForConsenter } = await import("@/app/(app)/invites/actions");
+  await claimInvitesForConsenter({
+    consenterId: profile.id,
+    displayName: profile.displayName,
+    normalizedLegalName: profile.normalizedLegalName,
+    ownerEmail: session.user.email,
+    stage: "joined",
+  });
   await setActiveProfile({ kind: "consenter", id: profile.id });
   redirect("/onboarding/consenter?submitted=1");
 }

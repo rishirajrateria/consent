@@ -45,6 +45,28 @@ model User {
   uploadedFiles        StoredFile[]
   verificationMeetings VerificationMeeting[] @relation("officer")
   scoreAdjustments     ScoreLog[]            @relation("adjustedBy")
+  appInvites           AppInvite[]
+}
+
+// Invite a person/IP who isn't on Consent yet (searched but not found).
+// Multiple invites for the same name measure demand; claimed when the
+// entity signs up and creates a consenter profile.
+model AppInvite {
+  id             String    @id @default(cuid())
+  targetName     String
+  normalizedName String
+  email          String?
+  handle         String?
+  note           String?
+  invitedById    String
+  invitedBy      User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+  claimedAt      DateTime?
+  claimedByConsenterId String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([invitedById, normalizedName])
+  @@index([normalizedName])
+  @@index([email])
 }
 
 model Session {
