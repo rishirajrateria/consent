@@ -87,7 +87,12 @@ export default async function RequesterOnboarding({ searchParams }: PageProps<"/
                 {price.taxRate && Number(price.taxRate) > 0 ? ` (+ ${price.taxLabel} ${price.taxRate}%)` : ""}
               </span>
             </div>
-            <form action={payOnboardingAction}>
+            <form action={payOnboardingAction} className="flex flex-wrap items-end gap-2">
+              <div className="w-44">
+                <Field label="Coupon code" hint="Optional.">
+                  <Input name="coupon" placeholder="CODE" className="uppercase" />
+                </Field>
+              </div>
               <SubmitButton>Pay and activate</SubmitButton>
             </form>
           </Card>

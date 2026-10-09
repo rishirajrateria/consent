@@ -80,3 +80,30 @@ in DECISIONS.md, and continue").
 22. **App invites.** Searching a name that isn't on Consent offers "send a Consent invite":
     demand is counted per normalized name, an optional email delivers the invitation, and inviters
     are notified when the person joins and again when they're verified (`AppInvite` + claim loop).
+
+## Deviations surfaced by the spec-coverage audit (now documented or fixed)
+
+23. **shadcn/ui not used** — the strict-monochrome glass system is hand-rolled on Tailwind
+    (`src/components/ui.tsx`, `globals.css`). shadcn's Radix primitives were unnecessary for the
+    server-rendered, form-driven UI and would have fought the custom design tokens.
+24. **Emails send inline and PDFs render on-demand** rather than through the job queue; the
+    sweeps (SLA, expiry, takedowns, renewals, settlements) are the queued work. The unused `Job`
+    model is reserved for moving email/PDF work onto the queue later.
+25. **Fixed by audit follow-up:** `pg_trgm` is now created by migration (search previously broke
+    on a fresh database); coupons are redeemable at onboarding/renewal checkout; login, signup,
+    OTP, 2FA and invites are rate-limited (in-memory sliding window — swap for Redis when
+    multi-instance); requester VIEWER seats are enforced read-only; the verification meeting must
+    be held and passed before an admin can mark a consenter verified; bans/suspensions require a
+    reason; requester applications create SocialAccount rows so OAuth proof is reachable; admin
+    email/SMS templates now actually override the OTP/signature emails (`src/lib/templates.ts`);
+    standing rules expose the format condition in the UI; public profiles render the uploaded
+    photo and emit JSON-LD; a cookie notice and skip-to-content links were added; `--color-ink-faint`
+    was darkened to meet WCAG AA contrast; an `ESignProvider` interface now backs agreement
+    signing with the provider selectable in admin settings.
+26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
+    (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
+    existing interfaces; admin read-only impersonation; relationship-wide dossier export;
+    structured negotiation scope diffs; score time-decay and admin-editable band thresholds;
+    encryption-at-rest for uploaded identity documents (currently private storage + hashed
+    identifiers); queued email/PDF; full i18n extraction. Goodwill credits are issued as 100%%
+    single-use coupons rather than a separate credit ledger.

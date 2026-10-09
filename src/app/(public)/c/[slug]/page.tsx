@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { Card, VerifiedBadge, ScoreRing, ButtonLink, SectionTitle } from "@/components/ui";
 import { titleCase, fmtMoney } from "@/lib/utils";
+import { storage } from "@/lib/storage";
 import { Check, X, CircleDashed } from "lucide-react";
 import type { Metadata } from "next";
 
@@ -24,6 +25,16 @@ export default async function PublicConsenterPage({ params }: PageProps<"/c/[slu
     include: { matrixEntries: true },
   });
   if (!c || c.status !== "APPROVED") notFound();
+  const photo = c.photoFileId ? await db.storedFile.findUnique({ where: { id: c.photoFileId } }) : null;
+  const photoUrl = photo ? storage.signedUrl(photo.storageKey, photo.name, 3600) : null;
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": c.entityType === "PERSON" ? "Person" : "Organization",
+    name: c.displayName,
+    alternateName: c.aliases,
+    description: c.bio ?? undefined,
+    url: `${process.env.APP_URL ?? ""}/c/${c.slug}`,
+  };
 
   const session = await getSession();
 
@@ -74,11 +85,17 @@ export default async function PublicConsenterPage({ params }: PageProps<"/c/[slu
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <Card strong className="fade-up space-y-4 p-7">
         <div className="flex flex-wrap items-start gap-4">
-          <div className="flex size-16 items-center justify-center rounded-3xl bg-ink/5 text-2xl font-semibold">
-            {c.displayName.charAt(0)}
-          </div>
+          {photoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={photoUrl} alt={`${c.displayName} profile photo`} className="size-16 rounded-3xl object-cover" width={64} height={64} />
+          ) : (
+            <div className="flex size-16 items-center justify-center rounded-3xl bg-ink/5 text-2xl font-semibold">
+              {c.displayName.charAt(0)}
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">{c.displayName}</h1>

@@ -16,9 +16,11 @@ export async function createRuleAction(formData: FormData) {
 
   const conditions: RuleConditions = {};
   const platformIds = formData.getAll("platformIds").map(String).filter(Boolean);
+  const formatIds = formData.getAll("formatIds").map(String).filter(Boolean);
   const assetTypeIds = formData.getAll("assetTypeIds").map(String).filter(Boolean);
   const requesterTypes = formData.getAll("requesterTypes").map(String).filter(Boolean);
   if (platformIds.length) conditions.platformIds = platformIds;
+  if (formatIds.length) conditions.formatIds = formatIds;
   if (assetTypeIds.length) conditions.assetTypeIds = assetTypeIds;
   if (requesterTypes.length) conditions.requesterTypes = requesterTypes;
   const maxDur = parseInt(String(formData.get("maxDurationSec") ?? ""), 10);

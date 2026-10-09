@@ -130,7 +130,7 @@ This agreement is made between {{consenterLegalName}} ("Consenter") and {{reques
     ["pricing-note", "Pricing notes", "Consenters never pay anything. Requesters pay a one-time onboarding fee, a yearly subscription and a per-request fee. Per-request fees are non-refundable in every outcome. Agreed fees between parties settle directly — money never moves through Consent."],
     ["faq", "FAQ", "### Why does this matter now?\nA voice can be cloned and a likeness generated in an afternoon, and for decades whoever hit publish set the terms. Consent reverses it: the owner writes the terms — platform by platform, use by use — and every approved use is signed, on the record, and verifiable by anyone.\n\n### Is Consent a payment platform?\nNo. Money never moves through Consent. If an owner asks for a fee, you agree on the amount in the app, then settle it directly between yourselves.\n\n### What do I get after approval?\nAn Ed25519-signed certificate bound to the SHA-256 hashes of the exact files you uploaded, with a public verification link anyone can check, forever.\n\n### What if someone breaks the rules?\nEither side can file a report. Upheld reports lower the offender's public Consent Score. Legal action stays between the parties — export the Consent History Dossier as evidence. Consent gives no legal advice."],
     ["terms", "Terms of Service", "By using Consent you agree to: (1) only upload content you have rights to; (2) include the consent verification link in published content that received a grant; (3) per-request fees are non-refundable in every outcome; (4) Consent never processes payments between consenters and requesters."],
-    ["privacy", "Privacy Policy", "We store UTC timestamps, hashed document numbers and encrypted sensitive fields. You may export your data or request deletion; certificates and audit logs are retained as legally required. GDPR and India DPDP aware."],
+    ["privacy", "Privacy Policy", "We store UTC timestamps, hashed document numbers and hashed document identifiers and private, access-controlled storage with short-lived signed links. You may export your data or request deletion; certificates and audit logs are retained as legally required. GDPR and India DPDP aware."],
     ["contact", "Contact", "Email support@consent.app — we answer within 2 business days."],
   ];
   for (const [slug, title, body] of pages) {
@@ -690,6 +690,57 @@ async function seedDemo() {
       },
     });
   }
+
+  // Remaining demo states: DRAFT, CLOSED, APPROVED_IN_PRINCIPLE, LEGAL_AGREEMENT_PENDING
+  await db.consentRequest.create({
+    data: {
+      requesterId: newsR.id, consenterId: showC.id, status: "DRAFT",
+      selections: [sel(yt, "Shorts", 15)], assetTypeIds: [at("Poster/still")], assetTypeNames: ["Poster/still"],
+      context: "", creativePlan: "", validityKind: "SINGLE_PUBLICATION",
+    },
+  });
+  const closed = await db.consentRequest.create({
+    data: {
+      requesterId: clipsR.id, consenterId: showC.id, status: "CLOSED",
+      closedReason: "requester walked away", isPaid: true,
+      selections: [sel(yt, "Long video", 50)], assetTypeIds: [at("Character/show footage")], assetTypeNames: ["Character/show footage"],
+      context: "Compilation of iconic Nightwatch moments across four seasons.",
+      creativePlan: "A ten-minute ranked compilation of the show's most iconic scenes with commentary between clips. Intent is entertainment; negotiation on the licensing fee did not reach agreement and we walked away politely.",
+      intentCategoryId: intent("Entertainment").id, intentCategoryName: "Entertainment",
+      validityKind: "SINGLE_PUBLICATION", submittedAt: new Date(Date.now() - 9 * 86400_000),
+      events: { create: [{ type: "submitted", actorSide: "requester" }, { type: "closed", actorName: "Casey Clips", actorSide: "requester" }] },
+      offers: { create: [{ version: 1, bySide: "consenter", byUserId: showOwner.id, amount: new Prisma.Decimal(1200), currency: "USD", status: "OPEN" }] },
+    },
+  });
+  await payFee(clipsR.id, closed.id, 9, "USD");
+  const inPrinciple = await db.consentRequest.create({
+    data: {
+      requesterId: newsR.id, consenterId: janeC.id, status: "APPROVED_IN_PRINCIPLE",
+      selections: [sel(yt, "Community post")], assetTypeIds: [at("Name")], assetTypeNames: ["Name"],
+      context: "Community post announcing our interview special featuring Jane by name.",
+      creativePlan: "A community post teaser naming Jane ahead of our interview special. Intent is promotion of a news program; final artwork is still in production, so approval in principle while we finish the asset.",
+      intentCategoryId: intent("Promotion").id, intentCategoryName: "Promotion",
+      validityKind: "SINGLE_PUBLICATION", submittedAt: new Date(Date.now() - 2 * 86400_000),
+      decidedAt: new Date(Date.now() - 86400_000), decidedById: jane.id, agreementMode: "APP_RECORD",
+      events: { create: [{ type: "submitted", actorSide: "requester" }, { type: "approved", actorName: "Jane Carter", actorSide: "consenter" }] },
+    },
+  });
+  await payFee(newsR.id, inPrinciple.id, 299, "INR");
+  const legalPending = await db.consentRequest.create({
+    data: {
+      requesterId: clipsR.id, consenterId: janeC.id, status: "LEGAL_AGREEMENT_PENDING",
+      isPaid: true, agreedAmount: new Prisma.Decimal(400), agreedCurrency: "USD",
+      selections: [sel(ig, "Reel", 20)], assetTypeIds: [at("Voice/audio clip")], assetTypeNames: ["Voice/audio clip"],
+      context: "Reel using a 20-second clip of Jane's podcast audio over subtitled visuals.",
+      creativePlan: "A 20-second reel pairing Jane's podcast quote with subtitled motion graphics. Intent is commentary on creator economics; the deal is agreed and the parties chose a legally binding agreement before issuance.",
+      intentCategoryId: intent("Commentary").id, intentCategoryName: "Commentary",
+      validityKind: "DATE_RANGE", validFrom: new Date(), validUntil: new Date(Date.now() + 180 * 86400_000),
+      submittedAt: new Date(Date.now() - 3 * 86400_000), decidedAt: new Date(Date.now() - 86400_000), decidedById: jane.id,
+      events: { create: [{ type: "submitted", actorSide: "requester" }, { type: "deal_agreed", actorName: "Jane Carter", actorSide: "consenter" }, { type: "legal_agreement_proposed", actorName: "Jane Carter", actorSide: "consenter" }] },
+      agreement: { create: { status: "PROPOSED", proposedBySide: "consenter" } },
+    },
+  });
+  await payFee(clipsR.id, legalPending.id, 9, "USD");
 
   console.log("Demo data ready. Logins (password: Password1!):");
   console.log("  admin@consent.app — Super Admin");

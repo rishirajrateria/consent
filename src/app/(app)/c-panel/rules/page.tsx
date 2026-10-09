@@ -17,16 +17,18 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
   const { consenter } = await requireConsenter();
   const [rules, platforms, assetTypes, members] = await Promise.all([
     db.standingRule.findMany({ where: { consenterId: consenter.id }, orderBy: { priority: "asc" } }),
-    db.platform.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
+    db.platform.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, include: { formats: { where: { active: true } } } }),
     db.assetType.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.consenterMember.findMany({ where: { consenterId: consenter.id }, include: { user: true } }),
   ]);
   const platformName = new Map(platforms.map((p) => [p.id, p.name]));
+  const formatName = new Map(platforms.flatMap((p) => p.formats.map((f) => [f.id, `${p.name} → ${f.name}`] as [string, string])));
   const assetName = new Map(assetTypes.map((a) => [a.id, a.name]));
 
   function describe(c: RuleConditions): string {
     const parts: string[] = [];
     if (c.platformIds?.length) parts.push(`platforms: ${c.platformIds.map((i) => platformName.get(i) ?? "?").join(", ")}`);
+    if (c.formatIds?.length) parts.push(`formats: ${c.formatIds.map((i) => formatName.get(i) ?? "?").join(", ")}`);
     if (c.assetTypeIds?.length) parts.push(`assets: ${c.assetTypeIds.map((i) => assetName.get(i) ?? "?").join(", ")}`);
     if (c.requesterTypes?.length) parts.push(`requester type: ${c.requesterTypes.map(titleCase).join(", ")}`);
     if (c.maxDurationSec) parts.push(`duration ≤ ${c.maxDurationSec}s`);
@@ -119,6 +121,15 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
                 {platforms.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
+              </select>
+            </Field>
+            <Field label="Formats (optional — narrows within platforms)">
+              <select name="formatIds" multiple size={5} className="input-glass">
+                {platforms.flatMap((p) =>
+                  p.formats.map((f) => (
+                    <option key={f.id} value={f.id}>{p.name} → {f.name}</option>
+                  ))
+                )}
               </select>
             </Field>
             <Field label="Asset types">

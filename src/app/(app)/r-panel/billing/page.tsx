@@ -1,6 +1,6 @@
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, KV, StatusBadge, SectionTitle, Alert } from "@/components/ui";
+import { PageHeader, Card, KV, StatusBadge, SectionTitle, Alert, Field, Input } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { SuccessNote } from "@/components/error-note";
 import { payRenewalAction } from "@/app/(app)/onboarding/actions";
@@ -36,7 +36,12 @@ export default async function BillingPage({ searchParams }: PageProps<"/r-panel/
               cannot send new requests until you renew.
             </Alert>
           )}
-          <form action={payRenewalAction} className="pt-2">
+          <form action={payRenewalAction} className="flex flex-wrap items-end gap-2 pt-2">
+            <div className="w-40">
+              <Field label="Coupon code" hint="Optional.">
+                <Input name="coupon" placeholder="CODE" className="uppercase" />
+              </Field>
+            </div>
             <SubmitButton variant="secondary">Renew for one year</SubmitButton>
           </form>
         </Card>

@@ -23,6 +23,17 @@ export async function decideConsenterAction(formData: FormData) {
   const status = statusMap[decision as keyof typeof statusMap];
   if (!status) redirect(`/admin/consenters/${id}`);
 
+  if (status === "APPROVED") {
+    const passedMeeting = await db.verificationMeeting.findFirst({
+      where: { consenterId: id, outcome: "passed" },
+    });
+    if (!passedMeeting) {
+      redirect(
+        `/admin/consenters/${id}?error=` +
+          encodeURIComponent("The mandatory verification meeting must be held and marked passed before verifying.")
+      );
+    }
+  }
   if (status === "APPROVED" && profile.duplicateFlag) {
     redirect(
       `/admin/consenters/${id}?error=` +

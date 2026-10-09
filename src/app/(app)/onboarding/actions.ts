@@ -66,6 +66,15 @@ export async function submitRequesterApplicationAction(formData: FormData) {
       contactPhone: d.contactPhone || session.user.phone,
       status: "SUBMITTED",
       members: { create: { userId: session.userId, role: "OWNER" } },
+      socialAccounts: {
+        create: channels.map((c) => ({
+          platformName: c.platform,
+          handle: c.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 120),
+          url: c.url,
+          followers: c.followers,
+          verifiedVia: "manual",
+        })),
+      },
     },
   });
   await storeUpload({ file: doc, kind: "DOCUMENT", uploadedById: session.userId, requesterDocOf: profile.id });
@@ -80,7 +89,7 @@ export async function submitRequesterApplicationAction(formData: FormData) {
   redirect("/onboarding/requester?submitted=1");
 }
 
-export async function payOnboardingAction() {
+export async function payOnboardingAction(formData: FormData) {
   const session = await requireUser();
   const member = await db.requesterMember.findFirst({
     where: { userId: session.userId },
@@ -93,12 +102,13 @@ export async function payOnboardingAction() {
   const { checkoutUrl } = await createPlatformPayment({
     requesterId: r.id,
     purpose: "ONBOARDING",
+    couponCode: String(formData.get("coupon") ?? "").trim() || undefined,
     returnTo: "/r-panel?welcome=1",
   });
   redirect(checkoutUrl);
 }
 
-export async function payRenewalAction() {
+export async function payRenewalAction(formData: FormData) {
   const session = await requireUser();
   const member = await db.requesterMember.findFirst({
     where: { userId: session.userId },
@@ -108,6 +118,7 @@ export async function payRenewalAction() {
   const { checkoutUrl } = await createPlatformPayment({
     requesterId: member.requesterId,
     purpose: "SUBSCRIPTION",
+    couponCode: String(formData.get("coupon") ?? "").trim() || undefined,
     returnTo: "/r-panel/billing?renewed=1",
   });
   redirect(checkoutUrl);

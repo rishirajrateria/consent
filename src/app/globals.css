@@ -17,7 +17,7 @@
   --color-foreground: var(--foreground);
   --color-ink: #111111;
   --color-ink-soft: #52525b;
-  --color-ink-faint: #a1a1aa;
+  --color-ink-faint: #71717a; /* WCAG AA ≥4.5:1 on white */
   --color-hairline: rgba(17, 17, 17, 0.08);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);

@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { getSession } from "@/lib/auth";
 import { BottomNav, TopNavLinks } from "@/components/nav";
+import { CookieNotice } from "@/components/cookie-notice";
 
 export default async function PublicLayout({ children }: { children: ReactNode }) {
   const session = await getSession();
@@ -16,6 +17,9 @@ export default async function PublicLayout({ children }: { children: ReactNode }
 
   return (
     <div className="flex min-h-dvh flex-col">
+      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:bg-ink focus:px-4 focus:py-2 focus:text-white">
+        Skip to content
+      </a>
       <header className="sticky top-0 z-40 px-3 pt-3 sm:px-4">
         <div className="glass-bar mx-auto flex max-w-6xl items-center gap-4 rounded-2xl px-4 py-2.5">
           <Link href="/home" className="text-lg font-semibold tracking-tight">
@@ -50,7 +54,7 @@ export default async function PublicLayout({ children }: { children: ReactNode }
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-3 pb-32 pt-6 sm:px-4 md:pb-16">{children}</main>
+      <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-3 pb-32 pt-6 sm:px-4 md:pb-16">{children}</main>
 
       <footer className="hidden border-t hairline py-10 md:block">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-sm text-ink-faint">
@@ -64,6 +68,7 @@ export default async function PublicLayout({ children }: { children: ReactNode }
         </div>
       </footer>
 
+      <CookieNotice />
       <BottomNav items={items} />
     </div>
   );

@@ -7,6 +7,7 @@ import { getSession } from "@/lib/auth";
 import { email as emailProvider } from "@/lib/providers";
 import { audit } from "@/lib/audit";
 import { normalizeLegalName } from "@/lib/utils";
+import { rateLimit } from "@/lib/ratelimit";
 
 const inviteSchema = z.object({
   targetName: z.string().min(2).max(120),
@@ -25,6 +26,8 @@ export async function sendAppInviteAction(formData: FormData) {
   const parsed = inviteSchema.safeParse(Object.fromEntries(formData));
   const back = parsed.success && parsed.data.returnTo?.startsWith("/") ? parsed.data.returnTo : "/directory";
   if (!session) redirect(`/signup`);
+  if (!rateLimit("invite", session.userId, 10, 60 * 60_000))
+    redirect(`${back}?error=${encodeURIComponent("Too many invites this hour — try again later")}`);
   if (!parsed.success)
     redirect(`${back}?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Check the invite form")}`);
   const d = parsed.data;

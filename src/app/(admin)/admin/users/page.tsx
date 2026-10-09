@@ -17,6 +17,7 @@ async function userAction(formData: FormData) {
   const reason = String(formData.get("reason") ?? "").trim() || null;
   const user = await db.user.findUnique({ where: { id } });
   if (!user) return;
+  if ((op === "suspend" || op === "ban") && !reason) return; // sensitive actions require a reason
   if (op === "suspend") await db.user.update({ where: { id }, data: { isSuspended: true } });
   if (op === "unsuspend") await db.user.update({ where: { id }, data: { isSuspended: false } });
   if (op === "ban") {

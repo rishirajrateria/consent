@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createHash } from "crypto";
 import { db } from "@/lib/db";
 import { issueOtp, consumeOtp } from "@/lib/auth";
+import { getESignProvider } from "@/lib/esign";
 import { email } from "@/lib/providers";
 import { storeUpload } from "@/lib/storage";
 import { issueGrant } from "@/lib/grants";
@@ -177,7 +178,9 @@ export async function sendSignatureOtpAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, side } = await resolveSide(id);
   const code = await issueOtp(session.userId, "SIGNATURE", session.user.email);
-  await email.send(session.user.email, "Your Consent e-signature code", `Code to sign the agreement: ${code}. It expires in 10 minutes.`);
+  const { renderMessage } = await import("@/lib/templates");
+  const msg = await renderMessage("signature_otp_email", { subject: "Your Consent e-signature code", body: "Code to sign the agreement: {{code}}. It expires in 10 minutes." }, { code });
+  await email.send(session.user.email, msg.subject!, msg.body);
   redirect(`${panelPath(side, id)}?otp=sent`);
 }
 
@@ -195,7 +198,9 @@ export async function signAgreementAction(formData: FormData) {
   const typedName = String(formData.get("typedName") ?? "").trim();
   const code = String(formData.get("code") ?? "").trim();
   if (typedName.length < 3) fail(path, "Type your full legal name as signature");
-  if (!(await consumeOtp(session.userId, "SIGNATURE", code))) fail(path, "Invalid or expired signature code");
+  const esign = await getESignProvider();
+  if (!(await esign.verifySigner({ userId: session.userId, otpCode: code })))
+    fail(path, "Invalid or expired signature code");
 
   const { headers } = await import("next/headers");
   const h = await headers();

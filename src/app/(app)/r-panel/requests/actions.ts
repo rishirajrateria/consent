@@ -17,7 +17,8 @@ function fail(path: string, error: string): never {
 }
 
 async function ownedRequest(id: string) {
-  const { session, requester } = await requireRequester();
+  const { session, member, requester } = await requireRequester();
+  if (member.role === "VIEWER") redirect("/r-panel/requests?error=" + encodeURIComponent("Viewers have read-only access"));
   const request = await db.consentRequest.findUnique({
     where: { id },
     include: { files: true, consenter: true },
@@ -29,7 +30,8 @@ async function ownedRequest(id: string) {
 // ── Draft creation & editing ──────────────────────────────────
 
 export async function createDraftAction(formData: FormData) {
-  const { session, requester } = await requireRequester();
+  const { session, member, requester } = await requireRequester();
+  if (member.role === "VIEWER") fail("/r-panel/new", "Viewers have read-only access");
   if (!requesterActive(requester))
     fail("/r-panel/new", "Your account must be approved and your subscription active to send requests");
   const slug = String(formData.get("consenter") ?? "");

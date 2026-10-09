@@ -1,7 +1,8 @@
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { getSettings, saveSettings } from "@/lib/settings";
-import { PageHeader, Card, Field, Input, SectionTitle } from "@/components/ui";
+import { PageHeader, Card, Field, Input, SectionTitle, Select } from "@/components/ui";
+import { db } from "@/lib/db";
 import { SubmitButton } from "@/components/form";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { runSweeps } from "@/lib/jobs";
@@ -23,6 +24,8 @@ async function saveAction(formData: FormData) {
   s.minCreativePlanChars = num("minCreativePlanChars", s.minCreativePlanChars);
   s.requesterMinScoreGate = num("requesterMinScoreGate", s.requesterMinScoreGate);
   await saveSettings(s);
+  const esign = String(formData.get("esignProvider") ?? "in-app");
+  await db.setting.upsert({ where: { key: "esign_provider" }, update: { value: esign }, create: { key: "esign_provider", value: esign } });
   await audit({ actorId: session.userId, actorName: session.user.name, action: "system_settings_saved", module: "settings" });
   revalidatePath("/admin/settings");
 }
@@ -38,6 +41,8 @@ export default async function AdminSettings() {
   await requireAdmin("settings", "view");
   const s = await getSettings();
   const brokenAt = await verifyAuditChain();
+  const esignRow = await db.setting.findUnique({ where: { key: "esign_provider" } });
+  const esignProvider = (esignRow?.value as string) ?? "in-app";
 
   return (
     <div className="space-y-6">
@@ -63,6 +68,13 @@ export default async function AdminSettings() {
             </Field>
             <Field label="Requester minimum score gate" hint="Requesters below this cannot send requests at all.">
               <Input name="requesterMinScoreGate" type="number" min={0} max={1000} defaultValue={s.requesterMinScoreGate} />
+            </Field>
+            <Field label="E-signature provider" hint="in-app signs with typed name + OTP + timestamp + IP. DocuSign / Leegality plug into the same interface once keys are configured.">
+              <Select name="esignProvider" defaultValue={esignProvider}>
+                <option value="in-app">In-app (typed name + OTP)</option>
+                <option value="docusign">DocuSign (not configured)</option>
+                <option value="leegality">Leegality / Digio (not configured)</option>
+              </Select>
             </Field>
           </div>
           <SubmitButton>Save settings</SubmitButton>

@@ -29,13 +29,20 @@ export async function resolveSide(requestId: string) {
   return { session, request, side, consenterMember: cm, requesterMember: rm };
 }
 
+/** Requester VIEWER seats are read-only. */
+export async function assertCanAct(side: "consenter" | "requester", rm: { role: string } | null, path: string) {
+  if (side === "requester" && rm?.role === "VIEWER")
+    redirect(`${path}?error=${encodeURIComponent("Viewers have read-only access")}`);
+}
+
 function panelPath(side: "consenter" | "requester", id: string) {
   return side === "consenter" ? `/c-panel/requests/${id}` : `/r-panel/requests/${id}`;
 }
 
 export async function sendMessageAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
+  const { session, request, side, requesterMember } = await resolveSide(id);
+  await assertCanAct(side, requesterMember, panelPath(side, id));
   const body = String(formData.get("body") ?? "").trim();
   const path = panelPath(side, id);
   if (!body && !(formData.get("attachment") as File | null)?.size)
@@ -68,8 +75,9 @@ export async function sendMessageAction(formData: FormData) {
 
 export async function makeOfferAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side, consenterMember } = await resolveSide(id);
+  const { session, request, side, consenterMember, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
+  await assertCanAct(side, requesterMember, path);
   if (!["IN_NEGOTIATION", "PENDING"].includes(request.status))
     redirect(`${path}?error=${encodeURIComponent("Negotiation is not open on this request")}`);
   if (side === "consenter" && consenterMember && consenterMember.role !== "OWNER" && !consenterMember.canNegotiate)
@@ -123,8 +131,9 @@ export async function makeOfferAction(formData: FormData) {
 
 export async function acceptOfferAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side, consenterMember } = await resolveSide(id);
+  const { session, request, side, consenterMember, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
+  await assertCanAct(side, requesterMember, path);
   if (request.status !== "IN_NEGOTIATION")
     redirect(`${path}?error=${encodeURIComponent("No open negotiation")}`);
   const latest = request.offers[0];
@@ -171,8 +180,9 @@ export async function acceptOfferAction(formData: FormData) {
 
 export async function closeNegotiationAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
+  const { session, request, side, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
+  await assertCanAct(side, requesterMember, path);
   if (!["IN_NEGOTIATION", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"].includes(request.status))
     redirect(`${path}?error=${encodeURIComponent("Nothing to close")}`);
   await db.$transaction([
