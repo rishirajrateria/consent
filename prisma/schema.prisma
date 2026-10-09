@@ -1,0 +1,924 @@
+// Consent — Likeness & IP Permission Platform
+// Prisma schema (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Users, auth, sessions
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  phone         String?   @unique
+  phoneVerified DateTime?
+  passwordHash  String
+  name          String
+  totpSecret    String? // enabled when set + totpEnabled
+  totpEnabled   Boolean   @default(false)
+  isSuspended   Boolean   @default(false)
+  isBanned      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions           Session[]
+  otpCodes           OtpCode[]
+  adminRoleId        String?
+  adminRole          AdminRole?          @relation(fields: [adminRoleId], references: [id])
+  consenterMembers   ConsenterMember[]
+  requesterMembers   RequesterMember[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  notifPrefs         NotificationPref?
+  decisions          ConsentRequest[]    @relation("decidedBy")
+  messages            RequestMessage[]
+  offers              NegotiationOffer[]
+  signatures           AgreementSignature[]
+  uploadedFiles        StoredFile[]
+  verificationMeetings VerificationMeeting[] @relation("officer")
+  scoreAdjustments     ScoreLog[]            @relation("adjustedBy")
+}
+
+model Session {
+  id         String   @id // token hash
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  totpPassed Boolean  @default(false)
+  // active profile context: "consenter:<id>" | "requester:<id>" | "admin" | null
+  activeProfile String?
+  createdAt  DateTime @default(now())
+  ip         String?
+  userAgent  String?
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFY
+  PHONE_VERIFY
+  LOGIN
+  SIGNATURE
+}
+
+model OtpCode {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  code      String
+  purpose   OtpPurpose
+  target    String // email or phone it was sent to
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime   @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Admin RBAC
+// ─────────────────────────────────────────────────────────────
+
+model AdminRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  isSuperAdmin Boolean @default(false)
+  // permissions: { module: ["view","create","edit","approve","delete","export"] }
+  permissions Json     @default("{}")
+  users       User[]
+  createdAt   DateTime @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Profiles
+// ─────────────────────────────────────────────────────────────
+
+enum ConsenterEntityType {
+  PERSON
+  TV_SHOW
+  MOVIE
+  WEB_SERIES
+  BRAND
+  FICTIONAL_CHARACTER
+  BAND_GROUP
+  SPORTS_TEAM
+  OTHER
+}
+
+enum VerificationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  MORE_INFO_NEEDED
+  APPROVED // requester approved / consenter verified
+  REJECTED
+}
+
+model ConsenterProfile {
+  id                 String              @id @default(cuid())
+  slug               String              @unique
+  displayName        String
+  legalName          String
+  normalizedLegalName String
+  entityType         ConsenterEntityType
+  aliases            String[]            @default([])
+  bio                String?
+  photoFileId        String?
+  country            String
+  category           String?
+  status             VerificationStatus  @default(DRAFT)
+  verifiedAt         DateTime?
+  documentNumberHash String? // for duplicate detection
+  duplicateFlag      Boolean             @default(false)
+  adminNotes         String?
+  // which contact details are revealed on deal agreed
+  shareEmail         Boolean             @default(true)
+  sharePhone         Boolean             @default(false)
+  shareManager       Boolean             @default(false)
+  managerContact     String?
+  contactEmail       String?
+  contactPhone       String?
+  // defaults
+  defaultRequireLegalAgreementForPaid Boolean @default(false)
+  score              Int                 @default(500)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  members          ConsenterMember[]
+  documents        StoredFile[]          @relation("consenterDocs")
+  socialAccounts   SocialAccount[]
+  matrixEntries    ConsentMatrixEntry[]
+  standingRules    StandingRule[]
+  blacklist        ListEntry[]           @relation("blacklistOf")
+  requests         ConsentRequest[]
+  meetings         VerificationMeeting[]
+  scoreLogs        ScoreLog[]            @relation("consenterScore")
+
+  @@index([normalizedLegalName])
+  @@index([status])
+}
+
+enum RequesterType {
+  INDIVIDUAL_CREATOR
+  NEWS_CHANNEL
+  PODCAST
+  MEME_PAGE
+  MEDIA_HOUSE
+  AGENCY
+  OTHER
+}
+
+model RequesterProfile {
+  id            String             @id @default(cuid())
+  slug          String             @unique
+  displayName   String
+  legalName     String
+  type          RequesterType
+  country       String
+  description   String?
+  categories    String[]           @default([])
+  channels      Json               @default("[]") // [{platform, url, followers}]
+  signatoryName String?
+  status        VerificationStatus @default(DRAFT)
+  approvedAt    DateTime?
+  adminNotes    String?
+  shareEmail    Boolean            @default(true)
+  sharePhone    Boolean            @default(false)
+  shareManager  Boolean            @default(false)
+  managerContact String?
+  contactEmail  String?
+  contactPhone  String?
+  score         Int                @default(500)
+  // subscription
+  onboardingFeePaidAt DateTime?
+  subscriptionEndsAt  DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  members        RequesterMember[]
+  documents      StoredFile[]      @relation("requesterDocs")
+  socialAccounts SocialAccount[]
+  requests       ConsentRequest[]
+  listEntries    ListEntry[]       @relation("aboutRequester")
+  payments       Payment[]
+  scoreLogs      ScoreLog[]        @relation("requesterScore")
+
+  @@index([status])
+}
+
+enum TeamRole {
+  OWNER
+  MANAGER
+  LEGAL
+  EDITOR
+  VIEWER
+}
+
+model ConsenterMember {
+  id          String           @id @default(cuid())
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        TeamRole
+  canApprove   Boolean @default(false)
+  canNegotiate Boolean @default(false)
+  canEditRules Boolean @default(false)
+  canExport    Boolean @default(false)
+  canManageTeam Boolean @default(false)
+  createdAt   DateTime         @default(now())
+
+  @@unique([consenterId, userId])
+}
+
+model RequesterMember {
+  id          String           @id @default(cuid())
+  requesterId String
+  requester   RequesterProfile @relation(fields: [requesterId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        TeamRole
+  createdAt   DateTime         @default(now())
+
+  @@unique([requesterId, userId])
+}
+
+model TeamInvite {
+  id        String   @id @default(cuid())
+  profileKind String // "consenter" | "requester"
+  profileId String
+  email     String
+  role      TeamRole
+  canApprove   Boolean @default(false)
+  canNegotiate Boolean @default(false)
+  canEditRules Boolean @default(false)
+  canExport    Boolean @default(false)
+  canManageTeam Boolean @default(false)
+  token     String   @unique
+  expiresAt DateTime
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+}
+
+model SocialAccount {
+  id          String  @id @default(cuid())
+  platformName String
+  handle      String
+  url         String?
+  followers   Int?
+  verifiedVia String // "oauth" | "manual"
+  proofFileId String?
+  verifiedAt  DateTime?
+
+  consenterId String?
+  consenter   ConsenterProfile? @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  requesterId String?
+  requester   RequesterProfile? @relation(fields: [requesterId], references: [id], onDelete: Cascade)
+  createdAt   DateTime          @default(now())
+}
+
+enum MeetingMode {
+  VIDEO
+  IN_PERSON
+}
+
+model VerificationMeeting {
+  id          String           @id @default(cuid())
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  scheduledAt DateTime
+  mode        MeetingMode
+  link        String?
+  location    String?
+  officerId   String?
+  officer     User?            @relation("officer", fields: [officerId], references: [id])
+  outcome     String? // "passed" | "failed" | null
+  notes       String?
+  createdAt   DateTime         @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Catalog (admin-editable)
+// ─────────────────────────────────────────────────────────────
+
+model Platform {
+  id       String   @id @default(cuid())
+  name     String   @unique
+  sortOrder Int     @default(0)
+  active   Boolean  @default(true)
+  formats  Format[]
+}
+
+model Format {
+  id         String   @id @default(cuid())
+  platformId String
+  platform   Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  name       String
+  isTimed    Boolean  @default(false) // duration applies
+  active     Boolean  @default(true)
+
+  @@unique([platformId, name])
+}
+
+model AssetType {
+  id     String  @id @default(cuid())
+  name   String  @unique
+  active Boolean @default(true)
+  sortOrder Int  @default(0)
+}
+
+model IntentCategory {
+  id     String  @id @default(cuid())
+  name   String  @unique
+  active Boolean @default(true)
+}
+
+model DenialReason {
+  id     String  @id @default(cuid())
+  label  String  @unique
+  active Boolean @default(true)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Consent settings
+// ─────────────────────────────────────────────────────────────
+
+enum MatrixPolicy {
+  AUTO_APPROVE
+  ASK
+  AUTO_DENY
+}
+
+model ConsentMatrixEntry {
+  id             String           @id @default(cuid())
+  consenterId    String
+  consenter      ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  platformId     String
+  formatId       String
+  assetTypeId    String
+  policy         MatrixPolicy     @default(ASK)
+  maxDurationSec Int?
+  thumbnailAllowed Boolean        @default(true)
+  paidDefault    Boolean          @default(false)
+
+  @@unique([consenterId, platformId, formatId, assetTypeId])
+}
+
+enum RuleAction {
+  AUTO_APPROVE
+  AUTO_DENY
+  ROUTE_TO_MEMBER
+}
+
+model StandingRule {
+  id          String           @id @default(cuid())
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  name        String
+  priority    Int
+  active      Boolean          @default(true)
+  // conditions: {platformIds?, formatIds?, assetTypeIds?, maxDurationSec?, requesterTypes?, minScore?, categories?, whitelistOnly?}
+  conditions  Json
+  action      RuleAction
+  routeToUserId String?
+  createdById String
+  createdByName String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+enum ListKind {
+  BLACKLIST
+  WHITELIST
+}
+
+model ListEntry {
+  id          String           @id @default(cuid())
+  kind        ListKind
+  consenterId String
+  consenter   ConsenterProfile @relation("blacklistOf", fields: [consenterId], references: [id], onDelete: Cascade)
+  requesterId String
+  requester   RequesterProfile @relation("aboutRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  note        String?
+  createdAt   DateTime         @default(now())
+
+  @@unique([kind, consenterId, requesterId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Files
+// ─────────────────────────────────────────────────────────────
+
+enum FileKind {
+  DOCUMENT
+  ASSET
+  RAW_CONTENT
+  THUMBNAIL
+  ATTACHMENT
+  AGREEMENT
+  EVIDENCE
+  PROFILE_PHOTO
+}
+
+model StoredFile {
+  id          String   @id @default(cuid())
+  kind        FileKind
+  name        String
+  mime        String
+  size        Int
+  sha256      String
+  storageKey  String
+  version     Int      @default(1)
+  uploadedById String?
+  uploadedBy  User?    @relation(fields: [uploadedById], references: [id])
+  requestId   String?
+  request     ConsentRequest? @relation(fields: [requestId], references: [id])
+  replacesId  String? // previous version
+  approvedInGrant Boolean @default(false)
+  consenterDocOf String?
+  consenterDoc   ConsenterProfile? @relation("consenterDocs", fields: [consenterDocOf], references: [id])
+  requesterDocOf String?
+  requesterDoc   RequesterProfile? @relation("requesterDocs", fields: [requesterDocOf], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([requestId])
+  @@index([sha256])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Consent requests
+// ─────────────────────────────────────────────────────────────
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  PENDING
+  IN_NEGOTIATION
+  DEAL_AGREED
+  CHANGES_REQUESTED
+  APPROVED_IN_PRINCIPLE
+  AGREEMENT_MODE_PENDING
+  LEGAL_AGREEMENT_PENDING
+  APPROVED
+  DENIED
+  CLOSED
+  EXPIRED_NO_RESPONSE
+  WITHDRAWN
+}
+
+enum ValidityKind {
+  SINGLE_PUBLICATION
+  DATE_RANGE
+  PERPETUAL
+}
+
+enum AgreementMode {
+  APP_RECORD
+  LEGALLY_BINDING
+}
+
+model ConsentRequest {
+  id          String           @id @default(cuid())
+  number      Int              @unique @default(autoincrement())
+  requesterId String
+  requester   RequesterProfile @relation(fields: [requesterId], references: [id])
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id])
+  status      RequestStatus    @default(DRAFT)
+
+  // scope
+  selections  Json // [{platformId, platformName, formatId, formatName, durationSec?}]
+  assetTypeIds String[]
+  assetTypeNames String[]
+  thumbnailUsed Boolean @default(false)
+  context     String
+  creativePlan String
+  intentCategoryId String?
+  intentCategoryName String?
+  validityKind ValidityKind
+  validFrom   DateTime?
+  validUntil  DateTime?
+  plannedPublishAt DateTime?
+
+  // conditions applied by consenter on approval
+  conditionsNote String?
+  approvedSelections Json? // possibly reduced scope
+  approvedThumbnail Boolean?
+
+  // payment/fee between parties
+  isPaid      Boolean @default(false)
+  agreedAmount Decimal? @db.Decimal(14, 2)
+  agreedCurrency String?
+
+  // agreement mode
+  agreementMode AgreementMode?
+  agreementModeProposedBy String? // "consenter"|"requester"
+
+  // lifecycle
+  submittedAt DateTime?
+  decidedAt   DateTime?
+  decidedById String?
+  decidedBy   User?   @relation("decidedBy", fields: [decidedById], references: [id])
+  decidedByRuleId String?
+  decidedByRuleName String?
+  denialReason String?
+  slaExpiresAt DateTime?
+  reminder50Sent Boolean @default(false)
+  reminder90Sent Boolean @default(false)
+  closedReason String?
+  contactsRevealed Boolean @default(false)
+  contactsSnapshot Json?
+
+  files       StoredFile[]
+  messages    RequestMessage[]
+  offers      NegotiationOffer[]
+  grant       Grant?
+  agreement   Agreement?
+  payment     Payment?
+  reports     Report[]
+  events      RequestEvent[]
+  lastOfferAt DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([consenterId, status])
+  @@index([requesterId, status])
+}
+
+model RequestEvent {
+  id        String         @id @default(cuid())
+  requestId String
+  request   ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  type      String
+  actorName String?
+  actorSide String? // "consenter"|"requester"|"admin"|"system"
+  detail    Json?
+  createdAt DateTime       @default(now())
+
+  @@index([requestId])
+}
+
+model RequestMessage {
+  id        String         @id @default(cuid())
+  requestId String
+  request   ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User           @relation(fields: [senderId], references: [id])
+  senderSide String // "consenter"|"requester"
+  body      String
+  attachmentFileId String?
+  createdAt DateTime       @default(now())
+}
+
+enum OfferStatus {
+  OPEN
+  ACCEPTED
+  SUPERSEDED
+  WITHDRAWN
+}
+
+model NegotiationOffer {
+  id        String         @id @default(cuid())
+  requestId String
+  request   ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  version   Int
+  bySide    String // "consenter"|"requester"
+  byUserId  String
+  byUser    User           @relation(fields: [byUserId], references: [id])
+  amount    Decimal        @db.Decimal(14, 2)
+  currency  String
+  scopeNote String?
+  status    OfferStatus    @default(OPEN)
+  createdAt DateTime       @default(now())
+
+  @@unique([requestId, version])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Agreements (legally binding mode)
+// ─────────────────────────────────────────────────────────────
+
+enum AgreementStatus {
+  PROPOSED
+  DECLINED
+  DRAFTING
+  AWAITING_SIGNATURES
+  UPLOAD_PENDING_CONFIRMATION
+  COMPLETED
+  CANCELLED
+}
+
+enum AgreementKind {
+  PLATFORM_GENERATED
+  UPLOADED
+}
+
+model Agreement {
+  id        String          @id @default(cuid())
+  requestId String          @unique
+  request   ConsentRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  kind      AgreementKind?
+  status    AgreementStatus @default(PROPOSED)
+  proposedBySide String
+  templateId String?
+  template  AgreementTemplate? @relation(fields: [templateId], references: [id])
+  body      String? // rendered agreement text
+  bodyVersion Int @default(1)
+  uploadedFileId String?
+  uploadConfirmedBySide String?
+  sha256    String?
+  signatures AgreementSignature[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model AgreementSignature {
+  id          String    @id @default(cuid())
+  agreementId String
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  side        String // "consenter"|"requester"
+  typedName   String
+  otpVerified Boolean   @default(false)
+  ip          String?
+  signedAt    DateTime  @default(now())
+
+  @@unique([agreementId, side])
+}
+
+model AgreementTemplate {
+  id           String      @id @default(cuid())
+  name         String
+  jurisdiction String // country code or "GLOBAL"
+  body         String // with {{placeholders}}
+  optionalClauses Json     @default("[]")
+  disclaimer   String
+  active       Boolean     @default(true)
+  agreements   Agreement[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// Grants & certificates
+// ─────────────────────────────────────────────────────────────
+
+enum GrantStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+model Grant {
+  id          String         @id @default(cuid())
+  publicId    String         @unique // short id for /v/{id}
+  requestId   String         @unique
+  request     ConsentRequest @relation(fields: [requestId], references: [id])
+  status      GrantStatus    @default(ACTIVE)
+  validityKind ValidityKind
+  validFrom   DateTime?
+  validUntil  DateTime?
+  expiryNotified Boolean     @default(false)
+  revokedAt   DateTime?
+  revokeReason String?
+  // certificate
+  certificateId String       @unique
+  payload     Json // canonical certificate payload
+  signature   String // ed25519 over canonical JSON, base64
+  publicKey   String
+  issuedAt    DateTime       @default(now())
+  issuedByName String
+  takedowns   TakedownRequest[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+enum TakedownStatus {
+  RAISED
+  MARKED_DOWN
+  DECLINED
+  CONFIRMED
+  REJECTED_CLAIM
+  IGNORED
+}
+
+model TakedownRequest {
+  id        String         @id @default(cuid())
+  grantId   String
+  grant     Grant          @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  reason    String
+  liveLinks String[]
+  status    TakedownStatus @default(RAISED)
+  requesterNote String?
+  requesterEvidenceFileId String?
+  declineReason String?
+  respondBy DateTime
+  respondedAt DateTime?
+  confirmedAt DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// Payments (platform fees from requesters only)
+// ─────────────────────────────────────────────────────────────
+
+enum PaymentPurpose {
+  ONBOARDING
+  SUBSCRIPTION
+  PER_REQUEST
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  FORFEITED
+}
+
+model Payment {
+  id          String           @id @default(cuid())
+  requesterId String
+  requester   RequesterProfile @relation(fields: [requesterId], references: [id])
+  purpose     PaymentPurpose
+  amount      Decimal          @db.Decimal(14, 2)
+  currency    String
+  provider    String // "mock" | "stripe" | "razorpay"
+  providerRef String?
+  status      PaymentStatus    @default(PENDING)
+  couponCode  String?
+  discount    Decimal?         @db.Decimal(14, 2)
+  tax         Decimal?         @db.Decimal(14, 2)
+  taxLabel    String?
+  requestId   String?          @unique
+  request     ConsentRequest?  @relation(fields: [requestId], references: [id])
+  invoiceNumber String?        @unique
+  paidAt      DateTime?
+  createdAt   DateTime         @default(now())
+}
+
+model PriceConfig {
+  id       String  @id @default(cuid())
+  country  String // ISO code or "DEFAULT"
+  currency String
+  onboardingFee Decimal @db.Decimal(14, 2)
+  yearlyFee     Decimal @db.Decimal(14, 2)
+  perRequestFee Decimal @db.Decimal(14, 2)
+  taxLabel String?
+  taxRate  Decimal? @db.Decimal(5, 2)
+
+  @@unique([country])
+}
+
+model Coupon {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  percentOff Int
+  active    Boolean  @default(true)
+  expiresAt DateTime?
+  maxUses   Int?
+  usedCount Int      @default(0)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reports & scores
+// ─────────────────────────────────────────────────────────────
+
+enum ReportStatus {
+  OPEN
+  UNDER_REVIEW
+  UPHELD
+  DISMISSED
+}
+
+model Report {
+  id          String         @id @default(cuid())
+  requestId   String
+  request     ConsentRequest @relation(fields: [requestId], references: [id])
+  bySide      String // reporter side
+  reason      String // category
+  description String
+  evidenceLinks String[]
+  evidenceFileIds String[]
+  status      ReportStatus   @default(OPEN)
+  response    String? // other party's response
+  adminNotes  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model ScoreLog {
+  id          String   @id @default(cuid())
+  consenterId String?
+  consenter   ConsenterProfile? @relation("consenterScore", fields: [consenterId], references: [id], onDelete: Cascade)
+  requesterId String?
+  requester   RequesterProfile? @relation("requesterScore", fields: [requesterId], references: [id], onDelete: Cascade)
+  oldScore    Int
+  newScore    Int
+  reason      String
+  adjustedById String?
+  adjustedBy  User?    @relation("adjustedBy", fields: [adjustedById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// System: settings, audit, jobs, notifications, CMS, templates
+// ─────────────────────────────────────────────────────────────
+
+model Setting {
+  key   String @id
+  value Json
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  actorName String
+  action    String
+  module    String
+  targetId  String?
+  detail    Json?
+  reason    String?
+  ip        String?
+  prevHash  String
+  hash      String // sha256(prevHash + canonical entry)
+  createdAt DateTime @default(now())
+
+  @@index([module])
+  @@index([actorId])
+}
+
+model Job {
+  id        String    @id @default(cuid())
+  type      String
+  payload   Json      @default("{}")
+  runAt     DateTime
+  attempts  Int       @default(0)
+  lockedAt  DateTime?
+  doneAt    DateTime?
+  error     String?
+  createdAt DateTime  @default(now())
+
+  @@index([runAt, doneAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+model NotificationPref {
+  userId String  @id
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailStateChanges Boolean @default(true)
+  smsCritical       Boolean @default(true)
+}
+
+// Mock outbox for email/SMS in dev ("dev inbox")
+model OutboxMessage {
+  id        String   @id @default(cuid())
+  channel   String // "email"|"sms"
+  to        String
+  subject   String?
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model CmsPage {
+  slug      String   @id
+  title     String
+  body      String // markdown
+  updatedAt DateTime @updatedAt
+}
+
+model MessageTemplate {
+  key     String @id
+  channel String // "email"|"sms"
+  subject String?
+  body    String
+}
+
+model ExportLog {
+  id        String   @id @default(cuid())
+  kind      String // "dossier"
+  scope     String
+  byUserId  String?
+  byName    String
+  createdAt DateTime @default(now())
+}
