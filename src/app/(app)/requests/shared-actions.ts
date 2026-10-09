@@ -46,7 +46,7 @@ export async function sendMessageAction(formData: FormData) {
   const body = String(formData.get("body") ?? "").trim();
   const path = panelPath(side, id);
   if (!body && !(formData.get("attachment") as File | null)?.size)
-    redirect(`${path}?error=${encodeURIComponent("Write a message")}#messages`);
+    redirect(`${path}?error=${encodeURIComponent("Write a message")}`);
 
   let attachmentFileId: string | undefined;
   const attachment = formData.get("attachment") as File | null;
@@ -68,7 +68,7 @@ export async function sendMessageAction(formData: FormData) {
     body: body.slice(0, 140) || "(attachment)",
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
   });
-  redirect(`${path}#messages`);
+  redirect(`${path}`);
 }
 
 // ── Negotiation (no money moves through Consent) ──────────────
@@ -86,7 +86,7 @@ export async function makeOfferAction(formData: FormData) {
   const amount = parseFloat(String(formData.get("amount") ?? ""));
   const currency = String(formData.get("currency") ?? "USD").toUpperCase().slice(0, 3);
   const scopeNote = String(formData.get("scopeNote") ?? "").trim() || null;
-  if (!(amount >= 0)) redirect(`${path}?error=${encodeURIComponent("Enter a valid amount")}#negotiation`);
+  if (!(amount >= 0)) redirect(`${path}?error=${encodeURIComponent("Enter a valid amount")}`);
 
   const latest = request.offers[0];
   await db.$transaction([
@@ -126,7 +126,7 @@ export async function makeOfferAction(formData: FormData) {
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
     critical: true,
   });
-  redirect(`${path}#negotiation`);
+  redirect(`${path}`);
 }
 
 export async function acceptOfferAction(formData: FormData) {
@@ -138,7 +138,7 @@ export async function acceptOfferAction(formData: FormData) {
     redirect(`${path}?error=${encodeURIComponent("No open negotiation")}`);
   const latest = request.offers[0];
   if (!latest || latest.status !== "OPEN" || latest.bySide === side)
-    redirect(`${path}?error=${encodeURIComponent("You can only accept the other side's latest offer")}#negotiation`);
+    redirect(`${path}?error=${encodeURIComponent("You can only accept the other side's latest offer")}`);
   if (side === "consenter" && consenterMember && consenterMember.role !== "OWNER" && !consenterMember.canNegotiate)
     redirect(`${path}?error=${encodeURIComponent("You don't have negotiation permission")}`);
 

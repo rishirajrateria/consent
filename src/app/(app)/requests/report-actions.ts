@@ -17,7 +17,7 @@ export async function fileReportAction(formData: FormData) {
   const reason = String(formData.get("reason") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!reason || description.length < 20)
-    redirect(`${path}?error=${encodeURIComponent("Pick a reason and describe the breach (min 20 characters)")}#report`);
+    redirect(`${path}?error=${encodeURIComponent("Pick a reason and describe the breach (min 20 characters)")}`);
 
   const links = String(formData.get("links") ?? "")
     .split("\n")
@@ -48,7 +48,7 @@ export async function fileReportAction(formData: FormData) {
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
     critical: true,
   });
-  redirect(`${path}?reported=1#report`);
+  redirect(`${path}?reported=1`);
 }
 
 export async function respondReportAction(formData: FormData) {
@@ -57,12 +57,12 @@ export async function respondReportAction(formData: FormData) {
   if (!report) redirect("/dashboard");
   const { session, side } = await resolveSide(report.requestId);
   const path = panelPath(side, report.requestId);
-  if (report.bySide === side) redirect(`${path}?error=${encodeURIComponent("You filed this report")}#report`);
+  if (report.bySide === side) redirect(`${path}?error=${encodeURIComponent("You filed this report")}`);
   const response = String(formData.get("response") ?? "").trim();
-  if (!response) redirect(`${path}?error=${encodeURIComponent("Write a response")}#report`);
+  if (!response) redirect(`${path}?error=${encodeURIComponent("Write a response")}`);
   await db.report.update({ where: { id: reportId }, data: { response } });
   await db.requestEvent.create({
     data: { requestId: report.requestId, type: "report_response", actorName: session.user.name, actorSide: side },
   });
-  redirect(`${path}#report`);
+  redirect(`${path}`);
 }

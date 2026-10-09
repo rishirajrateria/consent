@@ -195,7 +195,7 @@ export async function markPaidAction(formData: FormData) {
     href: `/r-panel/requests/${id}`,
     critical: true,
   });
-  redirect(`${path}#negotiation`);
+  redirect(`${path}`);
 }
 
 export async function denyRequestAction(formData: FormData) {
