@@ -1,0 +1,209 @@
+import { requireUser } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { PageHeader, Card, Field, Input, Textarea, Select, StatusBadge, Alert, KV, VerifiedBadge } from "@/components/ui";
+import { SubmitButton } from "@/components/form";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
+import { submitConsenterApplicationAction, mockOauthConnectAction } from "../actions";
+import { COUNTRIES } from "@/lib/countries";
+import { fmtDateTime, titleCase } from "@/lib/utils";
+import { Link2, CalendarClock } from "lucide-react";
+
+export const metadata = { title: "Consenter onboarding" };
+
+const ENTITY_TYPES = ["PERSON", "TV_SHOW", "MOVIE", "WEB_SERIES", "BRAND", "FICTIONAL_CHARACTER", "BAND_GROUP", "SPORTS_TEAM", "OTHER"];
+
+export default async function ConsenterOnboarding({ searchParams }: PageProps<"/onboarding/consenter">) {
+  const sp = await searchParams;
+  const session = await requireUser();
+  const member = await db.consenterMember.findFirst({
+    where: { userId: session.userId },
+    include: {
+      consenter: { include: { socialAccounts: true, meetings: { orderBy: { scheduledAt: "desc" } } } },
+    },
+  });
+
+  if (member) {
+    const c = member.consenter;
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <PageHeader kicker="Consenter onboarding" title={c.displayName} desc="Verification status" />
+        {sp.submitted && (
+          <SuccessNote msg="Submitted. Our team will review your documents and schedule a mandatory verification meeting (video call or in person)." />
+        )}
+        <Card className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Status</span>
+            {c.status === "APPROVED" ? <VerifiedBadge /> : <StatusBadge status={c.status} />}
+          </div>
+          {c.status === "MORE_INFO_NEEDED" && c.adminNotes && (
+            <Alert tone="warn"><strong>Message from the verification team:</strong> {c.adminNotes}</Alert>
+          )}
+          {c.status === "REJECTED" && (
+            <Alert tone="warn">Verification was rejected.{c.adminNotes ? ` Reason: ${c.adminNotes}` : ""}</Alert>
+          )}
+          <KV k="Legal name" v={c.legalName} />
+          <KV k="Entity type" v={titleCase(c.entityType)} />
+          <KV k="Country" v={c.country} />
+          {c.status === "APPROVED" && (
+            <Alert>
+              Your profile is live and searchable. Set up your consent matrix and standing rules in
+              the consenter panel.
+            </Alert>
+          )}
+        </Card>
+
+        {c.meetings.length > 0 && (
+          <Card className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <CalendarClock className="size-4" aria-hidden /> Verification meeting
+            </h2>
+            {c.meetings.map((m) => (
+              <div key={m.id} className="glass-subtle space-y-1 px-4 py-3 text-sm">
+                <div className="font-medium">{fmtDateTime(m.scheduledAt)} · {m.mode === "VIDEO" ? "Video call" : "In person"}</div>
+                {m.link && (
+                  <a href={m.link} className="text-ink underline underline-offset-4" target="_blank" rel="noreferrer">
+                    Join meeting link
+                  </a>
+                )}
+                {m.location && <div className="text-ink-soft">{m.location}</div>}
+                {m.outcome && <div className="text-xs text-ink-faint">Outcome: {m.outcome}</div>}
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {c.socialAccounts.length > 0 && (
+          <Card className="space-y-3">
+            <h2 className="text-sm font-semibold">Official accounts</h2>
+            {c.socialAccounts.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-2 text-sm">
+                <span>{s.platformName} — {s.handle}</span>
+                {s.verifiedAt ? (
+                  <StatusBadge status="VERIFIED" />
+                ) : (
+                  <form action={mockOauthConnectAction}>
+                    <input type="hidden" name="accountId" value={s.id} />
+                    <SubmitButton variant="secondary" size="sm">
+                      <Link2 className="size-3.5" aria-hidden /> Connect via OAuth
+                    </SubmitButton>
+                  </form>
+                )}
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-6">
+      <PageHeader
+        kicker="Consenter onboarding"
+        title="Protect your likeness or IP"
+        desc="Strict manual verification: documents, official account proof and a verification meeting. One entity = one account."
+      />
+      <ErrorNote error={sp.error as string | undefined} />
+      <form action={submitConsenterApplicationAction} className="space-y-5">
+        <Card className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Entity</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Entity type" required>
+              <Select name="entityType" required defaultValue="PERSON">
+                {ENTITY_TYPES.map((t) => (
+                  <option key={t} value={t}>{titleCase(t)}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Country" required>
+              <Select name="country" required defaultValue="US">
+                {COUNTRIES.map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Legal name" required hint="Person's legal name, or the registered IP/production name.">
+              <Input name="legalName" required placeholder="Jane Carter / 'Nightwatch' (Series)" />
+            </Field>
+            <Field label="Public display name" required>
+              <Input name="displayName" required placeholder="Jane Carter" />
+            </Field>
+          </div>
+          <Field label="Aliases / also known as" hint="Comma separated. Helps requesters find you.">
+            <Input name="aliases" placeholder="JC, janecarterofficial" />
+          </Field>
+          <Field label="Category" hint="e.g. actor, musician, TV drama, sports">
+            <Input name="category" placeholder="actor" />
+          </Field>
+          <Field label="Short public bio">
+            <Textarea name="bio" maxLength={2000} placeholder="Shown on your public profile." />
+          </Field>
+          <Field label="Profile photo">
+            <Input name="photo" type="file" accept="image/*" className="file:mr-3 file:rounded-lg file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white" />
+          </Field>
+        </Card>
+
+        <Card className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Legal documents</h2>
+          <Field
+            label="Document number"
+            required
+            hint="Government ID number (persons) or registration/trademark number (entities). Stored only as a salted hash for duplicate prevention."
+          >
+            <Input name="documentNumber" required placeholder="e.g. passport / trademark no." />
+          </Field>
+          <Field
+            label="Proof document"
+            required
+            hint="Persons: government ID. Entities: IP registration, production agreement, trademark certificate or rights-holder authorisation letter."
+          >
+            <Input name="document" type="file" required accept="image/*,.pdf" className="file:mr-3 file:rounded-lg file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white" />
+          </Field>
+        </Card>
+
+        <Card className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Official accounts</h2>
+          <p className="text-xs text-ink-faint">Connect via OAuth after submitting, or they serve as manual proof.</p>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="grid gap-2 sm:grid-cols-2">
+              <Input name="socialPlatform" placeholder="Instagram" aria-label={`Account ${i + 1} platform`} />
+              <Input name="socialHandle" placeholder="@janecarter" aria-label={`Account ${i + 1} handle`} />
+            </div>
+          ))}
+        </Card>
+
+        <Card className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Contact sharing on deal agreed</h2>
+          <p className="text-xs text-ink-faint">
+            When you and a requester agree a paid deal, Consent reveals the contact details you
+            choose here so you can settle payment directly. Consent never processes that payment.
+          </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="shareEmail" defaultChecked className="size-4 accent-black" /> Share email
+            </label>
+            <label className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="sharePhone" className="size-4 accent-black" /> Share phone
+            </label>
+            <label className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="shareManager" className="size-4 accent-black" /> Share manager contact
+            </label>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Contact email" hint="Defaults to your login email.">
+              <Input name="contactEmail" type="email" placeholder="mgmt@janecarter.com" />
+            </Field>
+            <Field label="Contact phone">
+              <Input name="contactPhone" type="tel" placeholder="+1 555 010 2030" />
+            </Field>
+          </div>
+          <Field label="Manager / agency contact">
+            <Input name="managerContact" placeholder="Alex Rivers — alex@agency.com" />
+          </Field>
+        </Card>
+
+        <SubmitButton className="w-full">Submit for verification</SubmitButton>
+      </form>
+    </div>
+  );
+}

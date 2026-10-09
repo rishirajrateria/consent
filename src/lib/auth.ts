@@ -145,6 +145,8 @@ export async function requireConsenter(minPerm?: "canApprove" | "canNegotiate" |
     if (member) await setActiveProfile({ kind: "consenter", id: member.consenterId });
   }
   if (!member) redirect("/dashboard");
+  // 2FA is mandatory for consenter owners and team members
+  if (!session.user.totpEnabled) redirect("/settings/security?admin2fa=1");
   if (minPerm && member.role !== "OWNER" && !member[minPerm]) redirect("/c-panel?denied=1");
   return { session, member, consenter: member.consenter };
 }
