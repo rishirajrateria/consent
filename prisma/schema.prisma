@@ -186,8 +186,47 @@ model ConsenterProfile {
   scoreLogs        ScoreLog[]            @relation("consenterScore")
   earnings         EarningEntry[]
   settlements      Settlement[]
+  priceTiers       ConsentPriceTier[]
+  tipOffs          PublicTipOff[]
 
   @@index([normalizedLegalName])
+  @@index([status])
+}
+
+// Per-intent consent price override: news can be free while commercial costs.
+// Falls back to ConsenterProfile.consentPrice when no tier matches.
+model ConsentPriceTier {
+  id               String           @id @default(cuid())
+  consenterId      String
+  consenter        ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  intentCategoryId String
+  intentCategory   IntentCategory   @relation(fields: [intentCategoryId], references: [id], onDelete: Cascade)
+  amount           Decimal          @db.Decimal(14, 2)
+
+  @@unique([consenterId, intentCategoryId])
+}
+
+enum TipOffStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+}
+
+// Public tip-off: anyone (no account) can report unauthorized use of a
+// consenter's likeness from their public profile.
+model PublicTipOff {
+  id            String           @id @default(cuid())
+  consenterId   String
+  consenter     ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  links         String[]
+  description   String
+  reporterName  String?
+  reporterEmail String?
+  status        TipOffStatus     @default(OPEN)
+  adminNote     String?
+  createdAt     DateTime         @default(now())
+
+  @@index([consenterId, status])
   @@index([status])
 }
 
@@ -361,9 +400,10 @@ model AssetType {
 }
 
 model IntentCategory {
-  id     String  @id @default(cuid())
-  name   String  @unique
-  active Boolean @default(true)
+  id         String             @id @default(cuid())
+  name       String             @unique
+  active     Boolean            @default(true)
+  priceTiers ConsentPriceTier[]
 }
 
 model DenialReason {

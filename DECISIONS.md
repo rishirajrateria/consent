@@ -100,6 +100,16 @@ in DECISIONS.md, and continue").
     photo and emit JSON-LD; a cookie notice and skip-to-content links were added; `--color-ink-faint`
     was darkened to meet WCAG AA contrast; an `ESignProvider` interface now backs agreement
     signing with the provider selectable in admin settings.
+25b. **Owner-approved additions (this round):** (a) *Price by intent* — `ConsentPriceTier`
+    overrides the base consent price per intent category (News free, Promotion premium); resolved
+    at submission from the request's intent, shown on the public profile and review step.
+    (b) *Verification API + embed* — `GET /api/v1/verify/{id}` (CORS-open JSON with live
+    signature re-verification) and an iframe-able live-status widget at `/embed/{id}`; snippets on
+    the badge page. (c) *Public tip-offs* — anyone can report unauthorized use from a public
+    profile (no account; IP rate-limited); owners triage at `/c-panel/tipoffs`, admins in the
+    reports module. (d) *Playwright e2e suite* covering the spec's 7 flows against a dedicated
+    `consent_e2e` database (`npm run e2e:prep`, then `npm run test:e2e`).
+
 26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
     existing interfaces; admin read-only impersonation; relationship-wide dossier export;

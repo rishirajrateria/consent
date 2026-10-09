@@ -53,14 +53,23 @@ export async function createPlatformPayment(opts: {
   if (opts.purpose === "PER_REQUEST" && opts.requestId) {
     const request = await db.consentRequest.findUnique({
       where: { id: opts.requestId },
-      include: { consenter: true },
+      include: { consenter: { include: { priceTiers: true } } },
     });
-    const ask = request?.consenter.consentPrice;
+    // Per-intent tier wins over the base price (e.g. News free, Promotion $250).
+    const tier = request?.intentCategoryId
+      ? request.consenter.priceTiers.find((t) => t.intentCategoryId === request.intentCategoryId)
+      : undefined;
+    const ask = tier ? tier.amount : request?.consenter.consentPrice;
     if (request && ask && Number(ask) > 0) {
       const existing = await db.payment.findFirst({
         where: { requestId: opts.requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
       });
-      if (!existing) {
+      if (existing) {
+        // The intent (and so the tier) may have changed since an abandoned checkout.
+        if (existing.amount.toString() !== ask.toString()) {
+          await db.payment.update({ where: { id: existing.id }, data: { amount: ask } });
+        }
+      } else {
         await db.payment.create({
           data: {
             requesterId: opts.requesterId,

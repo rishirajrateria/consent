@@ -29,7 +29,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
   const { requester } = await requireRequester();
   const request = await db.consentRequest.findUnique({
     where: { id },
-    include: { consenter: true, files: true },
+    include: { consenter: { include: { priceTiers: true } }, files: true },
   });
   if (!request || request.requesterId !== requester.id) notFound();
   if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
@@ -52,6 +52,12 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
   const hasThumb = request.files.some((f) => f.kind === "THUMBNAIL");
   const uploadsDone = (onlyName || hasAssets) && (!request.thumbnailUsed || hasThumb);
   const detailsDone = !!request.context && !!request.creativePlan && !!request.intentCategoryId;
+  // Consent price resolved by intent tier (falls back to the base price).
+  const tier = request.intentCategoryId
+    ? request.consenter.priceTiers.find((t) => t.intentCategoryId === request.intentCategoryId)
+    : undefined;
+  const askRaw = tier ? tier.amount : request.consenter.consentPrice;
+  const askPrice = askRaw && Number(askRaw) > 0 ? askRaw : null;
 
   const steps = [
     ["Scope", scopeDone],
@@ -221,8 +227,8 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
         <SectionTitle
           title="4 · Review & submit"
           desc={`Platform fee: ${fmtMoney(price.perRequestFee.toString(), price.currency)}${
-            request.consenter.consentPrice
-              ? ` + ${request.consenter.displayName}'s consent price: ${fmtMoney(request.consenter.consentPrice.toString(), request.consenter.consentPriceCurrency)} (credited to them, settled weekly)`
+            askPrice
+              ? ` + ${request.consenter.displayName}'s consent price: ${fmtMoney(askPrice!.toString(), request.consenter.consentPriceCurrency)} (credited to them, settled weekly)`
               : ""
           } — non-refundable in every outcome (approved, denied, closed, withdrawn or unanswered). The fee buys the ask, not the answer.`}
         />
@@ -246,8 +252,8 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           <div className="flex flex-wrap gap-2">
             <SubmitButton disabled={!scopeDone || !detailsDone || !uploadsDone}>
               Pay {fmtMoney(price.perRequestFee.toString(), price.currency)}
-              {request.consenter.consentPrice
-                ? ` + ${fmtMoney(request.consenter.consentPrice.toString(), request.consenter.consentPriceCurrency)}`
+              {askPrice
+                ? ` + ${fmtMoney(askPrice.toString(), request.consenter.consentPriceCurrency)}`
                 : ""}{" "}
               & submit
             </SubmitButton>

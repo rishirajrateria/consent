@@ -334,6 +334,14 @@ async function seedDemo() {
     },
   });
 
+  // Jane prices by intent: news free, commentary cheap, promotion premium
+  const intentByName = async (n: string) => (await db.intentCategory.findFirstOrThrow({ where: { name: n } })).id;
+  for (const [name, amount] of [["News", 0], ["Commentary", 10], ["Promotion", 250]] as const) {
+    await db.consentPriceTier.create({
+      data: { consenterId: janeC.id, intentCategoryId: await intentByName(name), amount },
+    });
+  }
+
   // Consent matrix for Jane: YouTube + Instagram
   const platforms = await db.platform.findMany({ include: { formats: true } });
   const assetTypes = await db.assetType.findMany();

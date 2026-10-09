@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { Card, VerifiedBadge, ScoreRing, ButtonLink, SectionTitle } from "@/components/ui";
 import { titleCase, fmtMoney } from "@/lib/utils";
 import { storage } from "@/lib/storage";
+import { TipOffForm } from "@/components/tipoff-form";
 import { Check, X, CircleDashed } from "lucide-react";
 import type { Metadata } from "next";
 
@@ -18,11 +19,12 @@ export async function generateMetadata({ params }: PageProps<"/c/[slug]">): Prom
   };
 }
 
-export default async function PublicConsenterPage({ params }: PageProps<"/c/[slug]">) {
+export default async function PublicConsenterPage({ params, searchParams }: PageProps<"/c/[slug]">) {
   const { slug } = await params;
+  const sp = await searchParams;
   const c = await db.consenterProfile.findUnique({
     where: { slug },
-    include: { matrixEntries: true },
+    include: { matrixEntries: true, priceTiers: { include: { intentCategory: true } } },
   });
   if (!c || c.status !== "APPROVED") notFound();
   const photo = c.photoFileId ? await db.storedFile.findUnique({ where: { id: c.photoFileId } }) : null;
@@ -119,13 +121,37 @@ export default async function PublicConsenterPage({ params }: PageProps<"/c/[slu
             <strong className="text-ink">
               {c.consentPrice ? fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency) : "nothing"}
             </strong>
-            {c.consentPrice ? " — set by the owner, paid when you submit" : ""}
+            {c.priceTiers.length > 0 ? " (varies by intent)" : c.consentPrice ? " — set by the owner, paid when you submit" : ""}
           </span>
         </div>
         <ButtonLink href={session ? `/r-panel/new?consenter=${c.slug}` : `/signup`} className="w-full justify-center sm:w-auto">
           Request consent
         </ButtonLink>
       </Card>
+
+      {c.priceTiers.length > 0 && (
+        <Card className="space-y-2">
+          <SectionTitle
+            title="Consent price by intent"
+            desc="What it costs to ask, depending on why. Paid in-app when a request is submitted; it buys the ask, not the answer."
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {c.priceTiers
+              .sort((a, b) => Number(a.amount) - Number(b.amount))
+              .map((t) => (
+                <span key={t.id} className="rounded-full border border-ink/20 bg-white/60 px-2.5 py-1 text-xs font-medium">
+                  {t.intentCategory.name}:{" "}
+                  {Number(t.amount) === 0 ? "free" : fmtMoney(t.amount.toString(), c.consentPriceCurrency)}
+                </span>
+              ))}
+            {c.consentPrice && (
+              <span className="rounded-full bg-ink/5 px-2.5 py-1 text-xs">
+                everything else: {fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency)}
+              </span>
+            )}
+          </div>
+        </Card>
+      )}
 
       <Card className="space-y-4">
         <SectionTitle
@@ -163,6 +189,14 @@ export default async function PublicConsenterPage({ params }: PageProps<"/c/[slu
           Solid = allowed without asking · dashed = ask first · crossed = never allowed.
         </p>
       </Card>
+
+      <TipOffForm
+        consenterId={c.id}
+        slug={c.slug}
+        displayName={c.displayName}
+        sent={!!sp.tipped}
+        error={typeof sp.tiperror === "string" ? sp.tiperror : undefined}
+      />
     </div>
   );
 }
