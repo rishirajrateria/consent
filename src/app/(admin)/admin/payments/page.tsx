@@ -8,11 +8,16 @@ export const metadata = { title: "Payments & invoices" };
 
 export default async function AdminPayments() {
   await requireAdmin("payments", "view");
-  const [payments, subs] = await Promise.all([
+  const [payments, settlements, subs] = await Promise.all([
     db.payment.findMany({
       orderBy: { createdAt: "desc" },
       take: 100,
       include: { requester: true },
+    }),
+    db.settlement.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: { consenter: true, _count: { select: { entries: true } } },
     }),
     db.requesterProfile.findMany({
       where: { status: "APPROVED" },
@@ -39,6 +44,24 @@ export default async function AdminPayments() {
           );
         })}
         {subs.length === 0 && <p className="text-sm text-ink-faint">No approved requesters yet.</p>}
+      </Card>
+
+      <Card className="space-y-2">
+        <SectionTitle
+          title="Weekly settlements"
+          desc="Consent-price earnings batched and paid out to consenters weekly. Usage fees between parties never move through Consent."
+        />
+        {settlements.length === 0 && <p className="text-sm text-ink-faint">No settlements yet.</p>}
+        {settlements.map((s) => (
+          <div key={s.id} className="flex flex-wrap items-center gap-2 border-t hairline py-2 text-sm first:border-t-0">
+            <span className="font-medium">{s.consenter.displayName}</span>
+            <span>{fmtMoney(s.amount.toString(), s.currency)}</span>
+            <span className="text-xs text-ink-faint">
+              {s._count.entries} earning{s._count.entries === 1 ? "" : "s"} · ref {s.reference} · {fmtDateTime(s.createdAt)}
+            </span>
+            <StatusBadge status="PAID" className="ml-auto" />
+          </div>
+        ))}
       </Card>
 
       <Card className="space-y-2">

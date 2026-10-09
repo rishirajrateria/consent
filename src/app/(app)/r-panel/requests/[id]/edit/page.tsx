@@ -218,7 +218,14 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
 
       {/* Step 4: Review & submit */}
       <Card strong className="space-y-4" id="review">
-        <SectionTitle title="4 · Review & submit" desc={`Per-request fee: ${fmtMoney(price.perRequestFee.toString(), price.currency)} — non-refundable in every outcome (approved, denied, closed, withdrawn or unanswered).`} />
+        <SectionTitle
+          title="4 · Review & submit"
+          desc={`Platform fee: ${fmtMoney(price.perRequestFee.toString(), price.currency)}${
+            request.consenter.consentPrice
+              ? ` + ${request.consenter.displayName}'s consent price: ${fmtMoney(request.consenter.consentPrice.toString(), request.consenter.consentPriceCurrency)} (credited to them, settled weekly)`
+              : ""
+          } — non-refundable in every outcome (approved, denied, closed, withdrawn or unanswered). The fee buys the ask, not the answer.`}
+        />
         {!hasRaw && (
           <Alert tone="warn">
             No raw final content uploaded. You can still submit — if approved, it will be “approved in
@@ -238,7 +245,11 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           </label>
           <div className="flex flex-wrap gap-2">
             <SubmitButton disabled={!scopeDone || !detailsDone || !uploadsDone}>
-              Pay {fmtMoney(price.perRequestFee.toString(), price.currency)} & submit
+              Pay {fmtMoney(price.perRequestFee.toString(), price.currency)}
+              {request.consenter.consentPrice
+                ? ` + ${fmtMoney(request.consenter.consentPrice.toString(), request.consenter.consentPriceCurrency)}`
+                : ""}{" "}
+              & submit
             </SubmitButton>
           </div>
           {(!scopeDone || !detailsDone || !uploadsDone) && (

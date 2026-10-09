@@ -6,7 +6,7 @@ import { SubmitButton } from "@/components/form";
 import { SuccessNote } from "@/components/error-note";
 import { audit } from "@/lib/audit";
 import { redirect } from "next/navigation";
-import { Grid3x3, Zap, Ban, Users } from "lucide-react";
+import { Grid3x3, Zap, Ban, Users, Wallet } from "lucide-react";
 
 export const metadata = { title: "Profile settings" };
 
@@ -25,6 +25,13 @@ async function saveAction(formData: FormData) {
       contactPhone: String(formData.get("contactPhone") ?? "").trim() || null,
       managerContact: String(formData.get("managerContact") ?? "").trim() || null,
       defaultRequireLegalAgreementForPaid: formData.get("defaultLegal") === "on",
+      consentPrice: (() => {
+        const v = parseFloat(String(formData.get("consentPrice") ?? ""));
+        return v > 0 ? v.toFixed(2) : null;
+      })(),
+      consentPriceCurrency:
+        String(formData.get("consentPriceCurrency") ?? "USD").toUpperCase().slice(0, 3) || "USD",
+      payoutDetails: String(formData.get("payoutDetails") ?? "").trim() || null,
     },
   });
   await audit({
@@ -46,6 +53,7 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
     ["/c-panel/rules", "Standing rules", Zap],
     ["/c-panel/lists", "Blacklist & whitelist", Ban],
     ["/c-panel/team", "Team access", Users],
+    ["/c-panel/earnings", "Earnings & settlements", Wallet],
   ] as const;
 
   return (
@@ -53,7 +61,7 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
       <PageHeader kicker={consenter.displayName} title="Profile settings" />
       {sp.saved && <SuccessNote msg="Settings saved." />}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {shortcuts.map(([href, label, Icon]) => (
           <Link key={href} href={href}>
             <Card className="flex items-center gap-2.5 py-4 transition-all hover:shadow-glass-lg">
@@ -102,6 +110,37 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
           <Field label="Manager / agency contact">
             <Input name="managerContact" defaultValue={consenter.managerContact ?? ""} />
           </Field>
+        </Card>
+
+        <Card className="space-y-4">
+          <SectionTitle
+            title="Your consent price"
+            desc="What it costs to ask you. Paid in-app when a request is submitted, credited to you, and settled weekly. It filters out careless asks — and it buys the ask, not the answer. Leave empty to let anyone ask for free."
+          />
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Price per request" hint="0 or empty = free to ask.">
+              <Input
+                name="consentPrice"
+                type="number"
+                min={0}
+                step="0.01"
+                defaultValue={consenter.consentPrice ? consenter.consentPrice.toString() : ""}
+                placeholder="25"
+              />
+            </Field>
+            <Field label="Currency">
+              <Input name="consentPriceCurrency" maxLength={3} defaultValue={consenter.consentPriceCurrency} className="uppercase" />
+            </Field>
+          </div>
+          <Field label="Payout details" hint="Where your weekly settlements are paid (bank / UPI / PayPal). Visible only to you and finance admins.">
+            <Input name="payoutDetails" defaultValue={consenter.payoutDetails ?? ""} placeholder="e.g. HDFC •• 4821 / name@upi" />
+          </Field>
+          <p className="text-xs text-ink-faint">
+            An unanswered request that auto-expires never pays out — no reward for silence. Any usage
+            fee you negotiate after approval is still settled directly between you and the requester,
+            never through Consent. Track everything under{" "}
+            <Link href="/c-panel/earnings" className="underline underline-offset-4">Earnings & settlements</Link>.
+          </p>
         </Card>
 
         <Card className="space-y-3">

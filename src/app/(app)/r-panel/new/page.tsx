@@ -7,7 +7,7 @@ import { createDraftAction } from "../requests/actions";
 import { requesterActive } from "@/lib/payments";
 import { InvitePanel } from "@/components/invite-panel";
 import { SuccessNote } from "@/components/error-note";
-import { titleCase } from "@/lib/utils";
+import { titleCase, fmtMoney } from "@/lib/utils";
 import { Search, UserRound } from "lucide-react";
 
 export const metadata = { title: "New request" };
@@ -58,6 +58,13 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
                 <div className="font-semibold">{c.displayName}</div>
                 <div className="text-xs text-ink-faint">
                   {titleCase(c.entityType)}{c.category ? ` · ${c.category}` : ""} · score {c.score}
+                </div>
+                <div className="mt-1 text-xs text-ink-soft">
+                  Asking costs{" "}
+                  <strong className="text-ink">
+                    {c.consentPrice ? fmtMoney(c.consentPrice, c.consentPriceCurrency) : "nothing"}
+                  </strong>
+                  {c.consentPrice ? " · paid at submission" : ""}
                 </div>
               </div>
               <form action={createDraftAction}>

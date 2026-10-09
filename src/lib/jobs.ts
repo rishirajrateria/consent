@@ -19,7 +19,60 @@ export async function runSweeps(): Promise<Record<string, number>> {
   out.grantsExpired = await grantExpire();
   out.takedownsIgnored = await takedownIgnored();
   out.subscriptionReminders = await subscriptionReminders();
+  out.settlements = await settlementSweep();
   return out;
+}
+
+/**
+ * Weekly settlements: for each consenter with pending consent-price earnings
+ * whose last settlement is at least 7 days old (or who has never been
+ * settled), batch all pending earnings per currency into one settlement and
+ * mark them paid out. Payout itself is the mock provider in dev.
+ */
+async function settlementSweep(): Promise<number> {
+  const pending = await db.earningEntry.groupBy({
+    by: ["consenterId", "currency"],
+    where: { status: "PENDING" },
+    _sum: { amount: true },
+    _min: { createdAt: true },
+  });
+  let created = 0;
+  for (const group of pending) {
+    const last = await db.settlement.findFirst({
+      where: { consenterId: group.consenterId },
+      orderBy: { createdAt: "desc" },
+    });
+    const weekMs = 7 * 86400_000;
+    const anchor = last?.createdAt ?? group._min.createdAt!;
+    if (Date.now() - anchor.getTime() < weekMs) continue;
+
+    const entries = await db.earningEntry.findMany({
+      where: { consenterId: group.consenterId, currency: group.currency, status: "PENDING" },
+    });
+    if (entries.length === 0) continue;
+    const amount = entries.reduce((a, e) => a + Number(e.amount), 0);
+    const settlement = await db.settlement.create({
+      data: {
+        consenterId: group.consenterId,
+        amount: amount.toFixed(2),
+        currency: group.currency,
+        periodStart: anchor,
+        periodEnd: new Date(),
+        reference: `SETTLE-${group.consenterId.slice(-6).toUpperCase()}-${entries.length}x`,
+      },
+    });
+    await db.earningEntry.updateMany({
+      where: { id: { in: entries.map((e) => e.id) } },
+      data: { status: "SETTLED", settlementId: settlement.id },
+    });
+    await notifyConsenterTeam(group.consenterId, {
+      title: `Weekly settlement: ${group.currency} ${amount.toFixed(2)} paid out`,
+      body: `${entries.length} consent-price earning${entries.length > 1 ? "s" : ""} settled (ref ${settlement.reference}). Track details under Earnings.`,
+      href: "/c-panel/earnings",
+    });
+    created++;
+  }
+  return created;
 }
 
 async function slaReminders(): Promise<number> {
@@ -76,8 +129,14 @@ async function slaExpire(): Promise<number> {
       }),
       // Per-request fee is forfeited — no refund, no credit.
       db.payment.updateMany({
-        where: { requestId: r.id, status: "PAID" },
+        where: { requestId: r.id, status: "PAID", purpose: "PER_REQUEST" },
         data: { status: "FORFEITED" },
+      }),
+      // No reward for silence: an unanswered request never pays out its
+      // consent price to the consenter.
+      db.earningEntry.updateMany({
+        where: { requestId: r.id, status: "PENDING" },
+        data: { status: "REVERSED", reversedReason: "Request auto-expired unanswered" },
       }),
     ]);
     await notifyRequesterTeam(r.requesterId, {

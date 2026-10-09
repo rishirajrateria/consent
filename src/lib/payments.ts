@@ -47,6 +47,34 @@ export async function createPlatformPayment(opts: {
   const tax = price.taxRate ? (amount * Number(price.taxRate)) / 100 : 0;
   const total = amount + tax;
 
+  // Consenter-set consent price: collected in-app alongside the platform fee,
+  // credited to the consenter's balance and settled weekly. Deal fees after
+  // approval still never move through Consent.
+  if (opts.purpose === "PER_REQUEST" && opts.requestId) {
+    const request = await db.consentRequest.findUnique({
+      where: { id: opts.requestId },
+      include: { consenter: true },
+    });
+    const ask = request?.consenter.consentPrice;
+    if (request && ask && Number(ask) > 0) {
+      const existing = await db.payment.findFirst({
+        where: { requestId: opts.requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
+      });
+      if (!existing) {
+        await db.payment.create({
+          data: {
+            requesterId: opts.requesterId,
+            purpose: "CONSENT_PRICE",
+            amount: ask,
+            currency: request.consenter.consentPriceCurrency,
+            provider: paymentProviderFor(requester.country).name,
+            requestId: opts.requestId,
+          },
+        });
+      }
+    }
+  }
+
   const payment = await db.payment.create({
     data: {
       requesterId: opts.requesterId,
@@ -102,8 +130,32 @@ export async function settlePayment(paymentId: string) {
     });
   } else if (payment.purpose === "PER_REQUEST" && payment.requestId) {
     await onRequestPaid(payment.requestId);
+  } else if (payment.purpose === "CONSENT_PRICE" && payment.requestId) {
+    // Credit the consenter's balance; paid out in the weekly settlement sweep.
+    const request = await db.consentRequest.findUnique({ where: { id: payment.requestId } });
+    if (request) {
+      await db.earningEntry.upsert({
+        where: { paymentId: payment.id },
+        update: {},
+        create: {
+          consenterId: request.consenterId,
+          requestId: payment.requestId,
+          paymentId: payment.id,
+          amount: payment.amount,
+          currency: payment.currency,
+        },
+      });
+    }
   }
   return updated;
+}
+
+/** All payments a submission checkout must cover (platform fee + consent price). */
+export async function pendingPaymentsForRequest(requestId: string) {
+  return db.payment.findMany({
+    where: { requestId, status: "PENDING" },
+    orderBy: { purpose: "asc" },
+  });
 }
 
 /** True when the requester profile can send new requests. */

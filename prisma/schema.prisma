@@ -166,6 +166,11 @@ model ConsenterProfile {
   contactPhone       String?
   // defaults
   defaultRequireLegalAgreementForPaid Boolean @default(false)
+  // Consent price: what a requester pays IN-APP just to ask (spam deterrent).
+  // Credited to this consenter's balance and settled weekly. null/0 = free to ask.
+  consentPrice         Decimal? @db.Decimal(14, 2)
+  consentPriceCurrency String   @default("USD")
+  payoutDetails        String? // where weekly settlements are paid (bank/UPI/PayPal note)
   score              Int                 @default(500)
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
@@ -179,6 +184,8 @@ model ConsenterProfile {
   requests         ConsentRequest[]
   meetings         VerificationMeeting[]
   scoreLogs        ScoreLog[]            @relation("consenterScore")
+  earnings         EarningEntry[]
+  settlements      Settlement[]
 
   @@index([normalizedLegalName])
   @@index([status])
@@ -560,7 +567,8 @@ model ConsentRequest {
   offers      NegotiationOffer[]
   grant       Grant?
   agreement   Agreement?
-  payment     Payment?
+  payments    Payment[]
+  earning     EarningEntry?
   reports     Report[]
   events      RequestEvent[]
   lastOfferAt DateTime?
@@ -755,6 +763,7 @@ enum PaymentPurpose {
   ONBOARDING
   SUBSCRIPTION
   PER_REQUEST
+  CONSENT_PRICE // consenter-set ask-price, collected in-app, settled weekly to the consenter
 }
 
 enum PaymentStatus {
@@ -778,11 +787,56 @@ model Payment {
   discount    Decimal?         @db.Decimal(14, 2)
   tax         Decimal?         @db.Decimal(14, 2)
   taxLabel    String?
-  requestId   String?          @unique
+  requestId   String?
   request     ConsentRequest?  @relation(fields: [requestId], references: [id])
   invoiceNumber String?        @unique
   paidAt      DateTime?
   createdAt   DateTime         @default(now())
+  earning     EarningEntry?
+
+  @@index([requestId])
+}
+
+// ── Consenter earnings & weekly settlements ───────────────────
+
+enum EarningStatus {
+  PENDING // collected in-app, awaiting weekly settlement
+  SETTLED // paid out in a weekly settlement batch
+  REVERSED // request auto-expired unanswered — no reward for silence
+}
+
+model EarningEntry {
+  id          String           @id @default(cuid())
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  requestId   String           @unique
+  request     ConsentRequest   @relation(fields: [requestId], references: [id])
+  paymentId   String           @unique
+  payment     Payment          @relation(fields: [paymentId], references: [id])
+  amount      Decimal          @db.Decimal(14, 2)
+  currency    String
+  status      EarningStatus    @default(PENDING)
+  reversedReason String?
+  settlementId String?
+  settlement  Settlement?      @relation(fields: [settlementId], references: [id])
+  createdAt   DateTime         @default(now())
+
+  @@index([consenterId, status])
+}
+
+model Settlement {
+  id          String           @id @default(cuid())
+  consenterId String
+  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  amount      Decimal          @db.Decimal(14, 2)
+  currency    String
+  periodStart DateTime
+  periodEnd   DateTime
+  reference   String // payout reference (mock provider in dev)
+  entries     EarningEntry[]
+  createdAt   DateTime         @default(now())
+
+  @@index([consenterId])
 }
 
 model PriceConfig {

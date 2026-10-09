@@ -36,7 +36,7 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       events: true,
       grant: { include: { takedowns: true } },
       agreement: { include: { template: true, signatures: { include: { user: true } } } },
-      payment: true,
+      payments: true,
       reports: true,
     },
   })) as FullRequest | null;

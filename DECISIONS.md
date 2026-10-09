@@ -62,3 +62,21 @@ in DECISIONS.md, and continue").
 20. **Playwright e2e suite deferred**; Vitest covers the rules engine, canonical JSON signing and
     utility logic. The seeded demo data exercises every state manually. (This matched the chosen
     "full core product" scope.)
+
+## Post-launch owner changes (chat requests after the original spec)
+
+21. **Consent price (owner's explicit amendment to §1/§9).** Each consenter can set a per-request
+    "consent price" — what it costs a requester just to ask. Unlike deal fees, this IS collected
+    in-app (alongside the platform fee, in one checkout), credited to the consenter as an
+    `EarningEntry`, and paid out by a weekly settlement sweep (`Settlement` batches, one per
+    consenter+currency, at most every 7 days). Rules: the price buys the ask, not the answer
+    (non-refundable like all submission fees); an unanswered request that auto-expires REVERSES the
+    earning — no reward for silence; a request withdrawn after submission still pays out (the
+    deterrent stands). Usage fees negotiated after approval still never move through Consent —
+    negotiation happens in-app, settlement stays direct. Consenters track everything under
+    `/c-panel/earnings` (pending balance, per-ask earnings, settlement history + payout details);
+    finance admins see all settlements in the payments module. Payouts use the mock provider in
+    dev; a real payout rail (Stripe Connect / RazorpayX) plugs in at the settlement sweep.
+22. **App invites.** Searching a name that isn't on Consent offers "send a Consent invite":
+    demand is counted per normalized name, an optional email delivers the invitation, and inviters
+    are notified when the person joins and again when they're verified (`AppInvite` + claim loop).

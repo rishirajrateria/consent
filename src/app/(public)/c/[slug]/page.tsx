@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { Card, VerifiedBadge, ScoreRing, ButtonLink, SectionTitle } from "@/components/ui";
-import { titleCase } from "@/lib/utils";
+import { titleCase, fmtMoney } from "@/lib/utils";
 import { Check, X, CircleDashed } from "lucide-react";
 import type { Metadata } from "next";
 
@@ -97,6 +97,13 @@ export default async function PublicConsenterPage({ params }: PageProps<"/c/[slu
           {responseRate != null && <span>Responds to <strong className="text-ink">{responseRate}%</strong> of requests</span>}
           {medianHours != null && <span>Median response <strong className="text-ink">{medianHours < 48 ? `${medianHours}h` : `${Math.round(medianHours / 24)}d`}</strong></span>}
           <span><strong className="text-ink">{decided}</strong> requests decided</span>
+          <span>
+            Asking costs{" "}
+            <strong className="text-ink">
+              {c.consentPrice ? fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency) : "nothing"}
+            </strong>
+            {c.consentPrice ? " — set by the owner, paid when you submit" : ""}
+          </span>
         </div>
         <ButtonLink href={session ? `/r-panel/new?consenter=${c.slug}` : `/signup`} className="w-full justify-center sm:w-auto">
           Request consent

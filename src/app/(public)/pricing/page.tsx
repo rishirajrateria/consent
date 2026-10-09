@@ -45,9 +45,15 @@ export default async function PricingPage() {
         </Card>
       </div>
       <Alert>
-        <strong>Per-request fees are non-refundable</strong> in every outcome — approved, denied,
-        closed, withdrawn or unanswered. The fee buys the ask, not the answer. Lapsed subscriptions
-        keep read access to past grants and certificates.
+        <strong>Owners can also set a consent price</strong> — what it costs just to ask them. It is
+        paid in-app at submission, credited to the owner, and settled weekly. It filters out careless
+        asks; it buys the ask, not the answer. Any usage fee agreed after approval is settled
+        directly between the parties — that money never moves through Consent.
+      </Alert>
+      <Alert>
+        <strong>Per-request fees and consent prices are non-refundable</strong> in every outcome —
+        approved, denied, closed, withdrawn or unanswered. Lapsed subscriptions keep read access to
+        past grants and certificates.
       </Alert>
       {note && (
         <Card>

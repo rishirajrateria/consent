@@ -11,6 +11,8 @@ export type ConsenterHit = {
   country: string;
   score: number;
   aliases: string[];
+  consentPrice: string | null;
+  consentPriceCurrency: string;
 };
 
 /**
@@ -25,14 +27,15 @@ export async function searchConsenters(q: string, limit = 24): Promise<Consenter
       where: { status: "APPROVED" },
       orderBy: [{ score: "desc" }, { createdAt: "desc" }],
       take: limit,
-      select: { id: true, slug: true, displayName: true, entityType: true, category: true, country: true, score: true, aliases: true },
-    });
+      select: { id: true, slug: true, displayName: true, entityType: true, category: true, country: true, score: true, aliases: true, consentPrice: true, consentPriceCurrency: true },
+    }).then((rows) => rows.map((r) => ({ ...r, consentPrice: r.consentPrice?.toString() ?? null })));
   }
   const like = `%${query}%`;
   return db.$queryRaw<ConsenterHit[]>(Prisma.sql`
     SELECT DISTINCT ON (c.id)
       c.id, c.slug, c."displayName", c."entityType"::text as "entityType",
       c.category, c.country, c.score, c.aliases,
+      c."consentPrice"::text as "consentPrice", c."consentPriceCurrency",
       GREATEST(
         similarity(c."displayName", ${query}),
         similarity(c."legalName", ${query}),
