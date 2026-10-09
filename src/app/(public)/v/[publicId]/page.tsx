@@ -55,7 +55,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
         <div className="flex flex-wrap items-center justify-center gap-2">
           <StatusBadge status={effectiveStatus} />
           <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${signatureValid ? "bg-ink text-white" : "border border-ink/30 text-ink"}`}>
-            {signatureValid ? "Signature verified (Ed25519)" : "SIGNATURE INVALID — do not trust"}
+            {signatureValid ? "Verified authentic" : "COULD NOT BE VERIFIED — do not trust"}
           </span>
         </div>
         <p className="text-sm text-ink-soft">
@@ -94,7 +94,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
       </Card>
 
       <Card className="space-y-2">
-        <SectionTitle title="Approved file hashes" desc="This consent covers only files with exactly these SHA-256 hashes." />
+        <SectionTitle title="The exact approved files" desc="This consent covers only these files. Each has a unique digital fingerprint — change anything in a file and it no longer matches." />
         {payload.files.map((f, i) => (
           <div key={i} className="glass-subtle px-4 py-2.5">
             <div className="text-sm font-medium">{f.name} <span className="text-xs text-ink-faint">({f.kind.toLowerCase()}, v{f.version})</span></div>
@@ -124,7 +124,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
       )}
 
       <Card className="space-y-2">
-        <SectionTitle title="Platform signature" desc="Ed25519 signature over the canonical certificate payload. Verified live on every page load." />
+        <SectionTitle title="Technical details" desc="For experts and tools: the cryptographic seal (Ed25519 signature) and public key behind this certificate — re-checked live on every page load." />
         <div className="font-mono text-[10px] text-ink-faint break-all">{grant.signature}</div>
         <details>
           <summary className="cursor-pointer text-xs text-ink-soft">Public key</summary>

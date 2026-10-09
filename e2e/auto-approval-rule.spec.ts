@@ -37,7 +37,7 @@ test("whitelisted news request is auto-approved by Jane's standing rule", async 
 
   // Certificate page shows the standing rule in "Decided by".
   await visit(news, `/v/${grant!.publicId}`);
-  await expect(news.getByText("Signature verified (Ed25519)")).toBeVisible();
+  await expect(news.getByText("Verified authentic")).toBeVisible();
   await expect(news.getByText(/standing rule/)).toBeVisible();
   await expect(news.getByText(/Auto-approve whitelisted news/)).toBeVisible();
 

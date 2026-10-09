@@ -73,7 +73,7 @@ test("negotiated request ends in a verified certificate", async ({ browser }) =>
 
   // ── Public verification page ────────────────────────────────
   await visit(clips, `/v/${grant!.publicId}`);
-  await expect(clips.getByText("Signature verified (Ed25519)")).toBeVisible();
+  await expect(clips.getByText("Verified authentic")).toBeVisible();
   await expect(clips.getByText("Active", { exact: true })).toBeVisible();
   await expect(clips.getByText(grant!.certificateId).first()).toBeVisible();
 

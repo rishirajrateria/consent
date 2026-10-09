@@ -68,7 +68,7 @@ test("approval with a legally binding agreement signed by both sides", async ({ 
 
   // ── Certificate page shows the legally binding mode ─────────
   await visit(clips, `/v/${grant!.publicId}`);
-  await expect(clips.getByText("Signature verified (Ed25519)")).toBeVisible();
+  await expect(clips.getByText("Verified authentic")).toBeVisible();
   await expect(clips.getByText("Legally binding agreement")).toBeVisible();
 
   await clips.context().close();

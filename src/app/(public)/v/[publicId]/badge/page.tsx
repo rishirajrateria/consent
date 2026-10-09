@@ -40,11 +40,11 @@ export default async function BadgePage({ params }: PageProps<"/v/[publicId]/bad
         </code>
       </Card>
       <Card className="space-y-2">
-        <SectionTitle title="Live-status iframe" desc="Re-verifies the Ed25519 signature on every load — shows Active / Expired / Revoked in real time." />
+        <SectionTitle title="Live-status iframe" desc="Checks the certificate's authenticity on every load — shows Active / Expired / Revoked in real time." />
         <code className="glass-subtle block overflow-x-auto whitespace-pre px-4 py-3 font-mono text-xs">{`<iframe src="${base}/embed/${publicId}" width="340" height="120" style="border:0" title="Consent verification"></iframe>`}</code>
       </Card>
       <Card className="space-y-2">
-        <SectionTitle title="Verification API" desc="For platforms and tools: JSON status, scope, approved file hashes and the signature itself. CORS-open, no key required." />
+        <SectionTitle title="Verification API" desc="For platforms and tools: JSON status, scope, the approved files' fingerprints and the cryptographic seal. Open, no key required." />
         <code className="glass-subtle block overflow-x-auto px-4 py-3 font-mono text-xs">GET {base}/api/v1/verify/{publicId}</code>
       </Card>
     </div>

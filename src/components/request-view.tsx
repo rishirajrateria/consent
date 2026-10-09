@@ -70,7 +70,7 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
   ];
   return (
     <Card className="space-y-4" id="uploads">
-      <SectionTitle title="Files & hashes" desc="Approval is bound to these exact SHA-256 hashes. New versions never inherit a grant." />
+      <SectionTitle title="The exact files" desc="Approval is locked to these exact files — upload a new version and it needs its own approval." />
       {watermark && (
         <p className="text-xs text-ink-faint">Previews are watermarked for review. Links expire after 10 minutes.</p>
       )}

@@ -24,7 +24,7 @@ export default function HomePage() {
         <p className="mx-auto mt-5 max-w-2xl text-base text-ink-soft sm:text-lg">
           For decades, whoever hit publish decided how a face, a voice, a life got used. Consent
           reverses it: identity owners write binding, platform-by-platform terms, and every approved
-          use is signed, bound to the exact files, and verifiable by anyone, forever.
+          use becomes a tamper-proof record anyone can check, forever.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <ButtonLink href="/signup" className="px-6 py-3">
@@ -42,7 +42,7 @@ export default function HomePage() {
           "A face is property. A voice is property. A story is property.",
           "For decades, the person on screen had the least say in how the screen used them.",
           "Now the owner writes the terms — platform by platform, use by use.",
-          "Every yes is signed and bound to the exact files it approves. Anyone can verify it, forever.",
+          "Every yes is sealed and locked to the exact files it approves. Anyone can check it, forever.",
           "A no needs no reason.",
           "Nothing moves without permission.",
         ].map((line) => (
@@ -57,7 +57,7 @@ export default function HomePage() {
         {[
           [Fingerprint, "1 · Verified, once.", "Every consenter is verified manually — real documents, a real meeting, one account per entity — so a yes is provably from its owner."],
           [Handshake, "2 · Ask. Decide. Agree.", "Requesters describe the exact intended use; owners approve, decline or set conditions, and the two parties settle terms directly between themselves."],
-          [QrCode, "3 · On the record.", "Every approval becomes an Ed25519-signed certificate bound to the SHA-256 hashes of the exact approved files — publicly verifiable, forever."],
+          [QrCode, "3 · On the record.", "Every approval becomes a tamper-proof certificate locked to the exact approved files — anyone can check it at the public link, forever."],
         ].map(([Icon, title, body]) => {
           const I = Icon as typeof Fingerprint;
           return (
@@ -94,8 +94,8 @@ export default function HomePage() {
           <h2 className="text-xl font-semibold">Create with permission</h2>
           <p className="text-sm text-ink-soft">
             Every upload used to be a bet on someone else&apos;s tolerance. Request the exact use on
-            the exact platform, settle terms directly with the owner, and publish holding an
-            Ed25519-signed certificate bound to the SHA-256 hashes of your approved files. When
+            the exact platform, settle terms directly with the owner, and publish holding a
+            tamper-proof certificate that proves exactly what was approved. When
             anyone asks whether you had permission, you don&apos;t argue — you point.
           </p>
           <ul className="space-y-1.5 text-sm text-ink-soft">
@@ -110,10 +110,10 @@ export default function HomePage() {
       {/* Trust strip */}
       <section className="glass flex flex-wrap items-center justify-center gap-x-10 gap-y-4 px-6 py-8 text-center">
         {[
-          ["Ed25519-signed certificates", Scale],
-          ["SHA-256 file binding", Fingerprint],
+          ["Tamper-proof certificates", Scale],
+          ["Locked to the exact files", Fingerprint],
           ["Public Consent Scores", ShieldCheck],
-          ["Hash-chained audit log", FileCheck],
+          ["Permanent audit trail", FileCheck],
         ].map(([label, Icon]) => {
           const I = Icon as typeof Scale;
           return (

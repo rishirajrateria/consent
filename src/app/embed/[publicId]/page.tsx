@@ -52,7 +52,7 @@ export default async function EmbedPage({ params }: PageProps<"/embed/[publicId]
               {grant.request.requester.displayName} ← {grant.request.consenter.displayName}
             </div>
             <div className="text-[10px] text-ink-faint">
-              {grant.certificateId} · issued {fmtDate(grant.issuedAt)} · live Ed25519 check
+              {grant.certificateId} · issued {fmtDate(grant.issuedAt)} · authenticity checked live
             </div>
           </div>
         </div>

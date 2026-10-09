@@ -3,7 +3,7 @@ import { Search, FileUp, Scale, Award, QrCode, ShieldOff, Flag, Users } from "lu
 
 export const metadata = {
   title: "How it works",
-  description: "How owners set the terms — and every approved use becomes a signed, verifiable certificate.",
+  description: "How owners set the terms — and every approved use becomes a certificate anyone can check.",
 };
 
 const STEPS = [
@@ -12,7 +12,7 @@ const STEPS = [
   [Scale, "The owner decides — or their terms do", "The terms you wrote answer first: a consent matrix (allow / ask / never per platform × format × asset type) and prioritized standing rules can auto-approve, auto-deny or route requests. Otherwise the team approves (optionally with conditions), requests changes, sets a fee, or denies. A no needs no reason. Unanswered requests auto-expire and hurt the consenter's public Consent Score."],
   [FileUp, "Fees are settled directly", "Money never moves through Consent. If a fee is wanted, both sides counter-offer freely inside Consent. When a deal is agreed, contact details are shared and payment happens directly between the parties — Consent never processes, tracks or confirms it."],
   [Award, "You choose how formal the yes is", "The default is the in-app record. Either side can propose a legally binding agreement — platform-generated from jurisdiction templates and signed in-app (typed name + OTP + timestamp + IP), or your own signed contract uploaded and mutually confirmed."],
-  [QrCode, "On the record, verifiable forever", "Every approval becomes a certificate bound to the SHA-256 hashes of the exact approved files, signed with the platform's Ed25519 key. The public verification page re-verifies the signature live and can check any file against the approved hashes. The verification link must appear in the published content."],
+  [QrCode, "On the record, verifiable forever", "Every approval becomes a tamper-proof certificate locked to the exact approved files and sealed by Consent — it can't be faked, and it can't be quietly edited. The public page checks the seal every time it loads, and can tell anyone whether a file is one of the approved originals. The verification link must appear in the published content."],
   [ShieldOff, "A yes can become a no", "Owners can revoke future use (already-published content within scope stays covered) and raise takedown requests with a confirm-loop. Everything is recorded on the certificate."],
   [Flag, "Reports & the Consent Score", "Either side can put a breach on the record, with evidence. Upheld reports, ignored takedowns and unanswered requests all feed the public 0–1000 Consent Score. Consent takes no further enforcement action — for legal matters, export the signed Consent History Dossier."],
 ] as const;

@@ -28,7 +28,7 @@ export default async function VerifyLanding({ searchParams }: PageProps<"/verify
       <PageHeader
         kicker="Verification"
         title="Verify a consent certificate"
-        desc="Paste a verification link (consent…/v/abc123) or a certificate ID (CERT-2026-…). You can also check whether a specific file matches the approved hashes on the certificate page."
+        desc="Paste a verification link (consent…/v/abc123) or a certificate ID (CERT-2026-…). On the certificate page you can also check whether a specific file is one of the approved originals."
       />
       <ErrorNote error={sp.error as string | undefined} />
       <Card strong>
