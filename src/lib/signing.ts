@@ -1,4 +1,3 @@
-import "server-only";
 import {
   generateKeyPairSync,
   sign as edSign,

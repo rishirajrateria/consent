@@ -1,4 +1,3 @@
-import "server-only";
 import { db } from "./db";
 import { getSettings } from "./settings";
 import { notifyConsenterTeam, notifyRequesterTeam } from "./notify";

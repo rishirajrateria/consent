@@ -1,4 +1,3 @@
-import "server-only";
 import { createHash } from "crypto";
 import { db } from "./db";
 

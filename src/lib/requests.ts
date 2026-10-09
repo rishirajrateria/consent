@@ -1,4 +1,3 @@
-import "server-only";
 import { db } from "./db";
 import { getSettings } from "./settings";
 import { evaluateAutoDecision, type Selection } from "./rules";

@@ -1,4 +1,3 @@
-import "server-only";
 import { db } from "./db";
 import { paymentProviderFor } from "./providers";
 import type { PaymentPurpose } from "@prisma/client";
