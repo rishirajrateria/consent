@@ -3,9 +3,9 @@ import { Card, ButtonLink } from "@/components/ui";
 import { ShieldCheck, FileCheck, Scale, Fingerprint, QrCode, Handshake, ArrowRight } from "lucide-react";
 
 export const metadata = {
-  title: "Consent — permission, documented",
+  title: "Consent — You set the terms now",
   description:
-    "Famous people and IP owners record how their likeness may be used. Creators get documented, verifiable approval before publishing.",
+    "Consent is where people set the terms for their name, image, voice and likeness — and every approved use is signed, documented and verifiable forever.",
 };
 
 export default function HomePage() {
@@ -14,33 +14,50 @@ export default function HomePage() {
       {/* Hero */}
       <section className="fade-up mx-auto max-w-3xl pt-10 text-center sm:pt-20">
         <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/50 px-3 py-1 text-xs font-medium text-ink-soft backdrop-blur">
-          <ShieldCheck className="size-3.5" aria-hidden /> The likeness & IP permission platform
+          <ShieldCheck className="size-3.5" aria-hidden /> Permission infrastructure for identity
         </div>
         <h1 className="text-4xl font-semibold tracking-tight sm:text-6xl">
-          Use their likeness.
+          Your face. Your voice. Your story.
           <br />
-          <span className="text-ink-faint">With their consent.</span>
+          <span className="text-ink-faint">You set the terms now.</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-xl text-base text-ink-soft sm:text-lg">
-          Public figures, shows and brands set the rules. Creators, news channels and podcasts get
-          documented, verifiable approval — with a tamper-proof certificate for every grant.
+        <p className="mx-auto mt-5 max-w-2xl text-base text-ink-soft sm:text-lg">
+          For decades, whoever hit publish decided how a face, a voice, a life got used. Consent
+          reverses it: identity owners write binding, platform-by-platform terms, and every approved
+          use is signed, bound to the exact files, and verifiable by anyone, forever.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <ButtonLink href="/signup" className="px-6 py-3">
-            Get started <ArrowRight className="size-4" aria-hidden />
+            Set your terms <ArrowRight className="size-4" aria-hidden />
           </ButtonLink>
           <ButtonLink href="/directory" variant="secondary" className="px-6 py-3">
-            Browse verified profiles
+            Create with permission
           </ButtonLink>
         </div>
+      </section>
+
+      {/* Manifesto */}
+      <section className="glass mx-auto max-w-3xl space-y-4 px-8 py-12 text-center">
+        {[
+          "A face is property. A voice is property. A story is property.",
+          "For decades, the person on screen had the least say in how the screen used them.",
+          "Now the owner writes the terms — platform by platform, use by use.",
+          "Every yes is signed and bound to the exact files it approves. Anyone can verify it, forever.",
+          "A no needs no reason.",
+          "Nothing moves without permission.",
+        ].map((line) => (
+          <p key={line} className="text-lg font-medium tracking-tight sm:text-xl">
+            {line}
+          </p>
+        ))}
       </section>
 
       {/* How it works */}
       <section className="grid gap-4 sm:grid-cols-3">
         {[
-          [Fingerprint, "1 · Verified identities", "Every consenter is manually verified — documents, official accounts and a verification meeting. One entity, one account."],
-          [Handshake, "2 · Ask, decide, agree", "Requesters describe exactly what they'll publish and upload the final file. Consenters approve, set conditions, ask a fee or deny — or let standing rules decide instantly."],
-          [QrCode, "3 · Tamper-proof certificate", "Every approval is bound to the file's SHA-256 hash and signed by the platform. Anyone can verify it at the public link — forever."],
+          [Fingerprint, "1 · Verified, once.", "Every consenter is verified manually — real documents, a real meeting, one account per entity — so a yes is provably from its owner."],
+          [Handshake, "2 · Ask. Decide. Agree.", "Requesters describe the exact intended use; owners approve, decline or set conditions, and the two parties settle terms directly between themselves."],
+          [QrCode, "3 · On the record.", "Every approval becomes an Ed25519-signed certificate bound to the SHA-256 hashes of the exact approved files — publicly verifiable, forever."],
         ].map(([Icon, title, body]) => {
           const I = Icon as typeof Fingerprint;
           return (
@@ -57,32 +74,36 @@ export default function HomePage() {
       <section className="grid gap-4 md:grid-cols-2">
         <Card strong className="space-y-3 p-8">
           <ShieldCheck className="size-7" strokeWidth={1.5} aria-hidden />
-          <h2 className="text-xl font-semibold">For consenters</h2>
+          <h2 className="text-xl font-semibold">Own your identity</h2>
           <p className="text-sm text-ink-soft">
-            Influencers, celebrities, TV shows, movies, brands, characters. Decide platform by
-            platform what&apos;s allowed automatically, what needs your approval and what&apos;s never
-            OK. Your team handles requests; every action is logged. Free, always.
+            You have been filmed, quoted, memed and cloned on terms you never saw. Write your own:
+            binding, platform-by-platform rules for your name, image, voice and likeness, where
+            every approval becomes a signed certificate bound to the exact files you reviewed. You
+            are verified once — real documents, a real meeting, one account that is provably you —
+            and you never pay anything.
           </p>
           <ul className="space-y-1.5 text-sm text-ink-soft">
-            <li>· Consent matrix + standing rules with auto-decisions</li>
-            <li>· Blacklist and whitelist requesters</li>
-            <li>· Revocation and takedown requests</li>
+            <li>· Terms you wrote, not terms you tolerate</li>
+            <li>· Every yes signed and bound to the exact files you reviewed</li>
+            <li>· You never pay. A no needs no reason.</li>
           </ul>
-          <ButtonLink href="/signup" variant="secondary">Protect your likeness</ButtonLink>
+          <ButtonLink href="/signup" variant="secondary">Set your terms</ButtonLink>
         </Card>
         <Card strong className="space-y-3 p-8">
           <FileCheck className="size-7" strokeWidth={1.5} aria-hidden />
-          <h2 className="text-xl font-semibold">For requesters</h2>
+          <h2 className="text-xl font-semibold">Create with permission</h2>
           <p className="text-sm text-ink-soft">
-            Creators, news channels, meme pages, podcasts, media houses. Stop guessing whether
-            you&apos;re allowed to use someone&apos;s name, face or footage — get proof you were.
+            Every upload used to be a bet on someone else&apos;s tolerance. Request the exact use on
+            the exact platform, settle terms directly with the owner, and publish holding an
+            Ed25519-signed certificate bound to the SHA-256 hashes of your approved files. When
+            anyone asks whether you had permission, you don&apos;t argue — you point.
           </p>
           <ul className="space-y-1.5 text-sm text-ink-soft">
-            <li>· Search verified people and IP, see what&apos;s generally allowed</li>
-            <li>· Negotiate fees directly — Consent never touches the money</li>
-            <li>· Signed certificate + public verification link for every grant</li>
+            <li>· Ask for the exact use, on the exact platform</li>
+            <li>· Terms settled directly with the owner</li>
+            <li>· Proof anyone can verify, forever</li>
           </ul>
-          <ButtonLink href="/signup" variant="secondary">Request consent</ButtonLink>
+          <ButtonLink href="/signup" variant="secondary">Create with permission</ButtonLink>
         </Card>
       </section>
 

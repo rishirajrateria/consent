@@ -6,7 +6,7 @@ import { countryName } from "@/lib/countries";
 
 export const metadata = {
   title: "Pricing",
-  description: "Consenters never pay. Requesters pay onboarding, a yearly subscription and a small per-request fee.",
+  description: "Consenters never pay anything. Requesters pay onboarding, a yearly subscription and a small per-request fee.",
 };
 
 export default async function PricingPage() {
@@ -17,14 +17,14 @@ export default async function PricingPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees only — fees between parties are theirs alone." />
+      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees only — fees between parties settle directly, theirs alone." />
       <div className="grid gap-4 sm:grid-cols-2">
         <Card strong className="space-y-2 p-7">
           <SectionTitle title="Consenters" />
-          <div className="text-4xl font-semibold tracking-tight">Free</div>
+          <div className="text-4xl font-semibold tracking-tight">You never pay</div>
           <p className="text-sm text-ink-soft">
             Verification, consent matrix, standing rules, team seats, certificates, takedowns,
-            dossier exports — all free, forever.
+            dossier exports — control costs nothing, ever. A no needs no reason.
           </p>
         </Card>
         <Card strong className="space-y-3 p-7">
@@ -45,9 +45,9 @@ export default async function PricingPage() {
         </Card>
       </div>
       <Alert>
-        <strong>No refunds</strong> on per-request fees in any outcome — approved, denied, closed,
-        withdrawn or unanswered. Lapsed subscriptions keep read access to past grants and
-        certificates.
+        <strong>Per-request fees are non-refundable</strong> in every outcome — approved, denied,
+        closed, withdrawn or unanswered. The fee buys the ask, not the answer. Lapsed subscriptions
+        keep read access to past grants and certificates.
       </Alert>
       {note && (
         <Card>

@@ -3,24 +3,24 @@ import { Search, FileUp, Scale, Award, QrCode, ShieldOff, Flag, Users } from "lu
 
 export const metadata = {
   title: "How it works",
-  description: "From verified identity to tamper-proof certificate — how Consent works.",
+  description: "How owners set the terms — and every approved use becomes a signed, verifiable certificate.",
 };
 
 const STEPS = [
-  [Users, "Verified identities on both sides", "Consenters go through strict manual verification: legal documents, official account proof (OAuth or manual), duplicate prevention (one entity = one account) and a mandatory verification meeting. Requesters are approval-gated with ID or business registration, then pay a one-time onboarding fee and a yearly subscription."],
-  [Search, "The requester asks precisely", "Every request is filled manually — no templates, no duplicates. Platform(s) and format(s), duration in seconds for timed formats, asset types, the exact assets used, the raw final content file, a separate thumbnail if it features the consenter, context, a creative plan with intent category, and the requested validity. A small per-request fee is paid at submission and is never refunded."],
-  [Scale, "The consenter decides — or their rules do", "A consent matrix (allow / ask / never per platform × format × asset type) and prioritized standing rules can auto-approve, auto-deny or route requests. Otherwise the team approves (optionally with conditions), requests changes, sets a fee, or denies. Unanswered requests auto-expire and hurt the consenter's public Consent Score."],
-  [FileUp, "Fees are settled directly", "If a fee is wanted, both sides counter-offer freely inside Consent. When a deal is agreed, contact details are shared and payment happens directly between the parties — Consent never processes, tracks or confirms it."],
-  [Award, "Choose how formal the consent is", "Default: the in-app record. Either side can propose a legally binding agreement — platform-generated from jurisdiction templates and signed in-app (typed name + OTP + timestamp + IP), or your own signed contract uploaded and mutually confirmed."],
-  [QrCode, "Tamper-proof certificate", "The grant is bound to the SHA-256 hashes of the exact approved files and signed with the platform's Ed25519 key. The public verification page re-verifies the signature live and can check any file against the approved hashes. The verification link must appear in the published content."],
-  [ShieldOff, "Revocation & takedowns", "Consenters can revoke future use (already-published content within scope stays covered) and raise takedown requests with a confirm-loop. Everything is recorded on the certificate."],
-  [Flag, "Reports & the Consent Score", "Either side can report breaches with evidence. Upheld reports, ignored takedowns and unanswered requests all feed the public 0–1000 Consent Score. Consent takes no further enforcement action — for legal matters, export the signed Consent History Dossier."],
+  [Users, "Verified, once — on both sides", "Every consenter is verified manually — legal documents, official account proof (OAuth or manual), one entity = one account, and a mandatory verification meeting — so a yes is provably from its owner. Requesters are approval-gated with ID or business registration, then pay a one-time onboarding fee and a yearly subscription."],
+  [Search, "Ask for the exact use", "Requesters describe the exact intended use, filled manually — no templates, no duplicates. Platform(s) and format(s), duration in seconds for timed formats, asset types, the exact assets used, the raw final content file, a separate thumbnail if it features the consenter, context, a creative plan with intent category, and the requested validity. A small per-request fee is paid at submission and is never refunded."],
+  [Scale, "The owner decides — or their terms do", "The terms you wrote answer first: a consent matrix (allow / ask / never per platform × format × asset type) and prioritized standing rules can auto-approve, auto-deny or route requests. Otherwise the team approves (optionally with conditions), requests changes, sets a fee, or denies. A no needs no reason. Unanswered requests auto-expire and hurt the consenter's public Consent Score."],
+  [FileUp, "Fees are settled directly", "Money never moves through Consent. If a fee is wanted, both sides counter-offer freely inside Consent. When a deal is agreed, contact details are shared and payment happens directly between the parties — Consent never processes, tracks or confirms it."],
+  [Award, "You choose how formal the yes is", "The default is the in-app record. Either side can propose a formal written agreement — platform-generated from jurisdiction templates and signed in-app (typed name + OTP + timestamp + IP), or your own signed contract uploaded and mutually confirmed."],
+  [QrCode, "On the record, verifiable forever", "Every approval becomes a certificate bound to the SHA-256 hashes of the exact approved files, signed with the platform's Ed25519 key. The public verification page re-verifies the signature live and can check any file against the approved hashes. The verification link must appear in the published content."],
+  [ShieldOff, "A yes can become a no", "Owners can revoke future use (already-published content within scope stays covered) and raise takedown requests with a confirm-loop. Everything is recorded on the certificate."],
+  [Flag, "Reports & the Consent Score", "Either side can put a breach on the record, with evidence. Upheld reports, ignored takedowns and unanswered requests all feed the public 0–1000 Consent Score. Consent takes no further enforcement action — for legal matters, export the signed Consent History Dossier."],
 ] as const;
 
 export default function HowItWorksPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <PageHeader kicker="consent." title="How it works" desc="From verified identity to tamper-proof certificate." />
+      <PageHeader kicker="consent." title="How it works" desc="You set the terms. This is how every yes goes on the record." />
       <div className="space-y-3">
         {STEPS.map(([Icon, title, body], i) => (
           <Card key={title} className="space-y-2">
