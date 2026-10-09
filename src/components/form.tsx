@@ -35,13 +35,14 @@ export function ConfirmSubmit({
   className,
   variant = "danger",
   size,
+  ...rest
 }: {
   children: ReactNode;
   confirm: string;
   className?: string;
   variant?: ComponentProps<typeof Button>["variant"];
   size?: "sm";
-}) {
+} & Omit<ComponentProps<typeof Button>, "variant" | "size" | "onClick">) {
   const { pending } = useFormStatus();
   return (
     <Button
@@ -53,6 +54,7 @@ export function ConfirmSubmit({
       onClick={(e) => {
         if (!window.confirm(confirm)) e.preventDefault();
       }}
+      {...rest}
     >
       {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
       {children}

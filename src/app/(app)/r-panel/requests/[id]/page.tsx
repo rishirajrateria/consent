@@ -11,6 +11,7 @@ import {
 import { uploadRequestFileAction, withdrawRequestAction, proceedAppRecordAction } from "../actions";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { TakedownRespondPanel } from "@/components/takedown-panels";
+import { ReportPanel } from "@/components/report-panel";
 
 export const metadata = { title: "Request" };
 
@@ -33,6 +34,7 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       grant: true,
       agreement: { include: { template: true, signatures: { include: { user: true } } } },
       payment: true,
+      reports: true,
     },
   })) as (FullRequest & { agreement: NonNullable<unknown> | null }) | null;
   if (!request || request.requesterId !== requester.id) notFound();
@@ -117,6 +119,7 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       <ScopeCard request={request} />
       <FilesCard request={request} />
       <MessagesCard request={request} side="requester" />
+      <ReportPanel request={request} side="requester" />
       <TimelineCard request={request} />
 
       {canWithdraw && (

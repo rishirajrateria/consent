@@ -20,6 +20,7 @@ export type FullRequest = Prisma.ConsentRequestGetPayload<{
     grant: true;
     agreement: true;
     payment: true;
+    reports: true;
   };
 }>;
 

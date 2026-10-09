@@ -14,6 +14,7 @@ import {
 } from "../actions";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
+import { ReportPanel } from "@/components/report-panel";
 import { fmtDateTime } from "@/lib/utils";
 import type { Selection } from "@/lib/rules";
 import { Timer } from "lucide-react";
@@ -36,6 +37,7 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       grant: { include: { takedowns: true } },
       agreement: { include: { template: true, signatures: { include: { user: true } } } },
       payment: true,
+      reports: true,
     },
   })) as FullRequest | null;
   if (!request || request.consenterId !== consenter.id) notFound();
@@ -215,6 +217,7 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       <ScopeCard request={request} />
       <FilesCard request={request} watermark />
       <MessagesCard request={request} side="consenter" />
+      <ReportPanel request={request} side="consenter" />
       <TimelineCard request={request} />
     </div>
   );
