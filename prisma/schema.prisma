@@ -171,6 +171,12 @@ model ConsenterProfile {
   consentPrice         Decimal? @db.Decimal(14, 2)
   consentPriceCurrency String   @default("USD")
   payoutDetails        String? // where weekly settlements are paid (bank/UPI/PayPal note)
+  // Request limits the owner chooses (null = no limit). New requests are paused
+  // while any limit is reached.
+  maxOpenRequests      Int? // requests waiting for their first answer, at once
+  dailyRequestLimit    Int? // new requests in any 24 hours
+  weeklyRequestLimit   Int? // new requests in any 7 days
+  monthlyRequestLimit  Int? // new requests in any 30 days
   score              Int                 @default(500)
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
@@ -598,6 +604,7 @@ model ConsentRequest {
   slaExpiresAt DateTime?
   reminder50Sent Boolean @default(false)
   reminder90Sent Boolean @default(false)
+  remindedAt   DateTime? // last "about to expire" reminder; one per 7-day window
   closedReason String?
   contactsRevealed Boolean @default(false)
   contactsSnapshot Json?
