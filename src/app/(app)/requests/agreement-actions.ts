@@ -7,7 +7,7 @@ import { issueOtp } from "@/lib/auth";
 import { getESignProvider, canActOnAgreement, agreementTemplateFor } from "@/lib/esign";
 import { email } from "@/lib/providers";
 import { storeUpload } from "@/lib/storage";
-import { issueGrant } from "@/lib/grants";
+import { issueGrant, boundFiles, ownerYesAt } from "@/lib/grants";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 import { audit } from "@/lib/audit";
 import { resolveSide } from "./shared-actions";
@@ -102,7 +102,9 @@ function renderTemplate(body: string, request: {
   isPaid: boolean;
   agreedAmount: unknown;
   agreedCurrency: string | null;
-  files: { kind: string; sha256: string; name: string }[];
+  decidedAt: Date | null;
+  offers: { status: string; bySide: string; createdAt: Date }[];
+  files: { kind: string; sha256: string; name: string; version: number; createdAt: Date }[];
 }): string {
   const selections = (request.approvedSelections ?? request.selections) as Selection[];
   const scope = selections
@@ -114,13 +116,20 @@ function renderTemplate(body: string, request: {
       : request.validityKind === "PERPETUAL"
         ? "Perpetual"
         : `From ${request.validFrom?.toDateString()} to ${request.validUntil?.toDateString()}`;
+  // The caller refuses a paid request without an agreed fee, so this never prints 0.
   const fee = request.isPaid
-    ? `${fmtMoney(String(request.agreedAmount ?? "0"), request.agreedCurrency ?? "USD")} agreed between the parties, settled directly (not through Consent)`
+    ? `${fmtMoney(String(request.agreedAmount), request.agreedCurrency ?? "USD")} agreed between the parties, settled directly (not through Consent)`
     : "Free of charge";
-  const hashes = request.files
-    .filter((f) => ["RAW_CONTENT", "ASSET", "THUMBNAIL"].includes(f.kind))
-    .map((f) => `${f.kind}: ${f.name} — sha256:${f.sha256}`)
-    .join("\n") || "To be bound on final file upload";
+  // Exactly the files the certificate binds: the consenter's assets plus the one
+  // approved version of the content and thumbnail, never every uploaded version.
+  const bound = boundFiles(request.files, ownerYesAt(request));
+  const lines = bound.map((f) =>
+    f.kind === "ASSET"
+      ? `${f.kind}: ${f.name} — sha256:${f.sha256}`
+      : `${f.kind}: ${f.name} (version ${f.version}) — sha256:${f.sha256}`
+  );
+  if (lines.length && !bound.some((f) => f.kind === "RAW_CONTENT")) lines.push("RAW_CONTENT: to be bound on final file upload");
+  const hashes = lines.join("\n") || "To be bound on final file upload";
   return body
     .replaceAll("{{consenterLegalName}}", request.consenter.legalName)
     .replaceAll("{{requesterLegalName}}", request.requester.legalName)
@@ -144,8 +153,9 @@ export async function chooseAgreementKindAction(formData: FormData) {
   if (kind === "PLATFORM_GENERATED") {
     const full = await db.consentRequest.findUniqueOrThrow({
       where: { id },
-      include: { consenter: true, requester: true, files: true },
+      include: { consenter: true, requester: true, files: true, offers: { orderBy: { version: "asc" } } },
     });
+    if (full.isPaid && full.agreedAmount == null) fail(path, "No agreed fee on this paid request yet. Agree the fee first.");
     // Country-specific first, GLOBAL fallback; the panel lists clauses from the same template.
     const template = await agreementTemplateFor(full.requester.country);
     if (!template) fail(path, "No agreement template is configured — contact support");

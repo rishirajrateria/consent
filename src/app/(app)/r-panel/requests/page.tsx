@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState, ButtonLink } from "@/components/ui";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { fmtDateTime, cn } from "@/lib/utils";
 import type { RequestStatus } from "@prisma/client";
 import { Inbox, Plus } from "lucide-react";
@@ -35,6 +36,8 @@ export default async function RequesterRequests({ searchParams }: PageProps<"/r-
         title="Consent requests"
         action={<ButtonLink href="/r-panel/new" size="sm"><Plus className="size-4" aria-hidden /> New</ButtonLink>}
       />
+      <ErrorNote error={sp.error} />
+      {sp.discarded && <SuccessNote msg="Draft discarded." />}
       <div className="flex gap-1 overflow-x-auto">
         {TABS.map(([t]) => (
           <Link key={t} href={`/r-panel/requests?tab=${t}`} className={cn("whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium", t === tab ? "bg-ink text-white" : "text-ink-soft hover:bg-ink/5")}>

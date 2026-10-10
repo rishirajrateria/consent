@@ -11,21 +11,35 @@ import { notifyConsenterTeam } from "@/lib/notify";
 import { issueGrant } from "@/lib/grants";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import type { Selection } from "@/lib/rules";
-import type { FileKind, ValidityKind } from "@prisma/client";
-import { syncConsentPrice } from "@/lib/escrow";
+import type { FileKind, RequestStatus, ValidityKind } from "@prisma/client";
+import { syncConsentPrice, YES_STATUSES } from "@/lib/escrow";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
 }
 
+const VIEW_ONLY = "You have view-only access.";
+
+/** The owner has said yes or a deal is agreed: the current file versions are final. */
+const FILES_LOCKED: RequestStatus[] = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED"];
+const CURRENT_FILE_LOCKED =
+  "The owner already said yes to the current file. To use a different file, raise a new request.";
+
+/** Where a request lives: a draft is edited, a sent request is followed. */
+function requestPath(request: { id: string; status: string }) {
+  return request.status === "DRAFT" ? `/r-panel/requests/${request.id}/edit` : `/r-panel/requests/${request.id}`;
+}
+
 async function ownedRequest(id: string) {
   const { session, member, requester } = await requireRequester();
-  if (member.role === "VIEWER") redirect("/r-panel/requests?error=" + encodeURIComponent("Viewers have read-only access"));
   const request = await db.consentRequest.findUnique({
     where: { id },
     include: { files: true, consenter: true },
   });
   if (!request || request.requesterId !== requester.id) redirect("/r-panel/requests");
+  // Viewer seats are read-only: every change (upload, withdraw, agreement
+  // mode, draft edits) is refused back on the request's own page.
+  if (member.role === "VIEWER") fail(requestPath(request), VIEW_ONLY);
   return { session, requester, request };
 }
 
@@ -33,7 +47,7 @@ async function ownedRequest(id: string) {
 
 export async function createDraftAction(formData: FormData) {
   const { session, member, requester } = await requireRequester();
-  if (member.role === "VIEWER") fail("/r-panel/new", "Viewers have read-only access");
+  if (member.role === "VIEWER") fail("/r-panel/new", VIEW_ONLY);
   if (!requesterActive(requester))
     fail("/r-panel/new", "Your account must be approved and your subscription active to send requests");
   const slug = String(formData.get("consenter") ?? "");
@@ -181,11 +195,25 @@ export async function saveDetailsAction(formData: FormData) {
 export async function uploadRequestFileAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, request } = await ownedRequest(id);
-  const path =
-    request.status === "DRAFT" ? `/r-panel/requests/${id}/edit` : `/r-panel/requests/${id}`;
+  const path = requestPath(request);
   const kind = String(formData.get("kind")) as FileKind;
   if (!["ASSET", "RAW_CONTENT", "THUMBNAIL"].includes(kind)) redirect(path);
 
+  const replacesId =
+    kind === "RAW_CONTENT" || kind === "THUMBNAIL"
+      ? request.files.filter((f) => f.kind === kind).sort((a, b) => b.version - a.version)[0]?.id
+      : undefined;
+
+  // Once the owner has said yes (or a deal is agreed), the files they said yes
+  // to are fixed: the certificate binds to those exact files, so a swapped or
+  // added file would never be covered (a first thumbnail after the yes would
+  // otherwise be bound without the owner ever seeing it). A first final file
+  // is still accepted (approved in principle needs one), and so is a revision
+  // after changes were requested.
+  if (replacesId && FILES_LOCKED.includes(request.status))
+    fail(path, CURRENT_FILE_LOCKED);
+  if ((kind === "ASSET" || kind === "THUMBNAIL") && YES_STATUSES.includes(request.status))
+    fail(path, replacesId ? CURRENT_FILE_LOCKED : "The owner already said yes to these files. To add another, raise a new request.");
   // After a grant is issued the approval is bound to the approved hashes —
   // a new version never transfers the grant.
   if (["APPROVED", "DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"].includes(request.status))
@@ -194,11 +222,6 @@ export async function uploadRequestFileAction(formData: FormData) {
   const file = formData.get("file") as File | null;
   if (!file || file.size === 0) fail(path, "Choose a file to upload");
   const settings = await getSettings();
-
-  const replacesId =
-    kind === "RAW_CONTENT" || kind === "THUMBNAIL"
-      ? request.files.filter((f) => f.kind === kind).sort((a, b) => b.version - a.version)[0]?.id
-      : undefined;
 
   try {
     await storeUpload({

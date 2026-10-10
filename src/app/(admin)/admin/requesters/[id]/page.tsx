@@ -30,6 +30,12 @@ export default async function RequesterDetail({ params, searchParams }: PageProp
     },
   });
   if (!r) notFound();
+  // The applicant's answer to "more info needed" lives in the audit log.
+  const reply = await db.auditLog.findFirst({
+    where: { module: "requesters", action: "requester_info_sent", targetId: r.id },
+    orderBy: { createdAt: "desc" },
+  });
+  const replyAddedDoc = !!(reply?.detail as { documentId?: string | null } | null)?.documentId;
   const channels = (r.channels as { platform: string; url: string; followers: number }[]) ?? [];
 
   return (
@@ -99,6 +105,18 @@ export default async function RequesterDetail({ params, searchParams }: PageProp
           ))}
           {r.documents.length === 0 && <p className="text-sm text-ink-faint">No documents uploaded.</p>}
         </Card>
+
+        {reply && (
+          <Card className="space-y-2">
+            <SectionTitle title="Applicant's reply" desc={`Sent ${fmtDateTime(reply.createdAt)}`} />
+            {reply.reason ? (
+              <p className="whitespace-pre-wrap text-sm">{reply.reason}</p>
+            ) : (
+              <p className="text-sm text-ink-faint">No message.</p>
+            )}
+            {replyAddedDoc && <p className="text-xs text-ink-faint">They added a new document. It&apos;s under Documents.</p>}
+          </Card>
+        )}
 
         <Card className="space-y-4">
           <SectionTitle title="Decision" desc="The applicant is notified in-app and by email." />

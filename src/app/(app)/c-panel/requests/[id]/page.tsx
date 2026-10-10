@@ -41,7 +41,8 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       reports: true,
     },
   })) as FullRequest | null;
-  if (!request || request.consenterId !== consenter.id) notFound();
+  // A request the requester hasn't sent yet (an unpaid draft) isn't the owner's to see.
+  if (!request || request.consenterId !== consenter.id || !request.submittedAt) notFound();
 
   const canDecide = member.role === "OWNER" || member.canApprove;
   const canNegotiate = member.role === "OWNER" || member.canNegotiate;

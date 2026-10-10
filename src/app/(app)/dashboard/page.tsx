@@ -2,13 +2,13 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, PageHeader, StatusBadge, ButtonLink, ScoreRing } from "@/components/ui";
 import { switchProfileAction } from "../actions";
-import { ShieldCheck, Inbox, ArrowRight, Sparkles } from "lucide-react";
+import { ShieldCheck, Inbox, ArrowRight, Sparkles, Users } from "lucide-react";
 
 export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   const session = await requireUser();
-  const [consenters, requesters] = await Promise.all([
+  const [consenters, requesters, openInvites] = await Promise.all([
     db.consenterMember.findMany({
       where: { userId: session.userId },
       include: { consenter: true },
@@ -17,7 +17,31 @@ export default async function DashboardPage() {
       where: { userId: session.userId },
       include: { requester: true },
     }),
+    // Team invites sent to this email that are still open, so an invitee who
+    // signs up from scratch can still find their way into the team.
+    db.teamInvite.findMany({
+      where: {
+        email: { equals: session.user.email, mode: "insensitive" },
+        acceptedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
+  const joined = new Set([
+    ...consenters.map((m) => `consenter:${m.consenterId}`),
+    ...requesters.map((m) => `requester:${m.requesterId}`),
+  ]);
+  // One invite per team, the newest (openInvites is newest first): a team that
+  // re-invited the same email to fix the role shows a single card.
+  const seen = new Set(joined);
+  const latest = openInvites.filter((i) => {
+    const key = `${i.profileKind}:${i.profileId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const invites = await invitesWithNames(latest);
 
   const hasProfiles = consenters.length > 0 || requesters.length > 0;
 
@@ -32,6 +56,23 @@ export default async function DashboardPage() {
             : "Welcome to Consent. Set up a profile to get started."
         }
       />
+
+      {invites.map((inv) => (
+        <Card key={inv.token} strong className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <Users className="mt-0.5 size-5 shrink-0 text-ink" strokeWidth={1.5} aria-hidden />
+            <div className="min-w-0">
+              <h2 className="font-semibold">You&apos;ve been invited to join {inv.profileName}</h2>
+              <p className="text-sm text-ink-soft">
+                Open the invitation to see your role and accept it.
+              </p>
+            </div>
+          </div>
+          <ButtonLink href={`/invite/${inv.token}`}>
+            Open invitation <ArrowRight className="size-4" aria-hidden />
+          </ButtonLink>
+        </Card>
+      ))}
 
       {!hasProfiles && (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -122,4 +163,22 @@ export default async function DashboardPage() {
       )}
     </div>
   );
+}
+
+/** Pairs each open invite with the team's name; invites to a removed team are left out. */
+async function invitesWithNames(invites: { token: string; profileKind: string; profileId: string }[]) {
+  if (invites.length === 0) return [];
+  const ids = (kind: string) => invites.filter((i) => i.profileKind === kind).map((i) => i.profileId);
+  const [consenters, requesters] = await Promise.all([
+    db.consenterProfile.findMany({ where: { id: { in: ids("consenter") } }, select: { id: true, displayName: true } }),
+    db.requesterProfile.findMany({ where: { id: { in: ids("requester") } }, select: { id: true, displayName: true } }),
+  ]);
+  const names = new Map<string, string>([
+    ...consenters.map((c) => [`consenter:${c.id}`, c.displayName] as const),
+    ...requesters.map((r) => [`requester:${r.id}`, r.displayName] as const),
+  ]);
+  return invites.flatMap((i) => {
+    const profileName = names.get(`${i.profileKind}:${i.profileId}`);
+    return profileName ? [{ token: i.token, profileName }] : [];
+  });
 }

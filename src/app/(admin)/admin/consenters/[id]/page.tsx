@@ -41,6 +41,12 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
     take: 5,
   });
   const meetingPassed = c.meetings.some((m) => m.outcome === "passed");
+  // The applicant's answer to "more info needed" lives in the audit log.
+  const reply = await db.auditLog.findFirst({
+    where: { module: "consenters", action: "consenter_info_sent", targetId: c.id },
+    orderBy: { createdAt: "desc" },
+  });
+  const replyAddedDoc = !!(reply?.detail as { documentId?: string | null } | null)?.documentId;
 
   // duplicate matches for context
   const dupMatches = c.duplicateFlag
@@ -133,6 +139,18 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
             </div>
           ))}
         </Card>
+
+        {reply && (
+          <Card className="space-y-2">
+            <SectionTitle title="Applicant's reply" desc={`Sent ${fmtDateTime(reply.createdAt)}`} />
+            {reply.reason ? (
+              <p className="whitespace-pre-wrap text-sm">{reply.reason}</p>
+            ) : (
+              <p className="text-sm text-ink-faint">No message.</p>
+            )}
+            {replyAddedDoc && <p className="text-xs text-ink-faint">They added a new document. It&apos;s under Documents.</p>}
+          </Card>
+        )}
 
         <Card className="space-y-4">
           <SectionTitle title="Verification meeting" desc="Mandatory before marking verified." />

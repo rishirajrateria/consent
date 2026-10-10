@@ -115,17 +115,42 @@ export async function onRequestPaid(requestId: string) {
 
   // Route or plain pending
   await db.consentRequest.update({ where: { id: requestId }, data: { status: "PENDING" } });
-  if (decision.kind === "rule" && decision.action === "ROUTE_TO_MEMBER" && decision.routeToUserId) {
+  const routeToUserId =
+    decision.kind === "rule" && decision.action === "ROUTE_TO_MEMBER" ? decision.routeToUserId : null;
+  const members = routeToUserId
+    ? await db.consenterMember.findMany({
+        where: { consenterId: request.consenterId },
+        include: { user: { select: { name: true } } },
+      })
+    : [];
+  // A rule can still name someone who has since left the team; then it's handled as a plain pending request.
+  const routedTo = members.find((m) => m.userId === routeToUserId);
+  if (decision.kind === "rule" && routedTo) {
     await db.requestEvent.create({
       data: { requestId, type: "routed", actorSide: "system", detail: { rule: decision.ruleName } },
     });
+    const href = `/c-panel/requests/${requestId}`;
     await notifyUser({
-      userId: decision.routeToUserId,
+      userId: routedTo.userId,
       title: `Request #${request.number} routed to you`,
-      body: `Standing rule "${decision.ruleName}" routed the request from ${request.requester.displayName} to you.`,
-      href: `/c-panel/requests/${requestId}`,
+      body: `Standing rule "${decision.ruleName}" routed the request from ${request.requester.displayName} to you. Respond within ${settings.slaDays} days.`,
+      href,
       critical: true,
     });
+    // The rest of the team hears about it too, so nobody misses it if the routed member is away.
+    // (Same as notifyConsenterTeam, minus the routed member, who was just told directly.)
+    await Promise.all(
+      members
+        .filter((m) => m.userId !== routedTo.userId)
+        .map((m) =>
+          notifyUser({
+            userId: m.userId,
+            title: `New consent request #${request.number}`,
+            body: `${request.requester.displayName} asks to use ${request.assetTypeNames.join(", ")}. Standing rule "${decision.ruleName}" routed it to ${routedTo.user.name}. Respond within ${settings.slaDays} days.`,
+            href,
+          })
+        )
+    );
   } else {
     await notifyConsenterTeam(request.consenterId, {
       title: `New consent request #${request.number}`,

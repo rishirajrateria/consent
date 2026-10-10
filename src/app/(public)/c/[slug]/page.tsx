@@ -49,7 +49,11 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
 
   const [decided, expired, decidedTimes] = await Promise.all([
     db.consentRequest.count({ where: { consenterId: c.id, decidedAt: { not: null } } }),
-    db.consentRequest.count({ where: { consenterId: c.id, status: "EXPIRED_NO_RESPONSE" } }),
+    // Only the SLA job's expiries are the owner's silence. Older admin
+    // force-expiries reused this status and don't count (as in the score).
+    db.consentRequest.count({
+      where: { consenterId: c.id, status: "EXPIRED_NO_RESPONSE", events: { none: { type: "admin_force_expired" } } },
+    }),
     db.consentRequest.findMany({
       where: { consenterId: c.id, decidedAt: { not: null }, submittedAt: { not: null } },
       select: { submittedAt: true, decidedAt: true },
@@ -79,7 +83,9 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
     const entries = c.matrixEntries.filter((e) => e.platformId === p.id);
     const byAsset = new Map<string, string[]>();
     for (const e of entries) {
-      byAsset.set(e.assetTypeId, [...(byAsset.get(e.assetTypeId) ?? []), e.policy]);
+      // A ✓ that is paid by default still asks first, so the owner can set a fee.
+      const policy = e.policy === "AUTO_APPROVE" && e.paidDefault ? "ASK" : e.policy;
+      byAsset.set(e.assetTypeId, [...(byAsset.get(e.assetTypeId) ?? []), policy]);
     }
     const chips = [...byAsset.entries()].map(([assetTypeId, policies]) => {
       // A mix that includes "never" must not read as a safe "ask first".
@@ -210,7 +216,7 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
       <Card strong className="space-y-3" id="ask">
         <SectionTitle
           title="Ready to ask?"
-          desc="You pay the request fee, plus any consent price, when you submit. Neither is refunded. Uses marked never allowed are declined automatically."
+          desc="You pay the request fee and any consent price when you submit. The request fee isn't refunded. The consent price is held until they answer: theirs on a yes, refunded otherwise. Uses marked never allowed are declined automatically."
         />
         {!session ? (
           <p className="text-sm text-ink-soft">

@@ -82,7 +82,7 @@ export default async function ConsenterTeamPage({ searchParams }: PageProps<"/c-
 
       {canManage && (
         <Card className="space-y-4">
-          <SectionTitle title="Invite a member" desc="They must sign up with this email, then accept the emailed link. 2FA is mandatory for consenter teams." />
+          <SectionTitle title="Invite a member" desc="We email them a link. They sign in or create an account with this email, then accept. 2FA is mandatory for consenter teams." />
           <form action={inviteConsenterMemberAction} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Email" required>

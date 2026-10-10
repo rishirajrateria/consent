@@ -35,7 +35,23 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
           <SectionTitle title="Identity" />
           <KV k="Name" v={u.name} />
           <KV k="Email" v={`${u.email} ${u.emailVerified ? "· verified" : "· unverified"}`} />
-          <KV k="Phone" v={u.phone ? `${u.phone} ${u.phoneVerified ? "· verified" : "· unverified"}` : "—"} />
+          <KV
+            k="Phone"
+            v={
+              !u.phone ? (
+                "—"
+              ) : u.phoneVerified ? (
+                `${u.phone} · verified`
+              ) : (
+                <span className="inline-flex flex-wrap items-center justify-end gap-x-2">
+                  <span>{u.phone} · unverified</span>
+                  <ButtonLink href="/verify-phone?next=%2Fsettings" variant="ghost" className="-my-2 min-h-10">
+                    Verify
+                  </ButtonLink>
+                </span>
+              )
+            }
+          />
           <KV k="Member since" v={fmtDate(u.createdAt)} />
         </Card>
 

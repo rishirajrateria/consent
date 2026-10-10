@@ -11,15 +11,19 @@ export const metadata = { title: "Consenter panel" };
 // Same statuses as the "Needs action" tab on /c-panel/requests, so the tile count matches the list it opens.
 const NEEDS_ACTION: RequestStatus[] = ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"];
 
-export default async function ConsenterHome() {
+export default async function ConsenterHome({ searchParams }: PageProps<"/c-panel">) {
+  const sp = await searchParams;
   const { consenter } = await requireConsenter();
+  // Only requests actually sent to this profile, matching /c-panel/requests.
+  const sent = { consenterId: consenter.id, submittedAt: { not: null } };
   const [pending, inNegotiation, activeGrants, matrixCount, recent] = await Promise.all([
-    db.consentRequest.count({ where: { consenterId: consenter.id, status: { in: NEEDS_ACTION } } }),
-    db.consentRequest.count({ where: { consenterId: consenter.id, status: "IN_NEGOTIATION" } }),
-    db.grant.count({ where: { request: { consenterId: consenter.id }, status: "ACTIVE" } }),
+    db.consentRequest.count({ where: { ...sent, status: { in: NEEDS_ACTION } } }),
+    db.consentRequest.count({ where: { ...sent, status: "IN_NEGOTIATION" } }),
+    // Same filter as the "Grants" tab on /c-panel/requests.
+    db.consentRequest.count({ where: { ...sent, status: "APPROVED", grant: { is: { status: "ACTIVE" } } } }),
     db.consentMatrixEntry.count({ where: { consenterId: consenter.id } }),
     db.consentRequest.findMany({
-      where: { consenterId: consenter.id, status: { notIn: ["DRAFT"] } },
+      where: { ...sent, status: { notIn: ["DRAFT"] } },
       orderBy: { updatedAt: "desc" },
       take: 5,
       include: { requester: true },
@@ -42,6 +46,10 @@ export default async function ConsenterHome() {
         action={<ScoreRing score={consenter.score} />}
       />
 
+      {sp.denied && (
+        <Alert tone="warn">You don&apos;t have permission for that. Ask the profile owner if you need it.</Alert>
+      )}
+
       {consenter.status !== "APPROVED" && (
         <Alert tone="warn">
           Your profile isn&apos;t verified yet, so it&apos;s not searchable and can&apos;t receive
@@ -54,8 +62,7 @@ export default async function ConsenterHome() {
         {[
           ["Needs action", pending, "/c-panel/requests"],
           ["In negotiation", inNegotiation, "/c-panel/requests?tab=Negotiation"],
-          // Approved requests (and their grants) are listed under "Decided".
-          ["Active grants", activeGrants, "/c-panel/requests?tab=Decided"],
+          ["Active grants", activeGrants, "/c-panel/requests?tab=Grants"],
           ["Matrix cells set", matrixCount, "/c-panel/matrix"],
         ].map(([label, value, href]) => (
           <Link key={String(label)} href={href as "/c-panel"}>

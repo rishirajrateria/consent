@@ -3,28 +3,32 @@ import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState } from "@/components/ui";
 import { fmtDateTime, cn } from "@/lib/utils";
-import type { RequestStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { Inbox, Timer } from "lucide-react";
 
 export const metadata = { title: "Incoming requests" };
 
-const TABS: [string, RequestStatus[] | null][] = [
-  ["Needs action", ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"]],
-  ["Negotiation", ["IN_NEGOTIATION"]],
-  ["Waiting on them", ["CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"]],
-  ["Decided", ["APPROVED", "DENIED"]],
-  ["All", null],
+// Each tab adds its own filter on top of "sent to this profile". Drafts the
+// requester never sent (no submittedAt) are never shown to the owner.
+const TABS: [string, Prisma.ConsentRequestWhereInput][] = [
+  ["Needs action", { status: { in: ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"] } }],
+  ["Negotiation", { status: "IN_NEGOTIATION" }],
+  ["Waiting on them", { status: { in: ["CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"] } }],
+  ["Grants", { status: "APPROVED", grant: { is: { status: "ACTIVE" } } }],
+  ["Decided", { status: { in: ["APPROVED", "DENIED"] } }],
+  ["All", { status: { not: "DRAFT" } }],
 ];
 
 export default async function ConsenterRequests({ searchParams }: PageProps<"/c-panel/requests">) {
   const sp = await searchParams;
   const { consenter } = await requireConsenter();
-  const tab = typeof sp.tab === "string" ? sp.tab : "Needs action";
-  const statuses = TABS.find(([t]) => t === tab)?.[1] ?? TABS[0][1];
+  const wanted = typeof sp.tab === "string" ? sp.tab.trim().toLowerCase() : "";
+  const [tab, tabWhere] = TABS.find(([t]) => t.toLowerCase() === wanted) ?? TABS[0];
   const rows = await db.consentRequest.findMany({
     where: {
       consenterId: consenter.id,
-      status: statuses ? { in: statuses } : { not: "DRAFT" },
+      submittedAt: { not: null },
+      ...tabWhere,
     },
     orderBy: { updatedAt: "desc" },
     take: 100,
@@ -40,7 +44,12 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
       />
       <div className="flex gap-1 overflow-x-auto">
         {TABS.map(([t]) => (
-          <Link key={t} href={`/c-panel/requests?tab=${t}`} className={cn("whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium", t === tab ? "bg-ink text-white" : "text-ink-soft hover:bg-ink/5")}>
+          <Link
+            key={t}
+            href={`/c-panel/requests?tab=${encodeURIComponent(t)}`}
+            aria-current={t === tab ? "page" : undefined}
+            className={cn("whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium", t === tab ? "bg-ink text-white" : "text-ink-soft hover:bg-ink/5")}
+          >
             {t}
           </Link>
         ))}

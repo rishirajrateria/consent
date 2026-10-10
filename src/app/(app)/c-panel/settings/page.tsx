@@ -212,9 +212,13 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
             <SectionTitle title="Agreement preference" />
             <label className="flex items-center gap-3 text-sm">
               <input type="checkbox" name="defaultLegal" defaultChecked={consenter.defaultRequireLegalAgreementForPaid} className="size-4 accent-black" />
-              Always propose a legally binding agreement for paid requests
+              Propose a legally binding agreement for paid requests by default
             </label>
-            <p className="text-xs text-ink-faint">The requester must still accept — it only applies if both sides agree.</p>
+            <p className="text-xs text-ink-faint">
+              When you approve a paid request, the box starts ticked, and you can untick it each time. If
+              the requester accepts a fee you offered, we propose the agreement for you. Either way, the
+              requester must still accept.
+            </p>
           </Card>
 
           {canEdit ? (

@@ -137,11 +137,11 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
           />
           {canAct ? (
             <div className="flex flex-wrap gap-2">
+              <AgreementPanel request={request} side="requester" proposeOnly />
               <form action={proceedAppRecordAction}>
                 <input type="hidden" name="id" value={request.id} />
                 <SubmitButton>Continue with Consent-app record</SubmitButton>
               </form>
-              <AgreementPanel request={request} side="requester" proposeOnly />
             </div>
           ) : (
             <ViewOnlyNote />

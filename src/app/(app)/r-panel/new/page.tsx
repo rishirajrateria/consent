@@ -41,12 +41,13 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
         : [Number(c.consentPrice ?? 0)];
       const [min, max] = [Math.min(...prices), Math.max(...prices)];
       const money = (n: number) => fmtMoney(n, c.consentPriceCurrency);
+      // Every request also carries the platform fee, so no line reads as free.
       const ask =
         min !== max
-          ? { price: `${money(min)} to ${money(max)}`, note: " · depends on what it's for" }
+          ? { price: `${money(min)} to ${money(max)}`, note: " · depends on what it's for, plus the platform fee" }
           : max > 0
-            ? { price: money(max), note: " · paid at submission" }
-            : { price: "nothing", note: "" };
+            ? { price: money(max), note: " · plus the platform fee" }
+            : { price: null, note: " · plus the platform fee" };
       return [c.id, ask];
     })
   );
@@ -91,7 +92,13 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
                   {titleCase(c.entityType)}{c.category ? ` · ${c.category}` : ""} · score {c.score}
                 </div>
                 <div className="mt-1 text-xs text-ink-soft">
-                  Asking costs <strong className="text-ink">{asks.get(c.id)?.price}</strong>
+                  {asks.get(c.id)?.price ? (
+                    <>
+                      Ask price <strong className="text-ink">{asks.get(c.id)?.price}</strong>
+                    </>
+                  ) : (
+                    "No ask price"
+                  )}
                   {asks.get(c.id)?.note}
                 </div>
               </div>

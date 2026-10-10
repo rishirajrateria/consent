@@ -33,7 +33,7 @@ export async function inviteConsenterMemberAction(formData: FormData) {
   await email.send(
     to,
     `You're invited to the ${consenter.displayName} team on Consent`,
-    `${session.user.name} invited you as ${role}. Accept: ${process.env.APP_URL}/invite/${token}\n(Sign up with this email first if you don't have an account.)`
+    `${session.user.name} invited you as ${role}. Accept: ${process.env.APP_URL}/invite/${token}\nOpen the link to sign in or create your account with this email, then accept the invitation.`
   );
   await audit({
     actorId: session.userId,
@@ -87,7 +87,7 @@ export async function inviteRequesterMemberAction(formData: FormData) {
   await email.send(
     to,
     `You're invited to the ${requester.displayName} team on Consent`,
-    `${session.user.name} invited you as ${role}. Accept: ${process.env.APP_URL}/invite/${token}`
+    `${session.user.name} invited you as ${role}. Accept: ${process.env.APP_URL}/invite/${token}\nOpen the link to sign in or create your account with this email, then accept the invitation.`
   );
   redirect("/r-panel/team?invited=1");
 }

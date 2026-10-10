@@ -70,7 +70,9 @@ env vars.
 | `npm run build` / `npm start` | Production build / serve |
 | `npm run jobs` | Background worker loop (also: `POST /api/jobs/tick` for cron, or the admin "Run jobs now" button) |
 | `npm run db:seed` | Idempotent seed (catalog, pricing, roles, templates, demo data) |
-| `npm test` | Vitest unit tests (rules engine, signing, utils) |
+| `npm test` | Vitest unit tests (rules engine, signing, escrow, negotiation, channels, utils) |
+| `npm run e2e:prep` then `npm run test:e2e` | Playwright browser tests against the separate `consent_e2e` database |
+| `npm run e2e:reset` | Wipe and re-seed `consent_e2e` (tests leave history behind, e.g. upheld reports lower Acme Clips' score; reset every few runs) |
 | `npx prisma migrate dev` | Apply migrations |
 
 ## Where things live
