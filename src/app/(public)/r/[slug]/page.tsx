@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { Card, ScoreRing, SectionTitle, KV, StatusBadge } from "@/components/ui";
 import { titleCase, fmtDate } from "@/lib/utils";
 import type { Metadata } from "next";
+import { ChannelLinks } from "@/components/channel-links";
 
 export async function generateMetadata({ params }: PageProps<"/r/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -38,6 +39,7 @@ export default async function PublicRequesterPage({ params }: PageProps<"/r/[slu
               {titleCase(r.type)} · {r.country} · member since {fmtDate(r.createdAt)}
             </div>
             {r.description && <p className="mt-2 text-sm text-ink-soft">{r.description}</p>}
+            <ChannelLinks channels={r.channels} owner={r.displayName} className="mt-3" />
           </div>
           <ScoreRing score={r.score} />
         </div>

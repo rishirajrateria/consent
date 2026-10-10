@@ -16,7 +16,8 @@ import {
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
-import { fmtDateTime } from "@/lib/utils";
+import { fmtDateTime, titleCase } from "@/lib/utils";
+import { ChannelLinks } from "@/components/channel-links";
 import type { Selection } from "@/lib/rules";
 import { Timer } from "lucide-react";
 
@@ -240,9 +241,24 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
           </Card>
         )}
       <NegotiationCard request={request} side="consenter" />
-      <div className="flex items-center justify-between">
-        <ScoreRing score={request.requester.score} size={52} />
-      </div>
+      <Card className="space-y-4">
+        <SectionTitle title="Who's asking" />
+        <div className="flex items-center gap-4">
+          <ScoreRing score={request.requester.score} size={52} />
+          <div className="min-w-0">
+            <Link href={`/r/${request.requester.slug}`} className="font-semibold underline-offset-4 hover:underline">
+              {request.requester.displayName}
+            </Link>
+            <div className="text-xs text-ink-faint">
+              {titleCase(request.requester.type)} · {request.requester.country}
+            </div>
+          </div>
+        </div>
+        {request.requester.description && (
+          <p className="text-sm leading-relaxed text-ink-soft">{request.requester.description}</p>
+        )}
+        <ChannelLinks channels={request.requester.channels} owner={request.requester.displayName} />
+      </Card>
       <ScopeCard request={request} />
       <FilesCard request={request} watermark />
       <MessagesCard request={request} side="consenter" />

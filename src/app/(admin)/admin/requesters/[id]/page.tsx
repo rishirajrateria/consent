@@ -8,6 +8,7 @@ import { SuccessNote } from "@/components/error-note";
 import { decideRequesterAction } from "../actions";
 import { fmtDateTime, titleCase, fmtBytes } from "@/lib/utils";
 import { FileText, ExternalLink } from "lucide-react";
+import { safeChannelUrl } from "@/lib/channels";
 
 export const metadata = { title: "Review requester" };
 
@@ -56,9 +57,13 @@ export default async function RequesterDetail({ params, searchParams }: PageProp
           {channels.map((c, i) => (
             <div key={i} className="flex items-center justify-between gap-2 text-sm">
               <span className="font-medium">{c.platform}</span>
-              <a href={c.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 truncate text-ink-soft underline underline-offset-4">
-                {c.url} <ExternalLink className="size-3 shrink-0" aria-hidden />
-              </a>
+              {safeChannelUrl(c.url) ? (
+                <a href={safeChannelUrl(c.url)!} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 truncate text-ink-soft underline underline-offset-4">
+                  {c.url} <ExternalLink className="size-3 shrink-0" aria-hidden />
+                </a>
+              ) : (
+                <span className="truncate text-ink-faint" title="Not a web address — not linked">{c.url}</span>
+              )}
               <span className="shrink-0 text-xs text-ink-faint">{c.followers.toLocaleString()} followers</span>
             </div>
           ))}

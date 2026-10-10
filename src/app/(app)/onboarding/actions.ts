@@ -8,6 +8,7 @@ import { requireUser, setActiveProfile } from "@/lib/auth";
 import { storeUpload } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { slugify, normalizeLegalName, shortId } from "@/lib/utils";
+import { safeChannelUrl } from "@/lib/channels";
 import { createPlatformPayment } from "@/lib/payments";
 import type { ConsenterEntityType, RequesterType } from "@prisma/client";
 
@@ -39,9 +40,13 @@ export async function submitRequesterApplicationAction(formData: FormData) {
   const platforms = formData.getAll("channelPlatform").map(String);
   const urls = formData.getAll("channelUrl").map(String);
   const followers = formData.getAll("channelFollowers").map(String);
-  const channels = platforms
+  const typed = platforms
     .map((p, i) => ({ platform: p.trim(), url: urls[i]?.trim() ?? "", followers: parseInt(followers[i] || "0", 10) || 0 }))
     .filter((c) => c.platform && c.url);
+  // Channel links are shown to owners as clickable icons, so keep only real web addresses.
+  if (typed.some((c) => !safeChannelUrl(c.url)))
+    fail("/onboarding/requester", "Channel links must be web addresses, like https://youtube.com/@yourchannel");
+  const channels = typed.map((c) => ({ ...c, url: safeChannelUrl(c.url)! }));
   if (channels.length === 0) fail("/onboarding/requester", "Add at least one channel or handle link");
 
   const doc = formData.get("document") as File | null;

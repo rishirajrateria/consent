@@ -36,6 +36,9 @@ test("approval with a legally binding agreement signed by both sides", async ({ 
   // ── Jane approves and proposes a legally binding agreement ──
   const jane = await pageFor(browser, "jane");
   await visit(jane, `/c-panel/requests/${requestId}`);
+  // She can visit the requester's own channels from "Who's asking"
+  await expect(jane.getByRole("link", { name: /Acme Clips on YouTube/ })).toHaveAttribute("href", "https://youtube.com/@acmeclips");
+  await expect(jane.getByRole("link", { name: /Acme Clips on Instagram/ })).toHaveAttribute("target", "_blank");
   await jane.locator('input[name="proposeLegal"]').check();
   await jane.getByRole("button", { name: /^Approve/ }).click();
   await expect(jane.getByText("Legal agreement pending", { exact: true }).first()).toBeVisible();
