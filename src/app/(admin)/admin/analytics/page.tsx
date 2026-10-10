@@ -2,7 +2,8 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, SectionTitle } from "@/components/ui";
 import { statusLabel } from "@/lib/utils";
-import { consentKeeps } from "../revenue";
+import { revenueByCurrency, fmtRevenue } from "../revenue";
+import { profileScore } from "@/lib/profiles-pure";
 
 export const metadata = { title: "Analytics" };
 
@@ -27,22 +28,20 @@ export default async function AdminAnalytics() {
   await requireAdmin("analytics", "view");
   const thirtyDaysAgo = daysAgo(30);
 
-  const [signups, byStatus, byPlatform, paid, ownersShare, topConsenters, topRequesters, responseTimes] =
+  const [signups, byStatus, byPlatform, revenue, verifiedProfiles, responseTimes] =
     await Promise.all([
       db.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
       db.consentRequest.groupBy({ by: ["status"], _count: true, where: { status: { not: "DRAFT" } } }),
       db.consentRequest.findMany({ where: { status: { not: "DRAFT" } }, select: { selections: true }, take: 500 }),
-      // Consent's revenue from payments made in the last 30 days: collected, less the refunded 80% and the owners' 80%.
-      db.payment.aggregate({
-        _sum: { amount: true, refundedAmount: true },
-        where: { status: { in: ["PAID", "FORFEITED", "REFUNDED"] }, paidAt: { gte: thirtyDaysAgo } },
+      // Consent's revenue per currency from payments made in the last 30 days.
+      revenueByCurrency({ days: 30 }),
+      // The one Consent Score averages both halves, so rank on it after reading both.
+      db.consenterProfile.findMany({
+        where: { status: "APPROVED" },
+        select: { id: true, displayName: true, score: true, asker: { select: { score: true } } },
+        orderBy: { score: "desc" },
+        take: 200,
       }),
-      db.earningEntry.aggregate({
-        _sum: { amount: true },
-        where: { status: { in: ["HELD", "PENDING", "SETTLED"] }, payment: { paidAt: { gte: thirtyDaysAgo } } },
-      }),
-      db.consenterProfile.findMany({ orderBy: { score: "desc" }, take: 5, where: { status: "APPROVED" } }),
-      db.requesterProfile.findMany({ orderBy: { score: "desc" }, take: 5, where: { status: "APPROVED" } }),
       db.consentRequest.findMany({
         where: { decidedAt: { not: null }, submittedAt: { not: null } },
         select: { submittedAt: true, decidedAt: true },
@@ -50,6 +49,10 @@ export default async function AdminAnalytics() {
       }),
     ]);
 
+  const topProfiles = verifiedProfiles
+    .map((p) => ({ id: p.id, name: p.displayName, score: profileScore(p.score, p.asker?.score) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
   const platformCounts = new Map<string, number>();
   for (const r of byPlatform) {
     const sels = r.selections as { platformName: string }[];
@@ -72,7 +75,7 @@ export default async function AdminAnalytics() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ["Signups (30d)", signups],
-          ["Revenue (30d)", `$${consentKeeps(paid._sum, ownersShare._sum).toFixed(0)}`],
+          ["Revenue (30d)", fmtRevenue(revenue)],
           ["Avg response time", avgResponseH != null ? `${avgResponseH}h` : "—"],
           ["Requests total", statusRows.reduce((a, [, v]) => a + v, 0)],
         ].map(([label, value]) => (
@@ -93,23 +96,15 @@ export default async function AdminAnalytics() {
           {platformRows.map(([label, v]) => <Bar key={label} label={label} value={v} max={maxPlatform} />)}
           {platformRows.length === 0 && <p className="text-sm text-ink-faint">No requests yet.</p>}
         </Card>
-        <Card className="space-y-2">
-          <SectionTitle title="Top consenters" />
-          {topConsenters.map((c) => (
-            <div key={c.id} className="flex items-center justify-between text-sm">
-              <span>{c.displayName}</span>
-              <span className="font-mono text-xs">{c.score}</span>
+        <Card className="space-y-2 lg:col-span-2">
+          <SectionTitle title="Top profiles by Consent Score" />
+          {topProfiles.map((p) => (
+            <div key={p.id} className="flex items-center justify-between text-sm">
+              <span>{p.name}</span>
+              <span className="font-mono text-xs">{p.score}</span>
             </div>
           ))}
-        </Card>
-        <Card className="space-y-2">
-          <SectionTitle title="Top requesters" />
-          {topRequesters.map((r) => (
-            <div key={r.id} className="flex items-center justify-between text-sm">
-              <span>{r.displayName}</span>
-              <span className="font-mono text-xs">{r.score}</span>
-            </div>
-          ))}
+          {topProfiles.length === 0 && <p className="text-sm text-ink-faint">No verified profiles yet.</p>}
         </Card>
       </div>
     </div>

@@ -32,7 +32,7 @@ function LiveLinks({ links }: { links: string[] }) {
   );
 }
 
-/** The requester's screenshot, as a short-lived signed link. */
+/** The asker's screenshot, as a short-lived signed link. */
 function ScreenshotLink({ file }: { file?: { storageKey: string; name: string } }) {
   if (!file) return null;
   return (
@@ -47,7 +47,7 @@ function ScreenshotLink({ file }: { file?: { storageKey: string; name: string } 
   );
 }
 
-/** Consenter-side: revoke + takedown management for an issued grant. */
+/** The profile that gave consent: revoke it, and raise and check takedowns. */
 export async function RevokePanel({ request, canDecide }: { request: FullRequest; canDecide: boolean }) {
   const grant = request.grant;
   if (!grant) return null;
@@ -55,7 +55,7 @@ export async function RevokePanel({ request, canDecide }: { request: FullRequest
     where: { grantId: grant.id },
     orderBy: { createdAt: "desc" },
   });
-  // The requester's proof that it's down, shown before the owner decides.
+  // The asker's proof that it's down, shown before the owner decides.
   const evidenceIds = takedowns.map((t) => t.requesterEvidenceFileId).filter((x): x is string => !!x);
   const evidence = evidenceIds.length
     ? await db.storedFile.findMany({ where: { id: { in: evidenceIds } } })
@@ -65,7 +65,7 @@ export async function RevokePanel({ request, canDecide }: { request: FullRequest
     <Card className="space-y-5">
       <SectionTitle
         title="Revocation & takedown"
-        desc="Revocation applies to future use only. For already-published content, raise a takedown request."
+        desc="Revoking covers future use only. For content already published, raise a takedown request."
       />
       {takedowns.map((t) => (
         <div key={t.id} className="glass-subtle space-y-2 px-4 py-3 text-sm">
@@ -77,7 +77,7 @@ export async function RevokePanel({ request, canDecide }: { request: FullRequest
           </div>
           <div className="text-xs text-ink-soft">Reason: {t.reason}</div>
           <LiveLinks links={t.liveLinks} />
-          {t.requesterNote && <div className="text-xs text-ink-soft">Requester note: {t.requesterNote}</div>}
+          {t.requesterNote && <div className="text-xs text-ink-soft">{request.requester.displayName}&apos;s note: {t.requesterNote}</div>}
           <ScreenshotLink file={evidence.find((f) => f.id === t.requesterEvidenceFileId)} />
           {t.declineReason && <div className="text-xs text-ink-soft">Declined: {t.declineReason}</div>}
           {t.status === "MARKED_DOWN" && canDecide && (
@@ -102,18 +102,18 @@ export async function RevokePanel({ request, canDecide }: { request: FullRequest
       {canDecide && grant.status === "ACTIVE" && (
         <details>
           <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-ink">
-            <ShieldOff className="mr-1 inline size-4" aria-hidden /> Revoke this grant
+            <ShieldOff className="mr-1 inline size-4" aria-hidden /> Revoke this consent
           </summary>
           <form action={revokeGrantAction} className="mt-3 space-y-3 border-l-2 border-ink/10 pl-4">
             <input type="hidden" name="grantId" value={grant.id} />
             <Field label="Reason (mandatory)" required>
-              <Textarea name="reason" required className="min-h-16" placeholder="Why are you revoking this grant?" />
+              <Textarea name="reason" required className="min-h-16" placeholder="Why are you revoking it?" />
             </Field>
             <Alert>
-              Content published within the validity and scope before the revocation date remains
-              covered; the certificate will show the revocation.
+              Content published within the scope and validity before today stays covered. The
+              certificate shows the revocation.
             </Alert>
-            <ConfirmSubmit confirm="Revoke this grant for all future use?" variant="danger">Revoke grant</ConfirmSubmit>
+            <ConfirmSubmit confirm="Revoke this consent for all future use?" variant="danger">Revoke consent</ConfirmSubmit>
           </form>
         </details>
       )}
@@ -139,13 +139,13 @@ export async function RevokePanel({ request, canDecide }: { request: FullRequest
   );
 }
 
-/** Requester-side: open takedown requests needing a response. */
+/** The profile that asked: takedown requests waiting for its answer. */
 export async function TakedownRespondPanel({
   request,
   canAct = true,
 }: {
   request: FullRequest;
-  /** False for requester viewer seats: the requests only, no answer forms. */
+  /** False for view-only seats: the requests only, no answer forms. */
   canAct?: boolean;
 }) {
   const grant = request.grant;
@@ -173,7 +173,7 @@ export async function TakedownRespondPanel({
           {(t.status === "RAISED" || t.status === "REJECTED_CLAIM") && canAct && (
             <div className="space-y-3 border-t hairline pt-2">
               {t.status === "REJECTED_CLAIM" && (
-                <Alert tone="warn">The consenter says the content is still live.</Alert>
+                <Alert tone="warn">{request.consenter.displayName} says the content is still live.</Alert>
               )}
               <form action={respondTakedownAction} className="space-y-2">
                 <input type="hidden" name="takedownId" value={t.id} />
@@ -197,8 +197,8 @@ export async function TakedownRespondPanel({
                 <SubmitButton name="action" value="decline" variant="secondary" size="sm">Decline</SubmitButton>
               </form>
               <p className="text-xs text-ink-faint">
-                Ignoring or declining is recorded and affects your Consent Score. Consent takes no
-                further action; legal matters stay between the parties.
+                Ignoring or declining is recorded and lowers your Consent Score. Consent takes no
+                other action. Legal matters stay between you.
               </p>
             </div>
           )}

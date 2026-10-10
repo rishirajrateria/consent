@@ -111,6 +111,7 @@ export async function storeUpload(opts: {
 }
 
 /** Hook point for a malware scanner (ClamAV, VirusTotal, etc.). No-op in dev. */
-async function malwareScanHook(_buf: Buffer): Promise<void> {
+async function malwareScanHook(buf: Buffer): Promise<void> {
   // Intentionally a no-op; wire a real scanner here in production.
+  void buf;
 }

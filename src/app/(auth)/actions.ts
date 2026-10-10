@@ -137,7 +137,7 @@ export async function sendPhoneOtpAction(formData: FormData) {
   const next = nextOf(formData);
   const session = await getSession();
   if (!session) redirect(withParams("/login", { next }));
-  if (!session.user.phone) redirect(next ?? "/dashboard");
+  if (!session.user.phone) redirect(await afterPhone(next));
   if (!rateLimit("otp", session.userId, 5, 15 * 60_000))
     fail("/verify-phone", "Too many codes requested — wait a few minutes", next);
   const code = await issueOtp(session.userId, "PHONE_VERIFY", session.user.phone);
@@ -154,11 +154,28 @@ export async function verifyPhoneAction(formData: FormData) {
   if (!(await consumeOtp(session.userId, "PHONE_VERIFY", code)))
     fail("/verify-phone", "Invalid or expired code", next);
   await db.user.update({ where: { id: session.userId }, data: { phoneVerified: new Date() } });
-  redirect(next ?? "/dashboard");
+  redirect(await afterPhone(next));
 }
 
+/**
+ * Skipping the phone step is only for joining a team from an invite: the ID
+ * check (/onboarding) always needs a verified phone.
+ */
 export async function skipPhoneAction(formData: FormData) {
-  redirect(nextOf(formData) ?? "/dashboard");
+  const next = nextOf(formData);
+  if (!next?.startsWith("/invite/")) fail("/verify-phone", "Verify your phone to continue.", next);
+  redirect(await afterPhone(next));
+}
+
+/**
+ * After the phone step: every account sets up 2FA next, then goes where it
+ * was headed (an invite), or on to the one ID check.
+ */
+async function afterPhone(next: string | null): Promise<string> {
+  const session = await getSession();
+  if (session && !session.user.totpEnabled)
+    return withParams("/settings/security", { next: next ?? "/onboarding" });
+  return next ?? "/dashboard";
 }
 
 const loginSchema = z.object({

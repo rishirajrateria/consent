@@ -24,7 +24,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
   const grant = await db.grant.findFirst({
     where: { OR: [{ publicId }, { certificateId: { equals: publicId, mode: "insensitive" } }] },
     include: {
-      request: { include: { consenter: true, requester: true } },
+      request: { include: { consenter: true, requester: { include: { consenter: { select: { slug: true } } } } } },
       takedowns: { select: { status: true, createdAt: true } },
     },
   });
@@ -37,12 +37,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
     grant.status === "ACTIVE" && grant.validUntil && grant.validUntil < new Date()
       ? "EXPIRED"
       : grant.status;
+  // Older certificates also carry `fee` and `agreementMode` in their signed
+  // payload. They stay in `payload` (the signature covers them) but are not
+  // reported as fields.
   const payload = grant.payload as {
     scope: { selections: unknown; assetTypes: string[]; conditions: string | null; intentCategory: string | null };
     files: { kind: string; name: string; sha256: string; version: number }[];
-    agreementMode: { mode: string };
     decidedBy: string;
   };
+  const base = process.env.APP_URL ?? "";
+  // Every profile has one public page, /c/<slug>; the asking half links to its profile's.
+  const askerSlug = grant.request.requester.consenter?.slug;
 
   return NextResponse.json(
     {
@@ -52,25 +57,26 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
       status: effectiveStatus,
       signatureValid,
       signatureAlgorithm: "Ed25519 over canonical JSON",
+      // The profile that gave consent (key kept for API stability).
       consenter: {
         displayName: grant.request.consenter.displayName,
         verified: true,
-        profileUrl: `${process.env.APP_URL ?? ""}/c/${grant.request.consenter.slug}`,
+        profileUrl: `${base}/c/${grant.request.consenter.slug}`,
       },
+      // The profile consent was given to (key kept for API stability).
       requester: {
         displayName: grant.request.requester.displayName,
-        profileUrl: `${process.env.APP_URL ?? ""}/r/${grant.request.requester.slug}`,
+        profileUrl: askerSlug ? `${base}/c/${askerSlug}` : `${base}/r/${grant.request.requester.slug}`,
       },
       scope: payload.scope,
       approvedFileHashes: payload.files.map((f) => ({ kind: f.kind, sha256: f.sha256, version: f.version })),
-      agreementMode: payload.agreementMode.mode,
       decidedBy: payload.decidedBy,
       validity: { kind: grant.validityKind, from: grant.validFrom, until: grant.validUntil },
       issuedAt: grant.issuedAt,
       revokedAt: grant.revokedAt,
       revokeReason: grant.revokeReason,
       takedowns: grant.takedowns,
-      verificationPage: `${process.env.APP_URL ?? ""}/v/${grant.publicId}`,
+      verificationPage: `${base}/v/${grant.publicId}`,
       publicKey: grant.publicKey,
       signature: grant.signature,
       payload: grant.payload,

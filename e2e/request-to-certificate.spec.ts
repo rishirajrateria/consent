@@ -1,85 +1,116 @@
 import { test, expect } from "@playwright/test";
 import { db, grantForRequest } from "./db";
-import { pageFor, submitBasicRequest, visit } from "./helpers";
+import { expectStatus, pageFor, submitBasicRequest, visit } from "./helpers";
 
 /**
- * Flow 2 — request to certificate: Acme Clips asks Nightwatch (asset + raw
- * uploads, two checkout lines because Nightwatch has a consent price), the
- * show owner marks it paid at $500, clips counter-offers $300, the show
- * accepts (deal agreed, contacts revealed), clips continues with the
- * Consent-app record and the public /v page verifies the certificate.
+ * Request to certificate: Acme Clips asks Nightwatch (a $100 consent request
+ * fee, so it pays at the mock checkout) without the final content file yet.
+ * The show approves with a written condition: that is a yes waiting for the
+ * final file (approved in principle). Clips uploads the final file, the
+ * certificate is issued at once, and the public /v page verifies it. No fee
+ * is set or agreed on the way: the consent request fee was the only payment.
  */
-test("negotiated request ends in a verified certificate", async ({ browser }) => {
+test("approve, upload the final file, and get a verified certificate", async ({ browser }) => {
+  const stamp = Date.now();
+  const condition = `E2E ${stamp}: credit Nightwatch on screen.`;
   const clips = await pageFor(browser, "clips");
+  const show = await pageFor(browser, "show");
+
   const requestId = await submitBasicRequest(clips, {
     slug: "nightwatch-series",
     query: "Nightwatch",
     formats: [{ platform: "YouTube", format: "Long video", durationSec: 45 }],
     assetTypes: ["Character/show footage"],
     uploadAsset: true,
-    uploadRaw: true,
+    uploadRaw: false,
     intent: "Review",
+    charge: "paid",
   });
+  await expectStatus(requestId, "PENDING");
   await expect(clips.getByText("Pending", { exact: true }).first()).toBeVisible();
 
-  // ── Show owner reads the request, then sets a fee of $500 ───
-  // Note: this action redirects to the same path plus a #hash, which the
-  // app router treats as a hash-only navigation (no re-render), so the
-  // state change is awaited in the DB and the page reloaded.
-  const show = await pageFor(browser, "show");
+  // ── The show reads it and approves, with a written condition ──
   await visit(show, `/c-panel/requests/${requestId}`);
-  await show.getByRole("radio", { name: "Set a fee" }).click();
-  await show.fill('input[name="amount"]', "500");
-  await show.getByRole("button", { name: "Send fee" }).click();
-  await expect
-    .poll(async () => (await db.consentRequest.findUnique({ where: { id: requestId } }))!.status)
-    .toBe("IN_NEGOTIATION");
+  // Nothing to haggle over: no fee setting, no deal, no paperwork, no contacts, no meetings.
+  for (const gone of [/^Set a fee$/, /Approve the deal/, /legally binding/i, /Share my contact details/, /schedule a meeting/i]) {
+    await expect(show.getByText(gone)).toHaveCount(0);
+  }
+  await show.getByText(/^Conditions \(optional\)/).click();
+  await show.locator('textarea[name="conditionsNote"]').fill(condition);
+  await show.getByRole("button", { name: /^Approve/ }).click();
+  await expectStatus(requestId, "APPROVED_IN_PRINCIPLE");
+  expect(await grantForRequest(requestId)).toBeNull();
+  const decided = await db.consentRequest.findUniqueOrThrow({ where: { id: requestId } });
+  expect(decided.conditionsNote).toBe(condition);
+
   await visit(show, `/c-panel/requests/${requestId}`);
-  await expect(show.getByText("In negotiation", { exact: true }).first()).toBeVisible();
+  await expect(show.getByText("Approved, final file needed", { exact: true }).first()).toBeVisible();
 
-  // ── Clips counter-offers $300 ───────────────────────────────
+  // ── Clips uploads the final content file → certificate ──────
   await visit(clips, `/r-panel/requests/${requestId}`);
-  const negotiation = clips.locator("#negotiation");
-  await expect(negotiation.getByRole("button", { name: /^Accept/ })).toBeVisible();
-  await expect(negotiation.getByText(/you 3 of 3/)).toBeVisible();
-  await negotiation.getByRole("radio", { name: "Counter-offer" }).click();
-  await negotiation.locator('input[name="amount"]').fill("300");
-  await negotiation.getByRole("button", { name: "Send counter-offer" }).click();
-  await expect
-    .poll(async () =>
-      (await db.negotiationOffer.findFirst({ where: { requestId, version: 2 } }))?.bySide
-    )
-    .toBe("requester");
-  await visit(clips, `/r-panel/requests/${requestId}`);
-  await expect(clips.getByText("by Casey Clips (requester)")).toBeVisible();
-  await expect(clips.locator("#negotiation").getByText(/you 2 of 3/)).toBeVisible();
-
-  // ── Show owner approves the deal at $300 → contacts revealed ─
-  await visit(show, `/c-panel/requests/${requestId}`);
-  await show.getByRole("button", { name: /^Approve the deal at/ }).click();
-  await expect(show.getByText("Shared contact details")).toBeVisible();
-  await expect(show.getByText("Agreement mode pending", { exact: true }).first()).toBeVisible();
-
-  const agreed = await db.consentRequest.findUnique({ where: { id: requestId } });
-  expect(agreed!.status).toBe("AGREEMENT_MODE_PENDING");
-  expect(agreed!.contactsRevealed).toBe(true);
-  expect(Number(agreed!.agreedAmount)).toBe(300);
-
-  // ── Requester continues with the Consent-app record → grant ─
-  await visit(clips, `/r-panel/requests/${requestId}`);
-  await expect(clips.getByText("Shared contact details")).toBeVisible();
-  await clips.getByRole("button", { name: "Continue with Consent-app record" }).click();
-  await expect(clips.getByText("Consent grant")).toBeVisible();
+  await expect(clips.getByText(/said yes\./).first()).toBeVisible();
+  await expect(
+    clips.getByRole("heading", { name: "Upload the final content file to get your certificate" }),
+  ).toBeVisible();
+  const finalForm = clips.locator('form:has(input[name="kind"][value="RAW_CONTENT"])');
+  await finalForm.locator('input[name="file"]').setInputFiles({
+    name: `e2e-final-${stamp}.txt`,
+    mimeType: "text/plain",
+    buffer: Buffer.from(`E2E final content ${stamp}`),
+  });
+  await finalForm.getByRole("button", { name: "Upload and get certificate" }).click();
+  await clips.waitForURL(/certified=upload/);
+  await expect(clips.getByText("Final file uploaded. Your certificate is ready.")).toBeVisible();
+  await expect(clips.getByRole("heading", { name: "Certificate", exact: true })).toBeVisible();
+  await expectStatus(requestId, "APPROVED");
 
   const grant = await grantForRequest(requestId);
   expect(grant).toBeTruthy();
   expect(grant!.status).toBe("ACTIVE");
+  // New certificates carry no deal terms.
+  const payload = grant!.payload as Record<string, unknown>;
+  expect(payload.fee).toBeUndefined();
+  expect(payload.agreementMode).toBeUndefined();
 
   // ── Public verification page ────────────────────────────────
   await visit(clips, `/v/${grant!.publicId}`);
   await expect(clips.getByText("Verified authentic")).toBeVisible();
-  await expect(clips.getByText("Active", { exact: true })).toBeVisible();
+  await expect(clips.getByText("Active", { exact: true }).first()).toBeVisible();
   await expect(clips.getByText(grant!.certificateId).first()).toBeVisible();
+  await expect(clips.getByText(/Usage fee|Agreement mode|Legally binding/)).toHaveCount(0);
+
+  await clips.context().close();
+  await show.context().close();
+});
+
+/**
+ * A yes when the final file is already in issues the certificate at once.
+ * Kept separate so the in-principle path above stays the main story.
+ */
+test("approving a request that has its final file issues the certificate at once", async ({ browser }) => {
+  const clips = await pageFor(browser, "clips");
+  const show = await pageFor(browser, "show");
+
+  const requestId = await submitBasicRequest(clips, {
+    slug: "nightwatch-series",
+    query: "Nightwatch",
+    formats: [{ platform: "YouTube", format: "Long video", durationSec: 30 }],
+    assetTypes: ["Character/show footage"],
+    uploadAsset: true,
+    uploadRaw: true,
+    intent: "Review",
+    charge: "paid",
+  });
+  await expectStatus(requestId, "PENDING");
+
+  await visit(show, `/c-panel/requests/${requestId}`);
+  await show.getByRole("button", { name: /^Approve/ }).click();
+  await expectStatus(requestId, "APPROVED");
+  await expect.poll(async () => (await grantForRequest(requestId))?.status).toBe("ACTIVE");
+
+  await visit(clips, `/r-panel/requests/${requestId}`);
+  await expect(clips.getByRole("heading", { name: "Certificate", exact: true })).toBeVisible();
+  await expect(clips.getByText("Approved", { exact: true }).first()).toBeVisible();
 
   await clips.context().close();
   await show.context().close();

@@ -1,14 +1,10 @@
+import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, Field, Input, SectionTitle, PageHeader, KV, ButtonLink } from "@/components/ui";
 import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
-import {
-  changePasswordAction,
-  disableTotpAction,
-  savePrefsAction,
-  requestDeletionAction,
-} from "./actions";
+import { changePasswordAction, savePrefsAction, requestDeletionAction } from "./actions";
 import { fmtDate } from "@/lib/utils";
 
 export const metadata = { title: "Account settings" };
@@ -58,17 +54,13 @@ export default async function SettingsPage({ searchParams }: PageProps<"/setting
         <Card className="space-y-4">
           <SectionTitle
             title="Two-factor authentication"
-            desc={u.totpEnabled ? "Enabled with an authenticator app." : "Mandatory for consenter teams and admins."}
+            desc="Required for every account, because every account can answer consent requests."
           />
           {u.totpEnabled ? (
-            <form action={disableTotpAction} className="flex items-end gap-2">
-              <Field label="Authenticator code">
-                <Input name="code" inputMode="numeric" maxLength={6} placeholder="000000" required />
-              </Field>
-              <ConfirmSubmit confirm="Disable two-factor authentication?" variant="danger">
-                Disable
-              </ConfirmSubmit>
-            </form>
+            <p className="text-sm text-ink-soft">
+              On, with an authenticator app. It stays on. Lost your device?{" "}
+              <Link href="/contact" className="text-ink underline underline-offset-4">Contact support</Link>.
+            </p>
           ) : (
             <ButtonLink href="/settings/security" variant="secondary">
               Set up 2FA

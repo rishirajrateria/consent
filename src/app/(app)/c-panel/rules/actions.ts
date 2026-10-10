@@ -3,9 +3,11 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireConsenter } from "@/lib/auth";
+import { ensureAsker, isSelfAsk } from "@/lib/profiles";
 import { audit } from "@/lib/audit";
 import type { RuleAction } from "@prisma/client";
 import type { RuleConditions } from "@/lib/rules";
+import { seatPerms } from "../team/roles";
 
 export async function createRuleAction(formData: FormData) {
   const { session, consenter } = await requireConsenter("canEditRules");
@@ -43,7 +45,7 @@ export async function createRuleAction(formData: FormData) {
           where: { consenterId_userId: { consenterId: consenter.id, userId: routeToUserId } },
         })
       : null;
-    if (!target || (target.role !== "OWNER" && !target.canApprove))
+    if (!target || !seatPerms(target).canApprove)
       redirect("/c-panel/rules?error=" + encodeURIComponent("Choose a team member who can approve requests"));
   }
   const last = await db.standingRule.findFirst({
@@ -119,16 +121,36 @@ export async function moveRuleAction(formData: FormData) {
 
 // ── Blacklist / whitelist ─────────────────────────────────────
 
+/**
+ * The profile a typed name, handle or profile link points to, as its sending
+ * half (the one that asks). Public links are /c/<slug>; older /r/<slug> work too.
+ */
+async function askerFromInput(input: string) {
+  const raw = input.trim();
+  const path = raw.match(/\/(c|r)\/([^/?#\s]+)/);
+  const slug = (path ? path[2] : raw).replace(/^@/, "");
+  if (!slug) return null;
+  if (path?.[1] !== "r") {
+    const profile = await db.consenterProfile.findFirst({
+      where: { OR: [{ slug }, { displayName: { equals: slug, mode: "insensitive" } }] },
+      select: { id: true },
+    });
+    if (profile) return ensureAsker(profile.id);
+  }
+  return db.requesterProfile.findFirst({
+    where: { OR: [{ slug }, { displayName: { equals: slug, mode: "insensitive" } }] },
+  });
+}
+
 export async function addListEntryAction(formData: FormData) {
   const { session, consenter } = await requireConsenter("canEditRules");
   const kind = String(formData.get("kind")) === "WHITELIST" ? "WHITELIST" : "BLACKLIST";
-  const slug = String(formData.get("requester") ?? "").trim();
-  const note = String(formData.get("note") ?? "").trim() || null;
-  const requester = await db.requesterProfile.findFirst({
-    where: { OR: [{ slug }, { displayName: { equals: slug, mode: "insensitive" } }] },
-  });
+  const note = String(formData.get("note") ?? "").trim().slice(0, 200) || null;
+  const requester = await askerFromInput(String(formData.get("requester") ?? ""));
   if (!requester)
-    redirect("/c-panel/lists?error=" + encodeURIComponent("No requester found with that name or handle"));
+    redirect("/c-panel/lists?error=" + encodeURIComponent("No profile found with that name, handle or link"));
+  if (isSelfAsk(consenter.id, requester))
+    redirect("/c-panel/lists?error=" + encodeURIComponent("That's your own profile"));
   await db.listEntry.upsert({
     where: { kind_consenterId_requesterId: { kind, consenterId: consenter.id, requesterId: requester.id } },
     update: { note },

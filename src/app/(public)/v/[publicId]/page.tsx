@@ -29,10 +29,10 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
   if (!grant) notFound();
 
   const signatureValid = verifyPayload(grant.payload, grant.signature, grant.publicKey);
+  // The signed payload is never changed. Older certificates also carry `fee`
+  // and `agreementMode`; they stay sealed in the payload but are not shown.
   const payload = grant.payload as {
     scope: { selections: Selection[]; assetTypes: string[]; conditions: string | null; intentCategory: string | null; thumbnailAllowed: boolean };
-    fee: { note: string; amount: string | null; currency: string | null };
-    agreementMode: { mode: string; agreementSha256: string | null };
     decidedBy: string;
     files: { kind: string; name: string; sha256: string; version: number }[];
   };
@@ -51,7 +51,13 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
         : null;
   // Any takedown not yet confirmed down still stands (incl. a rejected "it's down" claim or a refusal).
   const openTakedown = grant.takedowns.find((t) => t.status !== "CONFIRMED");
-  const requester = <strong>{grant.request.requester.displayName}</strong>;
+  // Both sides went through the same ID check.
+  const requester = (
+    <>
+      <strong>{grant.request.requester.displayName}</strong>
+      {grant.request.requester.status === "APPROVED" && <> <VerifiedBadge className="align-middle" /></>}
+    </>
+  );
   const consenter = (
     <>
       <strong>{grant.request.consenter.displayName}</strong> <VerifiedBadge className="align-middle" />
@@ -106,7 +112,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
             )}
             {openTakedown && (
               <Alert tone="warn">
-                The owner asked for this content to be taken down on {fmtDateTime(openTakedown.createdAt)}.
+                {grant.request.consenter.displayName} asked for this content to be taken down on {fmtDateTime(openTakedown.createdAt)}.
               </Alert>
             )}
           </div>
@@ -128,8 +134,6 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
           : grant.validityKind === "PERPETUAL" ? "Perpetual"
           : `${fmtDateTime(grant.validFrom)} → ${fmtDateTime(grant.validUntil)}`
         } />
-        <KV k="Usage fee" v={payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note} />
-        <KV k="Agreement mode" v={payload.agreementMode.mode} />
         <KV k="Decided by" v={payload.decidedBy} />
         <KV k="Issued" v={`${fmtDateTime(grant.issuedAt)} (local) · ${grant.issuedAt.toISOString()} (UTC)`} />
       </Card>
@@ -142,12 +146,6 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
             <div className="font-mono text-[10px] text-ink-faint break-all">{f.sha256}</div>
           </div>
         ))}
-        {payload.agreementMode.agreementSha256 && (
-          <div className="glass-subtle px-4 py-2.5">
-            <div className="text-sm font-medium">Signed legal agreement</div>
-            <div className="font-mono text-[10px] text-ink-faint break-all">{payload.agreementMode.agreementSha256}</div>
-          </div>
-        )}
       </Card>
 
       <FileChecker hashes={payload.files.map((f) => f.sha256)} notCovered={notCovered} />

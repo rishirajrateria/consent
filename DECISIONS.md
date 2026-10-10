@@ -24,38 +24,38 @@ in DECISIONS.md, and continue").
 
 ## Product interpretations
 
-7. **Matrix "per-row options"** (max duration, thumbnail, paid default) are edited per
+7. **Matrix "per-row options"** (max duration, thumbnail, paid default) *(The "paid default" option is gone with deal-making, #28.)* are edited per
    platform×format row and stored on every cell of that row, since a duration cap per
    format×asset-type cell would make the grid unusable. The data model still stores them per cell,
    so finer-grained editing is a pure UI change.
 8. **Auto-approval by matrix** requires *every* selected platform×format×asset cell to be
    "Allowed without asking" (and within duration caps); any "Never allowed" cell auto-denies; unset
    cells default to "Ask me". Standing rules always run first, in priority order.
-9. **Agreement-mode step**: manual approvals land in `AGREEMENT_MODE_PENDING`, where the requester
+9. **Agreement-mode step**: *(Superseded by #28: approval issues the certificate directly; there is no agreement step.)* manual approvals land in `AGREEMENT_MODE_PENDING`, where the requester
    continues with the default in-app record or either side proposes a legally binding agreement.
    Auto-approved requests skip straight to the in-app record (the spec requires their certificate to
    state the standing rule). A consenter can also issue immediately with the app record.
 10. **"Approved in principle"**: if the raw final content file is missing at approval, the grant and
     certificate are issued automatically the moment the file is uploaded (hash-bound), per §7.1.6.
-11. **Negotiation offers supersede** rather than edit: every counter-offer is a new versioned row;
+11. **Negotiation offers supersede** rather than edit: *(Superseded by #28: offers and "Mark as paid" are gone.)* every counter-offer is a new versioned row;
     accepting is only possible on the other side's latest open offer. Negotiation is also the
     "Mark as paid" entry point (offer v1 by the consenter).
-12. **Contact sharing on deal agreed** snapshots both sides' chosen contact fields into the request
+12. **Contact sharing on deal agreed** *(Superseded by #28: contact details are never shared.)* snapshots both sides' chosen contact fields into the request
     (immutable record of what was revealed and when).
 13. **Dossier export** ships as a signed PDF plus signed JSON (`?format=json`) instead of a ZIP —
     same records, zero archive dependency; every export is logged.
-14. **Phone OTP is skippable at signup** (verify later from settings); email OTP is required.
+14. **Phone OTP is skippable at signup** (verify later from settings); email OTP is required. *(The 2FA rule below is superseded by #32: every account needs 2FA.)*
     2FA (TOTP) is enforced for admins and all consenter team members, as specified — the app
     walks those users through setup on first access.
 15. **Report targets**: reports attach to a request (which covers its grant); categories are the
     spec's list. Upheld/dismissed decisions trigger score recalculation of the reported side.
-16. **Requester "auto-restriction"**: a global admin-configurable minimum score gate blocks
+16. **Requester "auto-restriction"**: *(Since #27 the gate reads the asking part of a profile's score; any profile can be asked whatever its score.)* a global admin-configurable minimum score gate blocks
     low-score requesters from sending any requests; consenters can additionally set per-profile
     minimum-score standing rules (auto-deny / whitelist-only).
 17. **Watermarking**: consenter-side file previews are visually watermarked in the review UI
     ("CONSENT REVIEW" overlay); binary watermarking of media files is left to a production
     pipeline hook.
-18. **Force re-verification** (admin) moves the consenter profiles owned by the user back to
+18. **Force re-verification** (admin) *(Since #27 it covers every profile the user owns, both halves at once, so they can neither send nor receive until re-verified.)* moves the consenter profiles owned by the user back to
     `UNDER_REVIEW`, hiding them from search until re-verified.
 19. **i18n-readiness** is structural (all copy in components/constants, UTC timestamps shown
     local); no extraction framework was added at launch (English only, per spec).
@@ -66,7 +66,7 @@ in DECISIONS.md, and continue").
 ## Post-launch owner changes (chat requests after the original spec)
 
 21. **Consent request fee (owner's explicit amendment to §1/§9; first called the "consent price",
-    renamed in #25h).** Each consenter can set a consent request fee (`consentPrice` in code) — the
+    renamed in #25h).** *(Free or ≥ the minimum since #29; the sentences about usage fees negotiated after approval are superseded by #28.)* Each consenter can set a consent request fee (`consentPrice` in code) — the
     fixed fee a requester pays to send them a request. Unlike deal fees, this IS collected
     in-app (alongside the platform fee, in one checkout), held as an `EarningEntry` (see #25h for
     how it splits: 80% to the owner on a yes, 80% refunded otherwise, Consent keeps 20%), and the
@@ -91,7 +91,7 @@ in DECISIONS.md, and continue").
 24. **Emails send inline and PDFs render on-demand** rather than through the job queue; the
     sweeps (SLA, expiry, takedowns, renewals, settlements) are the queued work. The unused `Job`
     model is reserved for moving email/PDF work onto the queue later.
-25. **Fixed by audit follow-up:** `pg_trgm` is now created by migration (search previously broke
+25. **Fixed by audit follow-up:** *(Two items are superseded: the verification meeting is optional since #33, and the `ESignProvider` is removed with agreements, #28.)* `pg_trgm` is now created by migration (search previously broke
     on a fresh database); coupons are redeemable at onboarding/renewal checkout; login, signup,
     OTP, 2FA and invites are rate-limited (in-memory sliding window — swap for Redis when
     multi-instance); requester VIEWER seats are enforced read-only; the verification meeting must
@@ -112,7 +112,7 @@ in DECISIONS.md, and continue").
     reports module. (d) *Playwright e2e suite* covering the spec's 7 flows against a dedicated
     `consent_e2e` database (`npm run e2e:prep`, then `npm run test:e2e`).
 
-25c. **Contact sharing is the owner's choice (owner amendment).** Contact details are never
+25c. **Contact sharing is the owner's choice (owner amendment).** *(Superseded by #28: no contact details are shared.)* Contact details are never
     revealed automatically. The consenter decides, for free and paid approvals alike: a "share my
     contact details" box on the approve form (pre-ticked for paid requests) and on their
     accept-the-fee form (pre-ticked), plus a "Share my contact details" button on the request page
@@ -122,20 +122,20 @@ in DECISIONS.md, and continue").
     manager) appear, and a `contacts_shared` event records who shared and when. (Messages were
     retired in #25k; the owner now ticks the fields per request, see #25l.)
 
-25d. **Review first, decide last (owner amendment).** Request pages show who's asking, what they
+25d. **Review first, decide last (owner amendment).** *(The answers are now Approve / Ask / Decline; "Set a fee" is gone, #28.)* Request pages show who's asking, what they
     want, the exact files, messages and history before any action; the owner's answer comes last
     in one card (Approve / Set a fee / Ask for changes / Decline) with a single confirm button at the
     end, so typed input can't be lost by pressing a different button. The requester page follows
     the same order with its next steps at the bottom. (Since #25k there are no messages, and "Ask
     for changes" is "Ask".)
-25e. **Counter-offer limit (owner amendment).** Each side can send at most 3 counter-offers per
+25e. **Counter-offer limit (owner amendment).** *(Superseded by #28: there are no counter-offers.)* Each side can send at most 3 counter-offers per
     request (`MAX_COUNTER_OFFERS`, `src/lib/negotiation.ts`); the opening fee is not a counter, and
     revising your own open offer uses one. A side with none left can only accept the other side's
     latest offer or end the request; to keep negotiating, a new request must be raised (closed
     requests link straight to a new one). Enforced in the server actions, shown on both sides as
     "Counter-offers left: you N of 3".
 
-25f. **Consent request fee is held, not kept (owner amendment, supersedes the "buys the ask" rule
+25f. **Consent request fee is held, not kept *("An agreed fee" and DEAL_AGREED are gone, #28.)* (owner amendment, supersedes the "buys the ask" rule
     in #21; the full release and full refund described here are superseded by the 80/20 split in
     #25h).** The consent request fee is collected in-app at submission and held (`EarningEntry`
     HELD). The owner's share becomes theirs the moment they say yes (approval, an automatic yes from
@@ -149,7 +149,7 @@ in DECISIONS.md, and continue").
     (pay before learning a request was impossible, decide before seeing the evidence, competing
     buttons that lose typed input, dead ends, permission gaps, destructive actions without
     confirmation). All were fixed; see the commit history for the per-area detail.
-25h. **Consent request fee: rename and 80/20 split (owner amendment, supersedes the full release
+25h. **Consent request fee: rename and 80/20 split *("An agreed fee" is gone, #28; the platform fee is 20% of the consent request fee since #30.)* (owner amendment, supersedes the full release
     and full refund in #25f).** The fixed fee a requester pays to send an owner a request is the
     "consent request fee" in everything users see; "ask price", "consent price" and "ask fee" are
     retired. Consent's own charge on each request is the "platform fee", never "request fee" or
@@ -168,7 +168,7 @@ in DECISIONS.md, and continue").
     80% share; earnings already paid out and refunds already made keep their full amounts.
 
 25i. **7-day request window (owner amendment, replaces the answer-only SLA and the separate
-    negotiation-idle timeout).** Every open request (`OPEN_STATUSES`: sent, pending, in
+    negotiation-idle timeout).** *(Since #28 `OPEN_STATUSES` is SUBMITTED, PENDING, CHANGES_REQUESTED and APPROVED_IN_PRINCIPLE; offers, agreement steps and meetings no longer exist, and `negotiationIdleDays` is removed from settings.)* Every open request (`OPEN_STATUSES`: sent, pending, in
     negotiation, asked, deal agreed, approved in principle, agreement steps) expires a fixed number
     of days after its last action from either side: Admin → System settings → "Request window
     (days)" (`slaDays`, 7 by default). The last action is read from what actions leave behind,
@@ -188,7 +188,7 @@ in DECISIONS.md, and continue").
     back to the requester; after a yes the owner's share stays theirs. The platform fee is never
     refunded. Both sides are notified. The negotiation-idle setting (`negotiationIdleDays`) is no
     longer read and no longer shown in admin settings; the key may linger in stored settings.
-25j. **Request limits (owner amendment).** Owners set, under Profile settings → Request limits:
+25j. **Request limits (owner amendment).** *("A fee" is no longer an answer, #28. Since the onboarding change, the limit is also chosen at onboarding.)* Owners set, under Profile settings → Request limits:
     how many requests may wait for their answer at once (`maxOpenRequests`; SUBMITTED and
     PENDING count; any answer, whether a yes, a fee, an Ask or a no, frees the place, and an
     answered Ask comes back as waiting), and
@@ -206,7 +206,7 @@ in DECISIONS.md, and continue").
     limit is lowered below the current count in settings. Pausing is not a penalty (no score
     change) and requests already sent carry on. It reopens by itself: time limits as old requests
     age out of the rolling window, the waiting limit as the owner answers.
-25k. **Ask replaces messages (owner amendment, supersedes the in-app messages in #25c/#25d).**
+25k. **Ask replaces messages (owner amendment, supersedes the in-app messages in #25c/#25d).** *(The line about pointing at contact details is superseded by #28.)*
     The Messages card and message form are gone from both request pages and the practice copy. The
     owner's "Ask for changes" option is now "Ask", for a question or a change alike: one field,
     "What do you want to ask or change?", sent with "Send". It still sets CHANGES_REQUESTED and logs
@@ -216,7 +216,7 @@ in DECISIONS.md, and continue").
     sees "You asked: …" and "They answered: …" above their decision, and the Timeline shows both.
     Every "use the messages to arrange payment" line now points at sharing contact details
     instead. Old `RequestMessage` rows stay in the database for the record but aren't shown.
-25l. **Contact choices and meetings (owner amendment, extends #25c).** *Contact choices:* when
+25l. **Contact choices and meetings (owner amendment, extends #25c).** *(Superseded by #28: contact choices, request meetings and calendar invites are removed.)* *Contact choices:* when
     approving, and when sharing later, "Share my contact details" lists Email, Phone, Address and
     Manager/agency, each with its actual value; a field with no value is shown disabled with "add
     it in settings". The ticks start from the profile's share flags. Only ticked fields that have a
@@ -240,10 +240,103 @@ in DECISIONS.md, and continue").
     emails the .ics (`src/lib/providers.ts`); Google Calendar / Microsoft Graph plug into the same
     `CalendarProvider`, keyed by the same uid so updates replace the entry.
 
-26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
+26. **Known remaining gaps (deliberate, in priority order for production):** *(Since #25b the Playwright suite exists; DocuSign and negotiation scope diffs are moot after #28.)* Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
     existing interfaces; admin read-only impersonation; relationship-wide dossier export;
     structured negotiation scope diffs; score time-decay and admin-editable band thresholds;
     encryption-at-rest for uploaded identity documents (currently private storage + hashed
     identifiers); queued email/PDF; full i18n extraction. Goodwill credits are issued as 100%%
     single-use coupons rather than a separate credit ledger.
+
+## One equal account (owner pivot)
+
+The product owner: "I don't want a difference in both account types. Every account created is
+same and equal where everyone has option to receive and send consent." And: "The consent is
+received and the matter is closed."
+
+27. **Equal accounts: every profile is a pair (supersedes the two account types).** There is one
+    kind of account. Sign-up → email/phone OTP → 2FA → one onboarding form at `/onboarding`
+    (`/onboarding/consenter` and `/onboarding/requester` redirect there) → one ID check → the
+    profile can send and receive. In the database a profile is a `ConsenterProfile` (canonical id:
+    public page, terms, consent request fee, limits, earnings, receiving) plus its sending half, a
+    `RequesterProfile` with `consenterId` (requests sent, payments, membership). They are created
+    together in one transaction with OWNER seats in both member tables and the ID document linked to
+    both; the shared fields (name, legal name, country, status, approval date) are copied with
+    `syncPair`, team changes with `mirrorMember` / `removeMember` (`src/lib/profiles.ts`). Old
+    unpaired rows are paired on first use (`ensureAsker`, `ensureProfileFor`). Keeping both tables
+    (rather than merging them) left requests, payments, earnings, rules and lists untouched.
+    Brands and shows keep team profiles (roles OWNER, MANAGER with flags, VIEWER; managers can send);
+    a person can add another profile via `/onboarding?new=1`, and the switcher only appears when
+    they belong to more than one. People see **one Consent Score** per profile, `profileScore()`:
+    the average of how it answers (`ConsenterProfile.score`) and how it asks
+    (`RequesterProfile.score`); score gates and standing rules still read the asking part, and
+    admins can correct either part. `/c/<slug>` is the one public profile; `/r/<slug>`
+    redirects there permanently. The directory and Find list every verified profile
+    (`searchProfiles`), except your own ("This is your profile."). Admin has one ID-check queue,
+    `/admin/consenters` ("Profiles"); `/admin/requesters` and its detail pages redirect to the
+    paired profile. The admin RBAC module for ID checks is `consenters`; the retired `requesters`
+    key is still honoured when reading stored roles and is dropped on the next save.
+28. **No deal-making, paperwork, contact sharing or meetings (supersedes #9, #11, #12, #25c, #25d's
+    "Set a fee", #25e, #25l and the deal parts of #21, #25f, #25h, #25i–#25k).** Removed completely:
+    fee negotiation and counter-offers ("Set a fee", usage fee, agreed fee, `NegotiationOffer`,
+    statuses IN_NEGOTIATION and DEAL_AGREED), the legal agreement option (agreement mode, drafting,
+    upload, e-signature, `Agreement`, `AgreementSignature`, `AgreementTemplate`, statuses
+    AGREEMENT_MODE_PENDING and LEGAL_AGREEMENT_PENDING, the admin agreement-templates page and the
+    e-signature setting), sharing contact details (email, phone, address, manager), and scheduling
+    meetings between the two people (`RequestMeeting`, calendar invites). The lifecycle is: Draft →
+    sent (free) or paid → Pending → Approve (optionally narrowing the scope or adding a short
+    written condition that is not about money) / Ask / Decline, or Withdraw by the asker. One
+    helper, `approveAndIssue()`, handles every yes: the certificate is issued at once when the final
+    content file is uploaded, otherwise the request waits in APPROVED_IN_PRINCIPLE until it is.
+    Once the certificate is issued, the matter is closed. Certificates issued before keep their
+    signed `fee` and `agreementMode` fields (payloads are never rewritten, or the seal would
+    break), but no page, PDF or API response shows them. Timeline events left by removed features
+    are skipped. Admin email/SMS message overrides moved to "Pages & messages" (`/admin/cms`).
+29. **Consent request fee: free or at least about ₹100, in the currency the profile picks.** The
+    fee stays (held, 80/20, #25h) but is optional: `consentPrice` null means free to ask. A paid
+    fee must be at least the minimum for its currency, from the admin-editable `Currency` table
+    (seeded from `DEFAULT_CURRENCIES`: INR 100, USD 1.20, EUR 1.10, GBP 0.95, AED 4.40, SGD 1.55,
+    CAD 1.65, AUD 1.80); `consentFeeProblem()` / `parseConsentFee()` in
+    `src/lib/currency-rules.ts`. Per-use fees (`ConsentPriceTier`) stay; each is free (0) or at
+    least the minimum. The currency defaults from the profile's country. Fee and receive limits
+    are chosen at onboarding; per-use fees are set later in Profile → fee & limits.
+30. **Platform fee: 20% of the consent request fee (replaces the flat per-request platform fee).**
+    The asker pays it on top of the consent request fee, in the same currency, on the same single
+    checkout (`requestCharges()` / `PLATFORM_SHARE` in `src/lib/platform-fee.ts`). Coupons discount
+    the platform fee only; tax (the payer's country, `PriceConfig.taxRate`) applies to the platform
+    fee, never to the consent request fee. It is never refunded. A free ask has no platform fee and
+    no checkout at all: "Send request" sends it at once. So both sides give Consent the same 20%.
+31. **Membership: ₹1,000 a year, the same for every account, free for now (replaces the requester
+    onboarding fee and yearly subscription).** Every profile, team profiles included, has the same
+    yearly membership (`PriceConfig.membershipFee` per country: IN ₹1,000, DEFAULT USD 12; tax as
+    configured). An admin switch (`membershipFeeOn`, off by default) turns it on; until then nobody
+    pays and every verified profile can send. Once on, it is needed to send
+    (`canSend()` in `src/lib/membership.ts`), never to be asked; paying extends
+    `membershipEndsAt` by a year from the later of now and the current end.
+32. **2FA for everyone (supersedes the 2FA part of #14).** TOTP 2FA is required for every account
+    before onboarding and for every profile panel, not only for teams that receive requests. The
+    app walks people through setup on first access.
+33. **The verification call is optional (supersedes the mandatory meeting in #25).** The ID check
+    rests on the documents, the channels and duplicate detection. An admin may still schedule a
+    video or in-person verification call (`VerificationMeeting`) when the documents need a closer
+    look and record its outcome, but approval no longer requires one. A possible duplicate (legal
+    name, document number or channel) still blocks approval until it is cleared with a reason.
+34. **Onboarding is strictly mandatory (owner's later decision; tightens #27 and #29).** The product
+    owner: "All things are mandatory. Incomplete profiles can't be onboarded." The one `/onboarding`
+    form requires, with HTML `required` and server checks that name the missing field
+    (`readApplication()` in `src/app/(app)/onboarding/application.ts`): (1) the kind of profile,
+    (2) country, (3) legal name, (4) public display name, (5) what you do, (6) "About you" of at
+    least 40 characters, (7) a profile photo (an image), (8) the ID document: its type, its number
+    (stored only as a hash for duplicate checks) and the file, (9) at least one channel with
+    platform, an http(s) link and a follower count (up to 6), (10) the creator type (defaulting from
+    the kind of profile) and (11) the declaration ("This is me / I am authorised to represent this
+    name"). The only optional field is "Also known as", because many people have none. Two more
+    choices are required and explicit (radios, no silent default): the **consent request fee**
+    (a currency, then Free or an amount of at least that currency's minimum, #29) and **how many
+    requests they can receive** (Unlimited, or a number per day, week or month; requests pause
+    when the limit is reached and resume as they answer). So an incomplete profile never reaches
+    the admin queue. Email and phone are still proven at sign-up and 2FA set up before the form
+    (#32); the admin's "More info needed" reply stays for documents that don't match. Per-use fees
+    (`ConsentPriceTier`) are the one fee setting left for later, in Profile → fee & limits, with
+    a nudge on Home after approval until the profile sets them or dismisses it.
+

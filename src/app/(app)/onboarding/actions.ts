@@ -1,400 +1,340 @@
 "use server";
 
-import { z } from "zod";
 import { createHash } from "crypto";
 import { redirect } from "next/navigation";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireUser, requireRequester, setActiveProfile, hasAdminPerm } from "@/lib/auth";
+import { mirrorMember, syncPair } from "@/lib/profiles";
 import { storeUpload } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { notifyUser } from "@/lib/notify";
+import { getSettings } from "@/lib/settings";
+import { startMembershipCheckout } from "@/lib/payments";
+import { activeCurrencies } from "@/lib/currencies";
 import { slugify, normalizeLegalName, shortId } from "@/lib/utils";
-import { safeChannelUrl } from "@/lib/channels";
-import { createPlatformPayment } from "@/lib/payments";
-import type { ConsenterEntityType, RequesterType } from "@prisma/client";
+import { channelHandle, echoValues, readApplication, type ApplicationState } from "./application";
+
+type Tx = Prisma.TransactionClient;
 
 function fail(path: string, error: string): never {
   redirect(`${path}${path.includes("?") ? "&" : "?"}error=${encodeURIComponent(error)}`);
 }
 
-/** Stores an uploaded document, or sends the person back with a plain error. */
-async function storeOrFail(path: string, opts: Parameters<typeof storeUpload>[0]) {
+/** Stores an uploaded file, or null when it can't be taken (wrong type, too big). */
+async function tryStore(opts: Parameters<typeof storeUpload>[0]) {
   try {
     return await storeUpload(opts);
   } catch {
-    // redirect() throws, so it must stay outside the try.
+    return null;
   }
-  fail(path, "We couldn't take that file. Upload a PDF or an image.");
 }
 
-/** Reads the "reply to the review team" form; a reply or a document is required. */
-function readReviewReply(formData: FormData, path: string) {
-  const reply = String(formData.get("reply") ?? "").trim().slice(0, 2000);
-  const doc = formData.get("document") as File | null;
-  const file = doc && doc.size > 0 ? doc : null;
-  if (!reply && !file) fail(path, "Write a reply or add a document");
-  return { reply, file };
-}
-
-/** Tells every admin who can decide on this kind of application that it's back for review. */
-async function notifyReviewers(module: "requesters" | "consenters", n: { title: string; body: string; href: string }) {
+/**
+ * Tells every admin who can decide ID checks. "consenters" is the ID-check
+ * module; older roles may still carry the retired "requesters" key.
+ */
+async function notifyReviewers(n: { title: string; body: string; href: string }) {
   const admins = await db.user.findMany({ where: { adminRoleId: { not: null } }, include: { adminRole: true } });
   await Promise.all(
     admins
-      .filter((a) => hasAdminPerm(a.adminRole, module, "approve"))
-      .map((a) => notifyUser({ userId: a.id, ...n }))
+      .filter((a) => hasAdminPerm(a.adminRole, "consenters", "approve") || hasAdminPerm(a.adminRole, "requesters", "approve"))
+      .map((a) => notifyUser({ userId: a.id, ...n })),
   );
 }
 
-// ── Requester application ─────────────────────────────────────
-
-const requesterSchema = z.object({
-  legalName: z.string().min(2).max(200),
-  displayName: z.string().min(2).max(100),
-  type: z.enum(["INDIVIDUAL_CREATOR", "NEWS_CHANNEL", "PODCAST", "MEME_PAGE", "MEDIA_HOUSE", "AGENCY", "OTHER"]),
-  country: z.string().min(2).max(8),
-  description: z.string().min(20).max(4000),
-  categories: z.string().max(500),
-  signatoryName: z.string().max(200).optional(),
-  contactEmail: z.string().email().optional().or(z.literal("")),
-  contactPhone: z.string().max(20).optional().or(z.literal("")),
-});
-
-export async function submitRequesterApplicationAction(formData: FormData) {
-  const session = await requireUser();
-  // Errors return to the form; "new=1" keeps it open for someone applying again after a rejection.
-  const form = "/onboarding/requester?new=1";
-  const parsed = requesterSchema.safeParse(Object.fromEntries(formData));
-  if (!parsed.success)
-    fail(form, parsed.error.issues[0]?.message ?? "Check the form fields");
-  const d = parsed.data;
-
-  const platforms = formData.getAll("channelPlatform").map(String);
-  const urls = formData.getAll("channelUrl").map(String);
-  const followers = formData.getAll("channelFollowers").map(String);
-  const typed = platforms
-    .map((p, i) => ({ platform: p.trim(), url: urls[i]?.trim() ?? "", followers: parseInt(followers[i] || "0", 10) || 0 }))
-    .filter((c) => c.platform && c.url);
-  // Channel links are shown to owners as clickable icons, so keep only real web addresses.
-  if (typed.some((c) => !safeChannelUrl(c.url)))
-    fail(form, "Channel links must be web addresses, like https://youtube.com/@yourchannel");
-  const channels = typed.map((c) => ({ ...c, url: safeChannelUrl(c.url)! }));
-  if (channels.length === 0) fail(form, "Add at least one channel or handle link");
-
-  const doc = formData.get("document") as File | null;
-  if (!doc || doc.size === 0)
-    fail(form, "Upload your government ID or business registration document");
-
-  const existing = await db.requesterMember.findFirst({
-    where: { userId: session.userId },
-    include: { requester: true },
-  });
-  // After a rejection the owner may fix their details and apply again on the same profile.
-  const reapply = existing?.role === "OWNER" && existing.requester.status === "REJECTED" ? existing.requester : null;
-  if (existing && !reapply) fail("/onboarding/requester", "You already have a requester profile");
-
-  const details = {
-    displayName: d.displayName,
-    legalName: d.legalName,
-    type: d.type as RequesterType,
-    country: d.country,
-    description: d.description,
-    categories: d.categories.split(",").map((c) => c.trim()).filter(Boolean),
-    channels,
-    signatoryName: d.signatoryName || null,
-    status: "SUBMITTED" as const,
-  };
-  // Applying again keeps the ownership proof of any channel whose link didn't change.
-  const prevAccounts = reapply ? await db.socialAccount.findMany({ where: { requesterId: reapply.id } }) : [];
-  const proofByUrl = new Map(prevAccounts.map((a) => [a.url, a]));
-  const socialAccounts = {
-    create: channels.map((c) => {
-      const prev = proofByUrl.get(c.url);
-      return {
-        platformName: c.platform,
-        handle: c.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 120),
-        url: c.url,
-        followers: c.followers,
-        verifiedVia: prev?.verifiedVia ?? "manual",
-        verifiedAt: prev?.verifiedAt ?? null,
-        proofFileId: prev?.proofFileId ?? null,
-      };
-    }),
-  };
-  const profile = reapply
-    ? (
-        await db.$transaction([
-          db.socialAccount.deleteMany({ where: { requesterId: reapply.id } }),
-          db.requesterProfile.update({
-            where: { id: reapply.id },
-            data: { ...details, adminNotes: null, socialAccounts },
-          }),
-        ])
-      )[1]
-    : await db.requesterProfile.create({
-        data: {
-          ...details,
-          slug: `${slugify(d.displayName)}-${shortId(4)}`,
-          contactEmail: d.contactEmail || session.user.email,
-          contactPhone: d.contactPhone || session.user.phone,
-          members: { create: { userId: session.userId, role: "OWNER" } },
-          socialAccounts,
-        },
-      });
-  await storeUpload({ file: doc, kind: "DOCUMENT", uploadedById: session.userId, requesterDocOf: profile.id });
-  await audit({
-    actorId: session.userId,
-    actorName: session.user.name,
-    action: reapply ? "requester_application_resubmitted" : "requester_application_submitted",
-    module: "requesters",
-    targetId: profile.id,
-  });
-  await setActiveProfile({ kind: "requester", id: profile.id });
-  redirect("/onboarding/requester?submitted=1");
+/** A slug for the sending half: the profile's own slug when free there. */
+async function askerSlug(tx: Tx, base: string) {
+  for (let i = 0; i < 20; i++) {
+    const slug = i === 0 ? base : `${base}-${shortId(3)}`;
+    if (!(await tx.requesterProfile.findUnique({ where: { slug }, select: { id: true } }))) return slug;
+  }
+  return `${base}-${Date.now().toString(36)}`;
 }
 
-/** Answers a "more information needed" message and sends the application back for review. */
-export async function replyToRequesterReviewAction(formData: FormData) {
-  const path = "/onboarding/requester";
+/** The owner's seat: every permission. */
+const OWNER_SEAT = { role: "OWNER" as const, canApprove: true, canEditRules: true, canExport: true, canManageTeam: true };
+
+// ── The one ID check ──────────────────────────────────────────
+
+/**
+ * The single onboarding form. Creates the profile as a pair in one
+ * transaction: the profile (receiving half) and its sending half, an OWNER
+ * seat in both member tables, the ID document linked to both, and the
+ * channels on both. The status is SUBMITTED, and the review team is told.
+ * After a rejection the owner sends the same profile again (reapplyId).
+ */
+export async function submitProfileApplicationAction(
+  prev: ApplicationState,
+  formData: FormData,
+): Promise<ApplicationState> {
   const session = await requireUser();
-  const member = await db.requesterMember.findFirst({
-    where: { userId: session.userId },
-    include: { requester: true },
-  });
-  if (!member || member.requester.status !== "MORE_INFO_NEEDED") redirect(path);
-  if (member.role !== "OWNER") fail(path, "Only the account owner can reply to the review team");
-  const r = member.requester;
-  const { reply, file } = readReviewReply(formData, path);
-  const stored = file
-    ? await storeOrFail(path, { file, kind: "DOCUMENT", uploadedById: session.userId, requesterDocOf: r.id })
+  // Email and phone are proven at sign-up, and 2FA is on, before the ID check.
+  if (!session.user.phoneVerified) redirect("/verify-phone?next=%2Fonboarding");
+  if (!session.user.totpEnabled) redirect("/settings/security?next=%2Fonboarding");
+  const values = echoValues(formData);
+  const answer = (error: string): ApplicationState => ({ error, values, attempt: prev.attempt + 1 });
+
+  const currencies = await activeCurrencies();
+  const read = readApplication(formData, currencies);
+  if (!read.ok) return answer(read.error);
+  const d = read.data;
+  const userId = session.userId;
+
+  // Sending a rejected profile again: only its owner, only after a rejection.
+  const reapplyId = String(formData.get("reapplyId") ?? "").trim() || null;
+  const reapply = reapplyId
+    ? await db.consenterMember.findUnique({
+        where: { consenterId_userId: { consenterId: reapplyId, userId } },
+        include: { consenter: { include: { asker: true, socialAccounts: true } } },
+      })
     : null;
-  await db.requesterProfile.update({ where: { id: r.id }, data: { status: "SUBMITTED" } });
-  await audit({
-    actorId: session.userId,
-    actorName: session.user.name,
-    action: "requester_info_sent",
-    module: "requesters",
-    targetId: r.id,
-    reason: reply || null,
-    detail: { documentId: stored?.id ?? null },
+  if (reapplyId && (!reapply || reapply.role !== "OWNER" || reapply.consenter.status !== "REJECTED"))
+    return answer("This profile can't be sent again. Start a new profile instead.");
+  const again = reapply?.consenter ?? null;
+
+  // Files first, so a file we can't take never leaves a half-made profile.
+  const document = await tryStore({
+    // The document type travels in the file name, so the review team sees it next to the file.
+    file: new File([d.document], `${d.documentType} - ${d.document.name}`, { type: d.document.type }),
+    kind: "DOCUMENT",
+    uploadedById: userId,
+    maxMb: 25,
   });
-  await notifyReviewers("requesters", {
-    title: `${r.displayName} sent more information`,
-    body: [reply, stored && "They added a new document."].filter(Boolean).join(" "),
-    href: `/admin/requesters/${r.id}`,
-  });
-  redirect(`${path}?replied=1`);
-}
+  if (!document) return answer("We couldn't take the ID document. Upload a PDF or an image up to 25 MB.");
+  const photo = await tryStore({ file: d.photo, kind: "PROFILE_PHOTO", uploadedById: userId, maxMb: 10 });
+  if (!photo) return answer("We couldn't take the profile photo. Upload an image up to 10 MB.");
 
-export async function payOnboardingAction(formData: FormData) {
-  const session = await requireUser();
-  const member = await db.requesterMember.findFirst({
-    where: { userId: session.userId },
-    include: { requester: true },
-  });
-  if (!member) redirect("/onboarding/requester");
-  if (member.role === "VIEWER") fail("/onboarding/requester", "Viewers have read-only access");
-  const r = member.requester;
-  if (r.status !== "APPROVED") fail("/onboarding/requester", "Application not approved yet");
-  if (r.onboardingFeePaidAt) redirect("/r-panel");
-  const { checkoutUrl } = await createPlatformPayment({
-    requesterId: r.id,
-    purpose: "ONBOARDING",
-    couponCode: String(formData.get("coupon") ?? "").trim() || undefined,
-    returnTo: "/r-panel?welcome=1",
-  });
-  redirect(checkoutUrl);
-}
-
-export async function payRenewalAction(formData: FormData) {
-  // Renew the profile the billing page shows, not just the first one this user belongs to.
-  const { member, requester } = await requireRequester();
-  if (member.role === "VIEWER") fail("/r-panel/billing", "Viewers have read-only access");
-  // Renewal extends an active account. Before activation, the onboarding payment covers the first year.
-  if (requester.status !== "APPROVED" || !requester.onboardingFeePaidAt)
-    fail("/r-panel/billing", "Activate your account first");
-  const { checkoutUrl } = await createPlatformPayment({
-    requesterId: requester.id,
-    purpose: "SUBSCRIPTION",
-    couponCode: String(formData.get("coupon") ?? "").trim() || undefined,
-    returnTo: "/r-panel/billing?renewed=1",
-  });
-  redirect(checkoutUrl);
-}
-
-// ── Consenter onboarding ──────────────────────────────────────
-
-const consenterSchema = z.object({
-  entityType: z.enum(["PERSON", "TV_SHOW", "MOVIE", "WEB_SERIES", "BRAND", "FICTIONAL_CHARACTER", "BAND_GROUP", "SPORTS_TEAM", "OTHER"]),
-  legalName: z.string().min(2).max(200),
-  displayName: z.string().min(2).max(100),
-  aliases: z.string().max(500).optional(),
-  country: z.string().min(2).max(8),
-  category: z.string().max(100).optional(),
-  bio: z.string().max(2000).optional(),
-  documentNumber: z.string().min(3).max(100),
-  contactEmail: z.string().email().optional().or(z.literal("")),
-  contactPhone: z.string().max(20).optional().or(z.literal("")),
-  contactAddress: z.string().max(300).optional(),
-  managerContact: z.string().max(200).optional(),
-});
-
-export async function submitConsenterApplicationAction(formData: FormData) {
-  const session = await requireUser();
-  const parsed = consenterSchema.safeParse(Object.fromEntries(formData));
-  if (!parsed.success)
-    fail("/onboarding/consenter", parsed.error.issues[0]?.message ?? "Check the form fields");
-  const d = parsed.data;
-
-  const doc = formData.get("document") as File | null;
-  if (!doc || doc.size === 0)
-    fail("/onboarding/consenter", "Upload identity / IP ownership documents");
-
-  const handles = formData.getAll("socialPlatform").map(String);
-  const handleNames = formData.getAll("socialHandle").map(String);
-  const socials = handles
-    .map((p, i) => ({ platformName: p.trim(), handle: handleNames[i]?.trim() ?? "" }))
-    .filter((s) => s.platformName && s.handle);
-
-  const existing = await db.consenterMember.findFirst({ where: { userId: session.userId } });
-  if (existing) fail("/onboarding/consenter", "You already have a consenter profile");
-
-  // One entity = one account: duplicate prevention signals
+  // One identity, one profile: flag anything that looks like a profile we already have.
   const normalized = normalizeLegalName(d.legalName);
   const docHash = createHash("sha256").update(d.documentNumber.trim().toLowerCase()).digest("hex");
+  const notThis = again ? { id: { not: again.id } } : {};
+  const handles = d.channels.map((c) => channelHandle(c.url));
   const [nameDup, docDup, handleDup] = await Promise.all([
-    db.consenterProfile.findFirst({ where: { normalizedLegalName: normalized } }),
-    db.consenterProfile.findFirst({ where: { documentNumberHash: docHash } }),
-    socials.length
-      ? db.socialAccount.findFirst({
-          where: {
-            consenterId: { not: null },
-            OR: socials.map((s) => ({ platformName: s.platformName, handle: s.handle })),
+    db.consenterProfile.findFirst({ where: { normalizedLegalName: normalized, ...notThis }, select: { id: true } }),
+    db.consenterProfile.findFirst({ where: { documentNumberHash: docHash, ...notThis }, select: { id: true } }),
+    db.socialAccount.findFirst({
+      where: {
+        AND: [
+          { consenterId: { not: null } },
+          ...(again ? [{ consenterId: { not: again.id } }] : []),
+          {
+            OR: [
+              { url: { in: d.channels.map((c) => c.url) } },
+              ...handles.map((h) => ({ handle: { equals: h, mode: "insensitive" as const } })),
+            ],
           },
-        })
-      : null,
+        ],
+      },
+      select: { id: true },
+    }),
   ]);
   const duplicateFlag = !!(nameDup || docDup || handleDup);
 
-  const profile = await db.consenterProfile.create({
-    data: {
-      slug: `${slugify(d.displayName)}-${shortId(4)}`,
-      displayName: d.displayName,
-      legalName: d.legalName,
-      normalizedLegalName: normalized,
-      entityType: d.entityType as ConsenterEntityType,
-      aliases: (d.aliases ?? "").split(",").map((a) => a.trim()).filter(Boolean),
-      country: d.country,
-      category: d.category || null,
-      bio: d.bio || null,
-      documentNumberHash: docHash,
-      duplicateFlag,
-      status: "SUBMITTED",
-      shareEmail: formData.get("shareEmail") === "on",
-      sharePhone: formData.get("sharePhone") === "on",
-      shareAddress: formData.get("shareAddress") === "on",
-      shareManager: formData.get("shareManager") === "on",
-      contactEmail: d.contactEmail || session.user.email,
-      contactPhone: d.contactPhone || session.user.phone,
-      contactAddress: d.contactAddress?.trim() || null,
-      managerContact: d.managerContact || null,
-      members: {
-        create: {
-          userId: session.userId,
-          role: "OWNER",
-          canApprove: true,
-          canNegotiate: true,
-          canEditRules: true,
-          canExport: true,
-          canManageTeam: true,
-        },
-      },
-      socialAccounts: {
-        create: socials.map((s) => ({ ...s, verifiedVia: "manual" })),
-      },
-    },
+  const shared = {
+    displayName: d.displayName,
+    legalName: d.legalName,
+    country: d.country,
+  };
+  const profileData = {
+    ...shared,
+    normalizedLegalName: normalized,
+    entityType: d.entityType,
+    aliases: d.aliases,
+    category: d.category,
+    bio: d.bio,
+    photoFileId: photo.id,
+    documentNumberHash: docHash,
+    duplicateFlag,
+    // The fee and the receive limit chosen in the form (sending again updates them too).
+    consentPrice: d.consentPrice,
+    consentPriceCurrency: d.consentPriceCurrency,
+    ...d.limits,
+    status: "SUBMITTED" as const,
+    verifiedAt: null,
+    adminNotes: null,
+  };
+  const askerData = {
+    ...shared,
+    type: d.creatorType,
+    description: d.bio,
+    categories: [d.category],
+    channels: d.channels,
+    status: "SUBMITTED" as const,
+    approvedAt: null,
+    adminNotes: null,
+  };
+  // Sending again keeps the ownership proof of any channel whose link didn't change.
+  const proofByUrl = new Map((again?.socialAccounts ?? []).filter((a) => a.url).map((a) => [a.url!, a]));
+
+  const profile = await db.$transaction(async (tx) => {
+    const c = again
+      ? await tx.consenterProfile.update({ where: { id: again.id }, data: profileData })
+      : await tx.consenterProfile.create({
+          data: {
+            ...profileData,
+            slug: `${slugify(d.displayName)}-${shortId(4)}`,
+            members: { create: { userId, ...OWNER_SEAT } },
+          },
+        });
+    const existing = await tx.requesterProfile.findUnique({ where: { consenterId: c.id }, select: { id: true } });
+    const asker = existing
+      ? await tx.requesterProfile.update({ where: { id: existing.id }, data: askerData })
+      : await tx.requesterProfile.create({ data: { ...askerData, consenterId: c.id, slug: await askerSlug(tx, c.slug) } });
+
+    // The team sits in both member tables.
+    const members = await tx.consenterMember.findMany({ where: { consenterId: c.id } });
+    for (const m of members) await mirrorMember(m, tx);
+
+    // Channels: one row each, on both halves.
+    await tx.socialAccount.deleteMany({
+      where: { OR: [{ consenterId: c.id }, { requesterId: asker.id }] },
+    });
+    await tx.socialAccount.createMany({
+      data: d.channels.map((ch) => {
+        const prevProof = proofByUrl.get(ch.url);
+        return {
+          platformName: ch.platform,
+          handle: channelHandle(ch.url),
+          url: ch.url,
+          followers: ch.followers,
+          verifiedVia: prevProof?.verifiedVia ?? "manual",
+          verifiedAt: prevProof?.verifiedAt ?? null,
+          proofFileId: prevProof?.proofFileId ?? null,
+          consenterId: c.id,
+          requesterId: asker.id,
+        };
+      }),
+    });
+
+    // The ID document belongs to both halves; the photo to the profile.
+    await tx.storedFile.update({
+      where: { id: document.id },
+      data: { consenterDocOf: c.id, requesterDocOf: asker.id },
+    });
+    await tx.storedFile.update({ where: { id: photo.id }, data: { consenterDocOf: c.id } });
+    return { ...c, askerId: asker.id };
   });
-  await storeUpload({ file: doc, kind: "DOCUMENT", uploadedById: session.userId, consenterDocOf: profile.id });
-  const photo = formData.get("photo") as File | null;
-  if (photo && photo.size > 0) {
-    const stored = await storeUpload({ file: photo, kind: "PROFILE_PHOTO", uploadedById: session.userId, consenterDocOf: profile.id });
-    await db.consenterProfile.update({ where: { id: profile.id }, data: { photoFileId: stored.id } });
-  }
+
   await audit({
-    actorId: session.userId,
+    actorId: userId,
     actorName: session.user.name,
-    action: "consenter_application_submitted",
+    action: again ? "profile_application_resubmitted" : "profile_application_submitted",
     module: "consenters",
     targetId: profile.id,
-    detail: { duplicateFlag },
+    detail: { duplicateFlag, documentType: d.documentType, requesterId: profile.askerId },
   });
-  // Close the loop with everyone who invited this person to Consent.
-  const { claimInvitesForConsenter } = await import("@/app/(app)/invites/actions");
-  await claimInvitesForConsenter({
-    consenterId: profile.id,
-    displayName: profile.displayName,
-    normalizedLegalName: profile.normalizedLegalName,
-    ownerEmail: session.user.email,
-    stage: "joined",
+  if (!again) {
+    // Close the loop with everyone who invited this person to Consent.
+    const { claimInvitesForConsenter } = await import("@/app/(app)/invites/claim");
+    await claimInvitesForConsenter({
+      consenterId: profile.id,
+      displayName: profile.displayName,
+      normalizedLegalName: profile.normalizedLegalName,
+      ownerEmail: session.user.email,
+      stage: "joined",
+    });
+  }
+  await notifyReviewers({
+    title: again ? `${profile.displayName} applied again` : `New ID check: ${profile.displayName}`,
+    body: duplicateFlag
+      ? "This may be a duplicate of a profile we already have. Check it before you approve."
+      : "Their documents and channels are ready to review.",
+    href: `/admin/consenters/${profile.id}`,
   });
   await setActiveProfile({ kind: "consenter", id: profile.id });
-  redirect("/onboarding/consenter?submitted=1");
+  redirect(`/onboarding?submitted=1&profile=${profile.id}`);
 }
 
-/** Answers a "more information needed" message and sends the profile back for verification. */
-export async function replyToConsenterReviewAction(formData: FormData) {
-  const path = "/onboarding/consenter";
+/** Answers a "more information needed" message and sends the profile back for review. */
+export async function replyToReviewAction(formData: FormData) {
   const session = await requireUser();
-  const member = await db.consenterMember.findFirst({
-    where: { userId: session.userId },
-    include: { consenter: true },
-  });
-  if (!member || member.consenter.status !== "MORE_INFO_NEEDED") redirect(path);
-  if (member.role !== "OWNER") fail(path, "Only the account owner can reply to the verification team");
-  const c = member.consenter;
-  const { reply, file } = readReviewReply(formData, path);
-  const stored = file
-    ? await storeOrFail(path, { file, kind: "DOCUMENT", uploadedById: session.userId, consenterDocOf: c.id })
+  const profileId = String(formData.get("profileId") ?? "");
+  const path = `/onboarding?profile=${encodeURIComponent(profileId)}`;
+  const member = profileId
+    ? await db.consenterMember.findUnique({
+        where: { consenterId_userId: { consenterId: profileId, userId: session.userId } },
+        include: { consenter: { include: { asker: { select: { id: true } } } } },
+      })
     : null;
-  await db.consenterProfile.update({ where: { id: c.id }, data: { status: "SUBMITTED" } });
+  if (!member || member.consenter.status !== "MORE_INFO_NEEDED") redirect(path);
+  if (member.role !== "OWNER") fail(path, "Only the profile owner can reply to the review team.");
+  const c = member.consenter;
+
+  const reply = String(formData.get("reply") ?? "").trim().slice(0, 2000);
+  const doc = formData.get("document");
+  const file = doc && typeof doc !== "string" && doc.size > 0 ? doc : null;
+  if (!reply && !file) fail(path, "Write a reply or add a document.");
+  const stored = file
+    ? await tryStore({
+        file,
+        kind: "DOCUMENT",
+        uploadedById: session.userId,
+        consenterDocOf: c.id,
+        requesterDocOf: c.asker?.id,
+        maxMb: 25,
+      })
+    : null;
+  if (file && !stored) fail(path, "We couldn't take that file. Upload a PDF or an image up to 25 MB.");
+
+  await db.$transaction(async (tx) => {
+    await tx.consenterProfile.update({ where: { id: c.id }, data: { status: "SUBMITTED" } });
+    await syncPair(c.id, tx);
+  });
   await audit({
     actorId: session.userId,
     actorName: session.user.name,
-    action: "consenter_info_sent",
+    action: "profile_info_sent",
     module: "consenters",
     targetId: c.id,
     reason: reply || null,
     detail: { documentId: stored?.id ?? null },
   });
-  await notifyReviewers("consenters", {
+  await notifyReviewers({
     title: `${c.displayName} sent more information`,
-    body: [reply, stored && "They added a new document."].filter(Boolean).join(" "),
+    body: [reply, stored && "They added a new document."].filter(Boolean).join(" ") || "They replied.",
     href: `/admin/consenters/${c.id}`,
   });
-  redirect(`${path}?replied=1`);
+  redirect(`/onboarding?replied=1&profile=${c.id}`);
 }
 
-/** Mock OAuth connect: marks a social account as verified via OAuth. */
+/**
+ * Mock OAuth connect: marks a channel as proven through the platform. Admins
+ * treat that as evidence, so only the profile's owner can do it (as on the
+ * owner-only status page that shows the button).
+ */
 export async function mockOauthConnectAction(formData: FormData) {
   const session = await requireUser();
   const accountId = String(formData.get("accountId") ?? "");
-  const account = await db.socialAccount.findUnique({ where: { id: accountId } });
-  if (!account) redirect("/dashboard");
-  if (account.consenterId) {
-    const member = await db.consenterMember.findUnique({
-      where: { consenterId_userId: { consenterId: account.consenterId, userId: session.userId } },
-    });
-    if (!member) redirect("/dashboard");
-  }
-  if (account.requesterId) {
-    const member = await db.requesterMember.findUnique({
-      where: { requesterId_userId: { requesterId: account.requesterId, userId: session.userId } },
-    });
-    if (!member) redirect("/dashboard");
-  }
+  const account = accountId ? await db.socialAccount.findUnique({ where: { id: accountId } }) : null;
+  if (!account?.consenterId) redirect("/onboarding");
+  const member = await db.consenterMember.findUnique({
+    where: { consenterId_userId: { consenterId: account.consenterId, userId: session.userId } },
+  });
+  if (!member || member.role !== "OWNER") redirect("/onboarding");
   await db.socialAccount.update({
     where: { id: accountId },
     data: { verifiedVia: "oauth", verifiedAt: new Date() },
   });
-  redirect(account.consenterId ? "/onboarding/consenter" : "/onboarding/requester");
+  redirect(`/onboarding?profile=${account.consenterId}`);
+}
+
+// ── Membership ────────────────────────────────────────────────
+
+/**
+ * Pays (or renews) the yearly membership for the active profile. Only while
+ * the admin has the membership fee switched on; it is free for now.
+ */
+export async function payMembershipAction() {
+  const path = "/r-panel/billing";
+  const { member, requester } = await requireRequester();
+  if (member.role === "VIEWER") fail(path, "Viewers can't pay. Ask the profile owner.");
+  const settings = await getSettings();
+  if (!settings.membershipFeeOn) fail(path, "Membership is free for now. There's nothing to pay.");
+  if (requester.status !== "APPROVED") fail(path, "You can pay once your ID check is approved.");
+  const { checkoutUrl } = await startMembershipCheckout({
+    requesterId: requester.id,
+    returnTo: "/r-panel/billing?renewed=1",
+  });
+  redirect(checkoutUrl);
 }

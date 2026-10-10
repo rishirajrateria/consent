@@ -1,24 +1,25 @@
 import Link from "next/link";
-import { requireUser, parseProfileContext } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { searchConsenters } from "@/lib/search";
+import { requireUser } from "@/lib/auth";
+import { profilesOf } from "@/lib/profiles";
+import { getSettings } from "@/lib/settings";
+import { searchProfiles } from "@/lib/search";
 import { PageHeader, Card, Input, Button, ButtonLink, VerifiedBadge, EmptyState } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { InvitePanel } from "@/components/invite-panel";
 import { titleCase } from "@/lib/utils";
 import { PausedSentence } from "../r-panel/paused-sentence";
-import { askFromFindAction, renewFromFindAction } from "./actions";
+import { askFromFindAction, membershipFromFindAction } from "./actions";
 import { askingState, type AskingState } from "./asking";
 import { resultDetails } from "./details";
+import { activeSeat } from "../dashboard/active";
 import { Search, UserRound } from "lucide-react";
 
 export const metadata = { title: "Find someone to ask" };
 
 /**
- * Search people to ask, from either workspace. Opening this page never
- * switches the active profile; only asking does (the draft opens in the
- * requester workspace).
+ * Search every verified profile to ask. Opening this page never switches the
+ * active profile; asking as another profile does.
  */
 export default async function FindPage({
   searchParams,
@@ -27,26 +28,28 @@ export default async function FindPage({
 }) {
   const sp = await searchParams;
   const session = await requireUser();
-  const ctx = parseProfileContext(session.activeProfile);
   const q = typeof sp.q === "string" ? sp.q.trim() : "";
 
-  const [results, requesterMemberships, ownProfiles] = await Promise.all([
-    searchConsenters(q),
-    db.requesterMember.findMany({
-      where: { userId: session.userId },
-      orderBy: { createdAt: "asc" },
-      select: {
-        requesterId: true,
-        role: true,
-        requester: {
-          select: { displayName: true, status: true, onboardingFeePaidAt: true, subscriptionEndsAt: true },
-        },
-      },
-    }),
-    db.consenterMember.findMany({ where: { userId: session.userId }, select: { consenterId: true } }),
+  const [results, profiles, settings] = await Promise.all([
+    searchProfiles(q),
+    profilesOf(session.userId),
+    getSettings(),
   ]);
-  const asking = askingState(requesterMemberships, ctx?.kind === "requester" ? ctx.id : null);
-  const own = new Set(ownProfiles.map((m) => m.consenterId));
+  const activeProfileId = activeSeat(profiles, session.activeProfile)?.consenterId ?? null;
+  const asking = askingState(
+    profiles.map((m) => ({
+      profileId: m.consenterId,
+      role: m.role,
+      profile: {
+        displayName: m.consenter.displayName,
+        status: m.consenter.status,
+        membershipEndsAt: m.consenter.asker?.membershipEndsAt ?? null,
+      },
+    })),
+    activeProfileId,
+    settings.membershipFeeOn,
+  );
+  const own = new Set(profiles.map((m) => m.consenterId));
   const { fees, paused } = await resultDetails(results);
   const here = q ? `/find?q=${encodeURIComponent(q)}` : "/find";
 
@@ -79,7 +82,8 @@ export default async function FindPage({
         <Button type="submit">Search</Button>
       </form>
 
-      {asking.kind === "ready" && (
+      {/* Only worth saying when there is more than one profile to ask as. */}
+      {asking.kind === "ready" && profiles.length > 1 && (
         <p className="text-sm text-ink-soft">
           You ask as <strong className="text-ink">{asking.name}</strong>.
         </p>
@@ -113,14 +117,14 @@ export default async function FindPage({
                     {c.category ? ` · ${c.category}` : ""} · score {c.score}
                   </div>
                   <div className="mt-1 text-xs text-ink-soft">
-                    {fee?.price ? (
+                    {!fee || fee.free ? (
+                      "Free to ask"
+                    ) : (
                       <>
                         Consent request fee <strong className="text-ink">{fee.price}</strong>
+                        {fee.note}
                       </>
-                    ) : (
-                      "No consent request fee"
                     )}
-                    {fee?.note}
                   </div>
                 </div>
                 {capacity && (
@@ -146,7 +150,7 @@ export default async function FindPage({
   );
 }
 
-/** The one next step on a result card, by where the person's asking profile stands. */
+/** The one next step on a result card, by where this person's profiles stand. */
 function AskAction({ asking, slug, q, paused }: { asking: AskingState; slug: string; q: string; paused: boolean }) {
   switch (asking.kind) {
     case "ready":
@@ -154,7 +158,7 @@ function AskAction({ asking, slug, q, paused }: { asking: AskingState; slug: str
       return (
         <form action={askFromFindAction}>
           <input type="hidden" name="consenter" value={slug} />
-          <input type="hidden" name="requester" value={asking.requesterId} />
+          <input type="hidden" name="profile" value={asking.profileId} />
           {/* Kept so a failed ask comes back to the same search. */}
           <input type="hidden" name="q" value={q} />
           <SubmitButton variant="secondary" size="sm">
@@ -162,36 +166,39 @@ function AskAction({ asking, slug, q, paused }: { asking: AskingState; slug: str
           </SubmitButton>
         </form>
       );
-    case "unfinished":
+    case "unverified":
       return (
-        <ButtonLink href="/onboarding/requester" variant="secondary" size="sm">
-          Finish setting up your asking profile
-        </ButtonLink>
+        <div className="space-y-2">
+          <p className="text-xs text-ink-soft">You can ask once your ID check is approved.</p>
+          <ButtonLink href="/onboarding" variant="secondary" size="sm">
+            See your ID check
+          </ButtonLink>
+        </div>
       );
-    case "lapsed":
+    case "membership":
       return (
-        // Billing shows the active asking profile, so this opens it on the one that lapsed.
-        <form action={renewFromFindAction} className="space-y-2">
-          <p className="text-xs text-ink-soft">Your yearly plan has ended. Renew it to ask.</p>
-          <input type="hidden" name="requester" value={asking.requesterId} />
+        // Payments & membership shows the active profile, so this opens it on the one that needs it.
+        <form action={membershipFromFindAction} className="space-y-2">
+          <p className="text-xs text-ink-soft">Sending requests needs a membership.</p>
+          <input type="hidden" name="profile" value={asking.profileId} />
           <input type="hidden" name="q" value={q} />
           <SubmitButton variant="secondary" size="sm">
-            Renew your plan
+            Get a membership
           </SubmitButton>
         </form>
       );
     case "viewOnly":
       return (
         <p className="text-xs text-ink-soft">
-          You have view-only access to {asking.name}. Ask the account owner to send requests.
+          You have view-only access to {asking.name}. Ask the profile owner to send requests.
         </p>
       );
     case "none":
       return (
         <div className="space-y-2">
-          <p className="text-xs text-ink-soft">To ask someone, set up your asking profile first. It&apos;s a quick ID check.</p>
-          <ButtonLink href="/onboarding/requester" variant="secondary" size="sm">
-            Set up your asking profile
+          <p className="text-xs text-ink-soft">To ask someone, get verified first. It&apos;s one ID check.</p>
+          <ButtonLink href="/onboarding" variant="secondary" size="sm">
+            Get verified
           </ButtonLink>
         </div>
       );

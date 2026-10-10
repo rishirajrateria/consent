@@ -3,18 +3,20 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireRequester } from "@/lib/auth";
-import { requesterActive, createPlatformPayment } from "@/lib/payments";
+import { startRequestCheckout } from "@/lib/payments";
+import { canSend } from "@/lib/membership";
+import { isSelfAsk } from "@/lib/profiles";
 import { storeUpload } from "@/lib/storage";
 import { getSettings } from "@/lib/settings";
 import { audit } from "@/lib/audit";
 import { notifyConsenterTeam } from "@/lib/notify";
-import { issueGrant } from "@/lib/grants";
+import { GrantError, issueGrant } from "@/lib/grants";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import type { Selection } from "@/lib/rules";
 import type { FileKind, RequestStatus, ValidityKind } from "@prisma/client";
 import { syncConsentPrice, YES_STATUSES } from "@/lib/escrow";
 import { requestCapacity } from "@/lib/capacity";
-import { fmtUtc, pausedNotice } from "@/lib/requests";
+import { fmtUtc, onRequestPaid, pausedNotice } from "@/lib/requests";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
@@ -22,10 +24,11 @@ function fail(path: string, error: string): never {
 
 const VIEW_ONLY = "You have view-only access.";
 
-/** The owner has said yes or a deal is agreed: the current file versions are final. */
-const FILES_LOCKED: RequestStatus[] = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED"];
 const CURRENT_FILE_LOCKED =
-  "The owner already said yes to the current file. To use a different file, raise a new request.";
+  "They already said yes to the current file. To use a different file, send a new request.";
+
+/** Sent requests live under Requests → Sent. */
+const SENT_LIST = "/c-panel/requests?tab=Sent";
 
 /** Where a request lives: a draft is edited, a sent request is followed. */
 function requestPath(request: { id: string; status: string }) {
@@ -38,23 +41,40 @@ async function ownedRequest(id: string) {
     where: { id },
     include: { files: true, consenter: true },
   });
-  if (!request || request.requesterId !== requester.id) redirect("/r-panel/requests");
-  // Viewer seats are read-only: every change (upload, withdraw, agreement
-  // mode, draft edits) is refused back on the request's own page.
+  if (!request || request.requesterId !== requester.id) redirect(SENT_LIST);
+  // Viewer seats are read-only: every change (upload, withdraw, answer, draft
+  // edits) is refused back on the request's own page.
   if (member.role === "VIEWER") fail(requestPath(request), VIEW_ONLY);
   return { session, requester, request };
 }
 
 // ── Draft creation & editing ──────────────────────────────────
 
+/** Back to Find with an error, keeping the search. */
+function backToFind(formData: FormData, error: string): never {
+  const q = String(formData.get("q") ?? "").trim();
+  redirect(`/find?${new URLSearchParams(q ? { q, error } : { error })}`);
+}
+
+/**
+ * "Ask" on Find or a public profile: opens a draft request from the active
+ * profile to the one asked (or the draft already started for them).
+ */
 export async function createDraftAction(formData: FormData) {
   const { session, member, requester } = await requireRequester();
-  if (member.role === "VIEWER") fail("/r-panel/new", VIEW_ONLY);
-  if (!requesterActive(requester))
-    fail("/r-panel/new", "Your account must be approved and your subscription active to send requests");
+  if (member.role === "VIEWER") backToFind(formData, "You have view-only access, so you can't send requests for this profile.");
+  const settings = await getSettings();
+  if (!canSend(requester, settings.membershipFeeOn))
+    backToFind(
+      formData,
+      requester.status !== "APPROVED"
+        ? "You can ask once your ID check is approved."
+        : "Sending requests needs a membership. Get one in Payments & membership.",
+    );
   const slug = String(formData.get("consenter") ?? "");
-  const consenter = await db.consenterProfile.findUnique({ where: { slug } });
-  if (!consenter || consenter.status !== "APPROVED") fail("/r-panel/new", "Consenter not found");
+  const consenter = slug ? await db.consenterProfile.findUnique({ where: { slug } }) : null;
+  if (!consenter || consenter.status !== "APPROVED") backToFind(formData, "We couldn't find that profile.");
+  if (isSelfAsk(consenter.id, requester)) backToFind(formData, "This is your profile. You can't ask yourself.");
 
   const blocked = await db.listEntry.findUnique({
     where: {
@@ -65,11 +85,10 @@ export async function createDraftAction(formData: FormData) {
       },
     },
   });
-  if (blocked) fail("/r-panel/new", "This profile is not accepting requests from you");
+  if (blocked) backToFind(formData, `${consenter.displayName} isn't taking requests from you.`);
 
-  const settings = await getSettings();
   if (requester.score < settings.requesterMinScoreGate)
-    fail("/r-panel/new", `Your Consent Score (${requester.score}) is below the platform minimum (${settings.requesterMinScoreGate}) for sending requests`);
+    backToFind(formData, `Your Consent Score is too low to send requests right now (the minimum is ${settings.requesterMinScoreGate}).`);
 
   const existingDraft = await db.consentRequest.findFirst({
     where: { requesterId: requester.id, consenterId: consenter.id, status: "DRAFT" },
@@ -158,7 +177,8 @@ export async function saveDetailsAction(formData: FormData) {
 
   const context = String(formData.get("context") ?? "").trim();
   const creativePlan = String(formData.get("creativePlan") ?? "").trim();
-  if (context.length < 20) fail(path, "Describe the content and where the consenter appears (min 20 characters)");
+  if (context.length < 20)
+    fail(path, `Describe the content and where ${request.consenter.displayName} appears (at least 20 characters)`);
   if (creativePlan.length < settings.minCreativePlanChars)
     fail(path, `Explain your creative plan and intent in at least ${settings.minCreativePlanChars} characters`);
 
@@ -194,6 +214,42 @@ export async function saveDetailsAction(formData: FormData) {
   redirect(`${path}?saved=details#review`);
 }
 
+/**
+ * Issues the certificate for a yes whose final content file is in, in the
+ * name of whoever said yes (read now, so a yes given a moment ago counts),
+ * then opens the request with `?certified=<note>`.
+ */
+async function certify(id: string, path: string, note: "upload" | "ready" | "existing"): Promise<never> {
+  const now = await db.consentRequest.findUnique({
+    where: { id },
+    select: { decidedById: true, decidedByRuleName: true, consenter: { select: { displayName: true } } },
+  });
+  const decider = now?.decidedById
+    ? await db.user.findUnique({ where: { id: now.decidedById }, select: { name: true } })
+    : null;
+  try {
+    await issueGrant(id, decider?.name ?? now?.decidedByRuleName ?? now?.consenter.displayName);
+  } catch (e) {
+    if (e instanceof GrantError) fail(path, e.message);
+    throw e;
+  }
+  redirect(`${path}?certified=${note}`);
+}
+
+/**
+ * A yes whose final content file is already in (it came in while the yes was
+ * being given): the certificate is owed, so this issues it from that file.
+ */
+export async function issueCertificateAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { request } = await ownedRequest(id);
+  const path = `/r-panel/requests/${id}`;
+  if (request.status === "APPROVED") redirect(path);
+  if (request.status !== "APPROVED_IN_PRINCIPLE") fail(path, "This request isn't approved, so there's no certificate to get.");
+  if (!request.files.some((f) => f.kind === "RAW_CONTENT")) fail(path, "Upload the final content file first.");
+  await certify(id, path, "ready");
+}
+
 export async function uploadRequestFileAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, request } = await ownedRequest(id);
@@ -206,22 +262,26 @@ export async function uploadRequestFileAction(formData: FormData) {
       ? request.files.filter((f) => f.kind === kind).sort((a, b) => b.version - a.version)[0]?.id
       : undefined;
 
-  // Once the owner has said yes (or a deal is agreed), the files they said yes
-  // to are fixed: the certificate binds to those exact files, so a swapped or
-  // added file would never be covered (a first thumbnail after the yes would
-  // otherwise be bound without the owner ever seeing it). A first final file
-  // is still accepted (approved in principle needs one). A revision while the
-  // owner's question is open is sent with the answer (answerAskAction).
-  if (replacesId && FILES_LOCKED.includes(request.status))
+  // Once the owner has said yes, the files they said yes to are fixed: the
+  // certificate binds to those exact files, so a swapped or added file would
+  // never be covered (a first thumbnail after the yes would otherwise be bound
+  // without the owner ever seeing it). Approved in principle still takes the
+  // first final content file, which issues the certificate. A revision while
+  // the owner's question is open is sent with the answer (answerAskAction).
+  const owner = request.consenter.displayName;
+  // Approved in principle with a final file already in (it came in as they
+  // said yes): the certificate is owed for that file, never a dead end.
+  if (kind === "RAW_CONTENT" && replacesId && request.status === "APPROVED_IN_PRINCIPLE")
+    await certify(id, path, "existing");
+  if (replacesId && YES_STATUSES.includes(request.status))
     fail(path, CURRENT_FILE_LOCKED);
   if ((kind === "ASSET" || kind === "THUMBNAIL") && YES_STATUSES.includes(request.status))
-    fail(path, replacesId ? CURRENT_FILE_LOCKED : "The owner already said yes to these files. To add another, raise a new request.");
-  // After a grant is issued the approval is bound to the approved hashes —
-  // a new version never transfers the grant.
+    fail(path, replacesId ? CURRENT_FILE_LOCKED : `${owner} already said yes to these files. To add another, send a new request.`);
+  // A certificate is bound to the approved files: a new version never moves it.
   if (["APPROVED", "DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"].includes(request.status))
-    fail(path, "This request is closed — submit a fresh request for a new file version");
+    fail(path, "This request has ended. Send a new request for a new file.");
   if (request.status === "CHANGES_REQUESTED")
-    fail(path, "Add the new file to your answer, so the owner gets both together.");
+    fail(path, `Add the new file to your answer, so ${owner} gets both together.`);
 
   const file = formData.get("file") as File | null;
   if (!file || file.size === 0) fail(path, "Choose a file to upload");
@@ -250,9 +310,12 @@ export async function uploadRequestFileAction(formData: FormData) {
     },
   });
 
-  // Approved in principle + final file → issue the grant now
-  if (request.status === "APPROVED_IN_PRINCIPLE" && kind === "RAW_CONTENT") {
-    await issueGrant(id, request.decidedByRuleName ?? "Consenter");
+  // Approved in principle + the final file → the certificate is issued now.
+  // The status is read again: a yes given while the file was uploading read
+  // the files before this one was in, so it left the certificate to this upload.
+  if (kind === "RAW_CONTENT") {
+    const now = await db.consentRequest.findUnique({ where: { id }, select: { status: true } });
+    if (now?.status === "APPROVED_IN_PRINCIPLE") await certify(id, path, "upload");
   }
   redirect(`${path}?saved=upload#uploads`);
 }
@@ -271,11 +334,21 @@ export async function submitRequestAction(formData: FormData) {
   const { requester, request } = await ownedRequest(id);
   const path = `/r-panel/requests/${id}/edit`;
   if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
-  if (!requesterActive(requester)) fail(path, "Your subscription must be active to submit requests");
+  const owner = request.consenter.displayName;
+  const settings = await getSettings();
+  if (!canSend(requester, settings.membershipFeeOn))
+    fail(
+      path,
+      requester.status !== "APPROVED"
+        ? "You can send requests once your ID check is approved."
+        : "Sending requests needs a membership. Get one in Payments & membership.",
+    );
+  if (isSelfAsk(request.consenterId, requester)) fail(path, "This is your profile. You can't ask yourself.");
+  if (request.consenter.status !== "APPROVED") fail(path, `${owner} isn't taking requests right now.`);
 
   const selections = request.selections as Selection[];
-  if (!selections?.length) fail(path, "Select platforms and formats first");
-  if (!request.assetTypeIds.length) fail(path, "Select asset types first");
+  if (!selections?.length) fail(path, "Choose platforms and formats first");
+  if (!request.assetTypeIds.length) fail(path, "Choose what of them you use first");
   if (!request.context || !request.creativePlan || !request.intentCategoryId)
     fail(path, "Complete the context, creative plan and intent section");
 
@@ -283,34 +356,38 @@ export async function submitRequestAction(formData: FormData) {
     request.assetTypeNames.length === 1 && request.assetTypeNames[0].toLowerCase() === "name";
   const hasAssets = request.files.some((f) => f.kind === "ASSET");
   if (!onlyName && !hasAssets)
-    fail(path, "Upload the exact assets (images/clips) you will use — required unless the only asset type is Name");
+    fail(path, "Upload the exact images or clips you will use. Only a request for their name alone needs none.");
   if (request.thumbnailUsed && !request.files.some((f) => f.kind === "THUMBNAIL"))
-    fail(path, "You indicated a thumbnail uses the consenter — upload it separately");
-  // Never take fees that don't fully come back (the platform fee, 20% of a
-  // consent request fee) for a request the owner's public matrix would deny
-  // the moment it is paid.
+    fail(path, `You said the thumbnail uses ${owner}. Upload it too.`);
+  // Never take fees that don't fully come back (the platform fee, and 20% of
+  // the consent request fee) for a request the owner's public terms would
+  // decline the moment it is sent.
   const blocked = await blockedCombinations({
     consenterId: request.consenterId,
     requester,
     selections,
     assetTypeIds: request.assetTypeIds,
   });
-  if (blocked.length) fail(path, blockedPayNote(request.consenter.displayName));
+  if (blocked.length) fail(path, blockedPayNote(owner));
   // The owner's request limits: while new requests are paused, nothing is
-  // charged. The draft is kept so it can be sent once they open again; Step 4
-  // says why and when, in the viewer's own time zone.
+  // sent or charged. The draft is kept so it can be sent once they open
+  // again; Step 4 says why and when, in the viewer's own time zone.
   const capacity = await requestCapacity(request.consenterId);
   if (capacity.paused) redirect(`${path}?paused=1#review`);
   if (formData.get("acceptTerms") !== "on")
-    fail(path, "You must accept the terms, including the mandatory consent-link rule");
+    fail(path, "Accept the terms, including the consent-link rule, to send it");
 
-  const { checkoutUrl } = await createPlatformPayment({
+  const checkout = await startRequestCheckout({
     requesterId: requester.id,
-    purpose: "PER_REQUEST",
     requestId: id,
     returnTo: `/r-panel/requests/${id}?submitted=1`,
   });
-  redirect(checkoutUrl);
+  // Free to ask: nothing to pay, so it is sent straight away.
+  if (checkout.free) {
+    await onRequestPaid(id);
+    redirect(`/r-panel/requests/${id}?submitted=1`);
+  }
+  redirect(checkout.checkoutUrl);
 }
 
 /**
@@ -327,7 +404,7 @@ export async function discardDraftAction(formData: FormData) {
   ]);
   if (paid || reports) {
     // Records point at it, so it can't be deleted; close it instead. It was
-    // never submitted, so the owner's side does not list it.
+    // never sent, so the person asked never sees it.
     await db.consentRequest.update({ where: { id }, data: { status: "WITHDRAWN" } });
     await syncConsentPrice(id);
   } else {
@@ -344,22 +421,39 @@ export async function discardDraftAction(formData: FormData) {
     module: "requests",
     targetId: id,
   });
-  redirect("/r-panel/requests?tab=Drafts&discarded=1");
+  redirect(`${SENT_LIST}&discarded=1`);
 }
+
+/** Before any answer: the asker can still take the request back. */
+const WITHDRAWABLE: RequestStatus[] = ["SUBMITTED", "PENDING", "CHANGES_REQUESTED"];
 
 export async function withdrawRequestAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request } = await ownedRequest(id);
+  const { session, requester, request } = await ownedRequest(id);
+  const path = `/r-panel/requests/${id}`;
   // An unsent draft is discarded (discardDraftAction), never withdrawn.
-  if (!["SUBMITTED", "PENDING", "CHANGES_REQUESTED"].includes(request.status))
-    fail(`/r-panel/requests/${id}`, "This request can no longer be withdrawn");
-  await db.consentRequest.update({ where: { id }, data: { status: "WITHDRAWN" } });
-  await db.requestEvent.create({
-    data: { requestId: id, type: "withdrawn", actorName: session.user.name, actorSide: "requester" },
+  if (!WITHDRAWABLE.includes(request.status)) fail(path, "This request can no longer be withdrawn.");
+  // Only while it is still open, even if the owner answers at the same moment.
+  const withdrawn = await db.$transaction(async (tx) => {
+    const moved = await tx.consentRequest.updateMany({
+      where: { id, status: { in: WITHDRAWABLE } },
+      data: { status: "WITHDRAWN" },
+    });
+    if (moved.count === 0) return false;
+    await tx.requestEvent.create({
+      data: { requestId: id, type: "withdrawn", actorName: session.user.name, actorSide: "requester" },
+    });
+    return true;
   });
-  // Withdrawn before a yes: 80% of the held consent request fee is refunded.
+  if (!withdrawn) fail(path, `${request.consenter.displayName} already answered, so it can't be withdrawn.`);
+  // Withdrawn before a yes: 80% of a held consent request fee is refunded.
   await syncConsentPrice(id);
-  redirect(`/r-panel/requests/${id}`);
+  await notifyConsenterTeam(request.consenterId, {
+    title: `${requester.displayName} withdrew request #${request.number}`,
+    body: "Nothing more to do. It's no longer waiting for your answer.",
+    href: `/c-panel/requests/${id}`,
+  });
+  redirect(path);
 }
 
 const ANSWER_MAX = 4000;
@@ -369,7 +463,7 @@ function normText(s: string) {
   return s.replace(/\r\n?/g, "\n").trim();
 }
 
-/** A request the owner has already decided on (said yes, agreed a deal, or said no). */
+/** A request the owner has already decided on (said yes or no). */
 const DECIDED: RequestStatus[] = [...YES_STATUSES, "DENIED"];
 
 /** Why an answer wasn't sent: a teammate answered first, or the question is gone. */
@@ -388,9 +482,9 @@ async function notSentReason(id: string, owner: string) {
 }
 
 /**
- * The requester answers the owner's Ask in writing, and may update their plan
- * and upload a new final file with it. Sending the answer puts the request
- * back with the owner.
+ * The asker answers the owner's Ask in writing, and may update their plan and
+ * upload a new final file with it. Sending the answer puts the request back
+ * with the owner.
  */
 export async function answerAskAction(formData: FormData) {
   const id = String(formData.get("id"));
@@ -493,31 +587,4 @@ export async function answerAskAction(formData: FormData) {
     }
   }
   redirect(`${path}?answered=1`);
-}
-
-// Requester chooses to continue with the default Consent-app record.
-export async function proceedAppRecordAction(formData: FormData) {
-  const id = String(formData.get("id"));
-  const { session, request } = await ownedRequest(id);
-  if (request.status !== "AGREEMENT_MODE_PENDING") redirect(`/r-panel/requests/${id}`);
-  await db.consentRequest.update({ where: { id }, data: { agreementMode: "APP_RECORD" } });
-  await db.requestEvent.create({
-    data: {
-      requestId: id,
-      type: "agreement_mode_chosen",
-      actorName: session.user.name,
-      actorSide: "requester",
-      detail: { mode: "Consent-app record only" },
-    },
-  });
-  const hasRaw = request.files.some((f) => f.kind === "RAW_CONTENT");
-  if (hasRaw) {
-    const decider = request.decidedById
-      ? await db.user.findUnique({ where: { id: request.decidedById } })
-      : null;
-    await issueGrant(id, decider?.name ?? request.decidedByRuleName ?? "Consenter");
-  } else {
-    await db.consentRequest.update({ where: { id }, data: { status: "APPROVED_IN_PRINCIPLE" } });
-  }
-  redirect(`/r-panel/requests/${id}`);
 }

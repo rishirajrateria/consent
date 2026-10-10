@@ -6,13 +6,14 @@ import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { addListEntryAction, removeListEntryAction } from "../rules/actions";
 import { Ban, Star } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
+import { permLabel, seatPerms } from "../team/roles";
 
 export const metadata = { title: "Blacklist & whitelist" };
 
 export default async function ListsPage({ searchParams }: PageProps<"/c-panel/lists">) {
   const sp = await searchParams;
   const { consenter, member } = await requireConsenter();
-  const canEdit = member.role === "OWNER" || member.canEditRules;
+  const canEdit = seatPerms(member).canEditRules;
   const entries = await db.listEntry.findMany({
     where: { consenterId: consenter.id },
     include: { requester: true },
@@ -26,18 +27,18 @@ export default async function ListsPage({ searchParams }: PageProps<"/c-panel/li
       <PageHeader
         kicker={consenter.displayName}
         title="Blacklist & whitelist"
-        desc="Blocked requesters can't send you requests. Whitelisted requesters can be used as a standing-rule condition."
+        desc="People on your blacklist can't send you requests. Use your whitelist in a standing rule, for example to approve trusted people automatically."
       />
       <ErrorNote error={sp.error as string | undefined} />
       {sp.saved && <SuccessNote msg="List updated." />}
       {!canEdit && (
-        <Alert>You can view these lists. Editing needs the &lsquo;Edit matrix &amp; rules&rsquo; permission.</Alert>
+        <Alert>You can view these lists. Editing needs the &lsquo;{permLabel("canEditRules")}&rsquo; permission.</Alert>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {([
           ["BLACKLIST", "Blacklist", Ban, blacklist, "They see “This profile is not accepting requests from you”."],
-          ["WHITELIST", "Whitelist", Star, whitelist, "Trusted requesters — e.g. auto-approve them with a rule."],
+          ["WHITELIST", "Whitelist", Star, whitelist, "People you trust. A standing rule can approve them automatically."],
         ] as const).map(([kind, title, Icon, list, desc]) => (
           <Card key={kind} className="space-y-4">
             <SectionTitle title={title} desc={desc} />
@@ -45,7 +46,7 @@ export default async function ListsPage({ searchParams }: PageProps<"/c-panel/li
               <form action={addListEntryAction} className="flex flex-wrap items-end gap-2">
                 <input type="hidden" name="kind" value={kind} />
                 <div className="min-w-40 flex-1">
-                  <Field label="Requester name or handle" required>
+                  <Field label="Name, handle or profile link" required>
                     <Input name="requester" required placeholder="Acme Clips" />
                   </Field>
                 </div>

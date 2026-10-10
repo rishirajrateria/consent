@@ -1,29 +1,50 @@
 import Link from "next/link";
 import { Card, SectionTitle, StatusBadge, KV, Divider, Alert } from "@/components/ui";
 import { storage } from "@/lib/storage";
-import { fmtDateTime, fmtBytes, titleCase, fmtMoney, statusLabel } from "@/lib/utils";
+import { cn, fmtDate, fmtDateTime, fmtBytes, fmtMoney, shownEvent, statusLabel } from "@/lib/utils";
 import type { Selection } from "@/lib/rules";
-import type { ContactField, SharedContact } from "@/lib/requests";
-import type { CallMode, Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { ReactNode } from "react";
 import { FileText, Download, Award, Timer } from "lucide-react";
-import { NegotiationActions } from "./negotiation-actions";
 import { LocalTime } from "./local-time";
-import { countersLeft, MAX_COUNTER_OFFERS } from "@/lib/negotiation";
 
-export type FullRequest = Prisma.ConsentRequestGetPayload<{
-  include: {
-    consenter: true;
-    requester: true;
-    files: true;
-    offers: { include: { byUser: true } };
-    events: true;
-    grant: true;
-    agreement: true;
-    payments: true;
-    reports: true;
-  };
-}>;
+/**
+ * Everything both request pages show. The asker's profile (its receiving
+ * half: public page, score) comes with the sending half, so pages can link to
+ * the one public profile and show the one Consent Score.
+ */
+export const fullRequestInclude = {
+  consenter: true,
+  requester: { include: { consenter: { select: { slug: true, score: true, bio: true } } } },
+  files: true,
+  events: true,
+  grant: true,
+  payments: true,
+  reports: true,
+} satisfies Prisma.ConsentRequestInclude;
+
+export type FullRequest = Prisma.ConsentRequestGetPayload<{ include: typeof fullRequestInclude }>;
+
+/** The name of whoever is on that side of the request, for copy: never "requester" or "consenter". */
+export function sideName(request: Pick<FullRequest, "consenter" | "requester">, side: string | null | undefined) {
+  if (side === "consenter") return request.consenter.displayName;
+  if (side === "requester") return request.requester.displayName;
+  if (side === "admin") return "Consent team";
+  if (side === "system") return "Automatic";
+  return null;
+}
+
+/**
+ * How long the consent lasts. An end date always shows: a request approved
+ * with an earlier end before only time windows could get one may carry an
+ * end date on a single publication or perpetual request.
+ */
+function validityText(r: Pick<FullRequest, "validityKind" | "validFrom" | "validUntil">): string {
+  if (r.validityKind === "DATE_RANGE") return `${fmtDateTime(r.validFrom)} → ${fmtDateTime(r.validUntil)}`;
+  if (r.validityKind === "SINGLE_PUBLICATION")
+    return r.validUntil ? `Single publication, until ${fmtDate(r.validUntil)}` : "Single publication";
+  return r.validUntil ? `Until ${fmtDate(r.validUntil)}` : "Perpetual";
+}
 
 export function ScopeCard({ request }: { request: FullRequest }) {
   const selections = (request.approvedSelections ?? request.selections) as Selection[];
@@ -31,7 +52,10 @@ export function ScopeCard({ request }: { request: FullRequest }) {
   const reduced = request.approvedSelections && JSON.stringify(request.approvedSelections) !== JSON.stringify(original);
   return (
     <Card className="space-y-3">
-      <SectionTitle title="Requested scope" desc={reduced ? "Shown as approved (conditions applied by the consenter)." : undefined} />
+      <SectionTitle
+        title="Requested scope"
+        desc={reduced ? `Shown as approved, with ${request.consenter.displayName}'s conditions.` : undefined}
+      />
       <div className="flex flex-wrap gap-1.5">
         {selections.map((s) => (
           <span key={s.formatId} className="rounded-full border border-ink/20 bg-white/60 px-2.5 py-1 text-xs font-medium">
@@ -49,11 +73,7 @@ export function ScopeCard({ request }: { request: FullRequest }) {
         )}
       </div>
       <Divider />
-      <KV k="Validity" v={
-        request.validityKind === "SINGLE_PUBLICATION" ? "Single publication"
-        : request.validityKind === "PERPETUAL" ? "Perpetual"
-        : `${fmtDateTime(request.validFrom)} → ${fmtDateTime(request.validUntil)}`
-      } />
+      <KV k="Validity" v={validityText(request)} />
       {request.plannedPublishAt && <KV k="Planned publish" v={fmtDateTime(request.plannedPublishAt)} />}
       <KV k="Intent" v={request.intentCategoryName ?? "—"} />
       {request.conditionsNote && <KV k="Conditions" v={request.conditionsNote} />}
@@ -65,15 +85,15 @@ export function ScopeCard({ request }: { request: FullRequest }) {
 
 export function FilesCard({ request, watermark }: { request: FullRequest; watermark?: boolean }) {
   const groups: [string, string][] = [
-    ["RAW_CONTENT", "Raw final content"],
-    ["ASSET", "Assets of the consenter"],
+    ["RAW_CONTENT", "Final content"],
+    ["ASSET", `Assets of ${request.consenter.displayName}`],
     ["THUMBNAIL", "Thumbnail"],
   ];
-  // A file another upload replaced is superseded; the grant never covers it.
+  // A file another upload replaced is superseded; the certificate never covers it.
   const replaced = new Set(request.files.map((f) => f.replacesId).filter(Boolean));
   return (
     <Card className="space-y-4" id="uploads">
-      <SectionTitle title="The exact files" desc="Approval is locked to these exact files — upload a new version and it needs its own approval." />
+      <SectionTitle title="The exact files" desc="Approval is locked to these exact files. A new version needs its own approval." />
       {watermark && (
         <p className="text-xs text-ink-faint">Previews are watermarked for review. Links expire after 10 minutes.</p>
       )}
@@ -106,7 +126,7 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
                 </div>
                 <div className="mt-1 font-mono text-[10px] text-ink-faint break-all">sha256: {f.sha256}</div>
                 <div className="text-[10px] text-ink-faint">{fmtBytes(f.size)} · {fmtDateTime(f.createdAt)}
-                  {f.approvedInGrant ? " · bound to grant" : request.grant && !replaced.has(f.id) ? " · not covered by the grant" : ""}
+                  {f.approvedInGrant ? " · on the certificate" : request.grant && !replaced.has(f.id) ? " · not on the certificate" : ""}
                 </div>
               </div>
             ))}
@@ -120,130 +140,40 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
   );
 }
 
+/** A list of money lines (MoneyRow), one under the other. */
+export function MoneyRows({ children }: { children: ReactNode }) {
+  return <dl className="divide-y divide-ink/10 text-sm">{children}</dl>;
+}
+
+/**
+ * One money line: the label and the amount on one line (the amount never
+ * wraps), and the note under them across the full width, so a narrow phone
+ * screen doesn't squeeze the label into a thin column.
+ */
+export function MoneyRow({
+  label,
+  amount,
+  note,
+  strong,
+}: {
+  label: ReactNode;
+  amount: ReactNode;
+  note?: ReactNode;
+  strong?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 py-2.5">
+      <dt className={strong ? "font-medium text-ink" : "text-ink-soft"}>{label}</dt>
+      <dd className={cn("whitespace-nowrap text-right tabular-nums", strong && "font-semibold")}>{amount}</dd>
+      {note && <dd className="col-span-2 mt-0.5 text-xs leading-relaxed text-ink-faint">{note}</dd>}
+    </div>
+  );
+}
+
 /** View-only line for seats that can see a card but not act on it. */
 export function ViewOnlyNote({ children = "You have view-only access." }: { children?: ReactNode }) {
   return <p className="border-t hairline pt-3 text-xs text-ink-faint">{children}</p>;
 }
-
-export function NegotiationCard({
-  request,
-  side,
-  canAct: allowed = true,
-  canApprove = true,
-}: {
-  request: FullRequest;
-  side: "consenter" | "requester";
-  /** False for read-only seats: requester viewers, owner's teammates who can't negotiate. */
-  canAct?: boolean;
-  /** Owner's side: whether this teammate can approve, which is how the owner accepts a fee. */
-  canApprove?: boolean;
-}) {
-  const offers = [...request.offers].sort((a, b) => b.version - a.version);
-  const latest = offers[0];
-  const open = request.status === "IN_NEGOTIATION";
-  if (offers.length === 0 && !open) return null;
-  return (
-    <Card className="space-y-4" id="negotiation">
-      <SectionTitle
-        title="Fee negotiation"
-        desc={`Each side can send up to ${MAX_COUNTER_OFFERS} counter-offers. Once a fee is agreed, the owner can share contact details and payment is settled directly, never through Consent.`}
-      />
-      <ol className="space-y-2">
-        {offers.map((o) => (
-          <li key={o.id} className="glass-subtle flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm">
-            <span className="rounded-full bg-ink/5 px-2 py-0.5 font-mono text-[10px]">v{o.version}</span>
-            <span className="font-semibold">{fmtMoney(o.amount.toString(), o.currency)}</span>
-            <span className="text-ink-soft">by {o.byUser.name} ({o.bySide})</span>
-            {o.scopeNote && <span className="w-full text-xs text-ink-soft sm:w-auto">“{o.scopeNote}”</span>}
-            <span className="ml-auto text-xs text-ink-faint">{fmtDateTime(o.createdAt)}</span>
-            <StatusBadge status={o.status === "ACCEPTED" ? "APPROVED" : o.status === "OPEN" ? "PENDING" : "CLOSED"} />
-          </li>
-        ))}
-      </ol>
-      {open && latest && !allowed && (
-        <ViewOnlyNote>
-          {side === "requester"
-            ? "You have view-only access."
-            : "You can follow the fee here. Answering it needs the negotiate permission."}
-        </ViewOnlyNote>
-      )}
-      {open && latest && allowed && (
-        <NegotiationActions
-          requestId={request.id}
-          side={side}
-          canApprove={canApprove}
-          latestId={latest.id}
-          latestLabel={fmtMoney(latest.amount.toString(), latest.currency)}
-          latestNote={latest.scopeNote}
-          latestIsTheirs={latest.bySide !== side && latest.status === "OPEN"}
-          currency={latest.currency}
-          myCountersLeft={countersLeft(request.offers, side)}
-          theirCountersLeft={countersLeft(request.offers, side === "consenter" ? "requester" : "consenter")}
-          otherName={side === "consenter" ? request.requester.displayName : request.consenter.displayName}
-        />
-      )}
-    </Card>
-  );
-}
-
-const CONTACT_ROWS: [ContactField, string][] = [
-  ["email", "Email"],
-  ["phone", "Phone"],
-  ["address", "Address"],
-  ["manager", "Manager/agency"],
-];
-
-export function ContactsCard({ request }: { request: FullRequest }) {
-  if (!request.contactsRevealed || !request.contactsSnapshot) return null;
-  // Snapshots from before addresses could be shared have no address key.
-  const snap = request.contactsSnapshot as unknown as {
-    consenter: Partial<SharedContact> & { name: string };
-    requester: Partial<SharedContact> & { name: string };
-    revealedAt: string;
-  };
-  return (
-    <Card className="space-y-3">
-      <SectionTitle
-        title="Shared contact details"
-        desc={
-          request.agreedAmount
-            ? "Shared by the owner. Settle the agreed fee directly. Consent does not track or process this payment in any way."
-            : "Shared by the owner, so you can reach each other directly."
-        }
-      />
-      <div className="grid gap-3 sm:grid-cols-2">
-        {([["Consenter", snap.consenter], ["Requester", snap.requester]] as const).map(([label, c]) => {
-          const rows = CONTACT_ROWS.filter(([f]) => c[f]);
-          return (
-            <div key={label} className="glass-subtle space-y-2 px-4 py-3 text-sm">
-              <div className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{label} — {c.name}</div>
-              {rows.length === 0 ? (
-                <p className="text-ink-faint">No details shared.</p>
-              ) : (
-                <dl className="space-y-1.5">
-                  {rows.map(([f, name]) => (
-                    <div key={f}>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">{name}</dt>
-                      <dd className="whitespace-pre-line break-words">{c[f]}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {request.agreedAmount && (
-        <Alert>
-          Agreed fee: <strong>{fmtMoney(request.agreedAmount.toString(), request.agreedCurrency ?? "USD")}</strong> — handled directly between parties, not through Consent.
-        </Alert>
-      )}
-    </Card>
-  );
-}
-
-const MODE_NAME: Record<CallMode, string> = { VIDEO: "video call", PHONE: "phone call", IN_PERSON: "in person" };
-const FIELD_NAME: Record<ContactField, string> = { email: "email", phone: "phone", address: "address", manager: "manager/agency" };
 
 /** A string from an event's detail, or "". */
 function detailText(detail: Prisma.JsonValue, key: string): string {
@@ -261,41 +191,82 @@ function Said({ label, text }: { label: string; text: string }) {
   );
 }
 
-/** A timeline line; a refunded consent request fee shows the part that went back. */
-function eventTitle(e: { type: string; detail: Prisma.JsonValue }): ReactNode {
+const FILE_KIND: Record<string, string> = {
+  ASSET: "Asset",
+  RAW_CONTENT: "Final content file",
+  THUMBNAIL: "Thumbnail",
+  EVIDENCE: "Evidence",
+};
+
+/** A timeline line, in plain words; a refunded consent request fee shows the part that went back. */
+function eventTitle(e: { type: string; detail: Prisma.JsonValue }, owner: string): ReactNode {
   switch (e.type) {
+    case "submitted":
+      return "Request sent";
+    case "auto_approved": {
+      const rule = detailText(e.detail, "rule");
+      return rule ? <Said label={`Approved automatically by ${owner}'s terms`} text={rule} /> : `Approved automatically by ${owner}'s terms`;
+    }
+    case "auto_denied":
+      return `Declined automatically by ${owner}'s terms`;
+    case "routed":
+      return "Passed to a teammate";
+    case "approved":
+    case "approved_with_conditions": {
+      const note = detailText(e.detail, "conditionsNote");
+      const until = detailText(e.detail, "validUntil");
+      const label = note || e.type === "approved_with_conditions" ? "Approved with conditions" : "Approved";
+      // The end date it was approved until, so a shorter one the owner set is seen.
+      const withEnd = until && !Number.isNaN(new Date(until).getTime()) ? `${label}, until ${fmtDate(until)}` : label;
+      return note ? <Said label={withEnd} text={note} /> : withEnd;
+    }
     case "changes_requested":
       return <Said label="Asked" text={detailText(e.detail, "note")} />;
     case "ask_answered":
       return <Said label="Answered" text={detailText(e.detail, "answer")} />;
-    case "agreement_redraft_requested":
-      return <Said label="Asked for a new agreement draft" text={detailText(e.detail, "reason")} />;
-    case "meeting_scheduled":
-    case "meeting_moved": {
-      const at = detailText(e.detail, "startsAt");
-      const mode = detailText(e.detail, "mode") as CallMode;
-      const label = e.type === "meeting_scheduled" ? "Meeting scheduled" : "Meeting moved";
-      if (!at) return label;
-      return (
-        <>
-          {label} {e.type === "meeting_scheduled" ? "for" : "to"} <LocalTime iso={at} weekday withZone />
-          {MODE_NAME[mode] ? ` · ${MODE_NAME[mode]}` : ""}
-        </>
-      );
+    case "denied":
+      return <Said label="Declined" text={detailText(e.detail, "reason")} />;
+    case "withdrawn":
+      return "Withdrawn";
+    case "file_uploaded": {
+      const kind = FILE_KIND[detailText(e.detail, "kind")] ?? "File";
+      const name = detailText(e.detail, "name");
+      return name ? `${kind} uploaded: ${name}` : `${kind} uploaded`;
     }
-    case "meeting_cancelled":
-      return "Meeting cancelled";
-    case "contacts_shared": {
-      const d = (e.detail ?? {}) as { fields?: ContactField[] };
-      const names = (d.fields ?? []).map((f) => FIELD_NAME[f]).filter(Boolean);
-      return names.length ? `Contact details shared (${names.join(", ")})` : "Contact details shared";
-    }
+    case "grant_issued":
+      return "Certificate issued";
+    case "grant_revoked":
+      return <Said label="Consent revoked" text={detailText(e.detail, "reason")} />;
+    case "takedown_raised":
+      return <Said label="Takedown requested" text={detailText(e.detail, "reason")} />;
+    case "takedown_marked_down":
+      return "Marked as taken down";
+    case "takedown_declined":
+      return <Said label="Takedown declined" text={detailText(e.detail, "declineReason")} />;
+    case "takedown_confirmed":
+      return "Takedown confirmed as done";
+    case "takedown_claim_rejected":
+      return "Said the content is still live";
+    case "takedown_ignored":
+      return "Takedown not answered in time";
+    case "report_filed":
+      return <Said label="Breach reported" text={detailText(e.detail, "reason")} />;
+    case "report_response":
+      return "Answered a breach report";
     case "auto_expired":
       return "Expired unanswered";
     case "auto_closed": {
       const reason = detailText(e.detail, "reason");
       return reason ? `Closed: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : "Closed";
     }
+    case "closed":
+      return "Closed";
+    case "closed_by_consent":
+      return <Said label="Closed by the Consent team" text={detailText(e.detail, "note")} />;
+    case "admin_force_expired":
+      return "Expired by the Consent team";
+    case "admin_note":
+      return <Said label="Note from the Consent team" text={detailText(e.detail, "note")} />;
     case "consent_price_refunded": {
       // Refunds logged before the 80/20 split returned the whole fee.
       const d = (e.detail ?? {}) as { amount?: string; currency?: string };
@@ -309,8 +280,10 @@ function eventTitle(e: { type: string; detail: Prisma.JsonValue }): ReactNode {
       if (!(fee > 0) || !(back >= 0)) return "Consent request fee refunded";
       return `Consent request fee refunded: ${fmtMoney(back, d.currency)} (${Math.round((back / fee) * 100)}%) of ${fmtMoney(fee, d.currency)}`;
     }
-    default:
-      return titleCase(e.type);
+    default: {
+      const words = e.type.replace(/_/g, " ");
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    }
   }
 }
 
@@ -322,13 +295,15 @@ export function TimelineCard({
   /** When an open request expires if nobody acts; shown at the top. */
   expiresAt?: Date | null;
 }) {
-  const events = [...request.events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const events = [...request.events]
+    .filter(shownEvent)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   if (events.length === 0 && !expiresAt) return null;
   return (
     <Card className="space-y-3">
       <SectionTitle
         title="Timeline"
-        desc="All timestamps stored in UTC, shown in your local time."
+        desc="Shown in your local time."
         action={
           <a href={`/api/dossier/${request.id}`} target="_blank" className="text-xs underline underline-offset-4 text-ink-soft hover:text-ink">
             Export history dossier
@@ -345,16 +320,23 @@ export function TimelineCard({
         </p>
       )}
       <ol className="space-y-0">
-        {events.map((e) => (
-          <li key={e.id} className="relative border-l border-ink/10 pb-3 pl-4 last:pb-0">
-            <span className="absolute -left-[3.5px] top-1.5 size-1.5 rounded-full bg-ink" aria-hidden />
-            <div className="text-sm font-medium break-words">{eventTitle(e)}</div>
-            <div className="text-xs text-ink-faint">
-              {e.actorName ? `${e.actorName} (${e.actorSide}) · ` : e.actorSide ? `${e.actorSide} · ` : ""}
-              <LocalTime iso={e.createdAt.toISOString()} />
-            </div>
-          </li>
-        ))}
+        {events.map((e) => {
+          const who = sideName(request, e.actorSide);
+          // A person's name, then the profile they acted for when it isn't the same.
+          const forProfile = e.actorSide === "consenter" || e.actorSide === "requester";
+          const by =
+            forProfile && e.actorName && who && e.actorName !== who ? `${e.actorName} for ${who}` : (e.actorName ?? who);
+          return (
+            <li key={e.id} className="relative border-l border-ink/10 pb-3 pl-4 last:pb-0">
+              <span className="absolute -left-[3.5px] top-1.5 size-1.5 rounded-full bg-ink" aria-hidden />
+              <div className="text-sm font-medium break-words">{eventTitle(e, request.consenter.displayName)}</div>
+              <div className="text-xs text-ink-faint">
+                {by ? `${by} · ` : ""}
+                <LocalTime iso={e.createdAt.toISOString()} />
+              </div>
+            </li>
+          );
+        })}
       </ol>
     </Card>
   );
@@ -365,18 +347,18 @@ export function GrantCard({ request }: { request: FullRequest }) {
   if (!grant) return null;
   return (
     <Card strong className="space-y-3">
-      <SectionTitle title="Consent grant" />
+      <SectionTitle title="Certificate" />
       <div className="flex flex-wrap items-center gap-3">
         <Award className="size-8" strokeWidth={1.25} aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-sm font-semibold">{grant.certificateId}</div>
+          <div className="font-mono text-sm font-semibold break-all">{grant.certificateId}</div>
           <div className="text-xs text-ink-soft">Issued {fmtDateTime(grant.issuedAt)} · {statusLabel(grant.status)}</div>
         </div>
         <StatusBadge status={grant.status} />
       </div>
       {grant.revokedAt && (
         <Alert tone="warn">
-          Revoked on {fmtDateTime(grant.revokedAt)} — valid for use published before this date. Reason: {grant.revokeReason}
+          Revoked on {fmtDateTime(grant.revokedAt)}. Use published before this date stays covered. Reason: {grant.revokeReason}
         </Alert>
       )}
       <div className="flex flex-wrap gap-2">
@@ -391,7 +373,7 @@ export function GrantCard({ request }: { request: FullRequest }) {
         </Link>
       </div>
       <Alert>
-        The verification link <span className="font-mono text-xs">{process.env.APP_URL}/v/{grant.publicId}</span> must appear in the published content&apos;s description, caption, notes or article.
+        The verification link <span className="font-mono text-xs break-all">{process.env.APP_URL}/v/{grant.publicId}</span> must appear in the published content&apos;s description, caption, notes or article.
       </Alert>
     </Card>
   );

@@ -6,80 +6,146 @@ const future = () => new Date(Date.now() + 30 * DAY);
 const past = () => new Date(Date.now() - DAY);
 
 function seat(
-  requesterId: string,
-  over: Partial<AskingMembership["requester"]> = {},
+  profileId: string,
+  over: Partial<AskingMembership["profile"]> = {},
   role = "OWNER",
 ): AskingMembership {
   return {
-    requesterId,
+    profileId,
     role,
-    requester: {
-      displayName: `Profile ${requesterId}`,
-      status: "APPROVED",
-      onboardingFeePaidAt: past(),
-      subscriptionEndsAt: future(),
-      ...over,
-    },
+    profile: { displayName: `Profile ${profileId}`, status: "APPROVED", membershipEndsAt: null, ...over },
   };
 }
 
-describe("askingState", () => {
-  it("is none without an asking profile", () => {
-    expect(askingState([])).toEqual({ kind: "none" });
+describe("askingState with the membership fee off (free for now)", () => {
+  const off = false;
+
+  it("is none without a profile", () => {
+    expect(askingState([], null, off)).toEqual({ kind: "none" });
   });
 
-  it("is ready with an approved, paid, in-date profile", () => {
-    expect(askingState([seat("a")])).toEqual({ kind: "ready", requesterId: "a", name: "Profile a" });
+  it("is ready for every verified profile, no membership needed", () => {
+    expect(askingState([seat("a")], null, off)).toEqual({ kind: "ready", profileId: "a", name: "Profile a" });
+    expect(askingState([seat("a", { membershipEndsAt: past() })], null, off)).toMatchObject({ kind: "ready" });
   });
 
-  it("prefers the asking profile already in use", () => {
-    expect(askingState([seat("a"), seat("b")], "b")).toMatchObject({ kind: "ready", requesterId: "b" });
-    expect(askingState([seat("a"), seat("b")], null)).toMatchObject({ kind: "ready", requesterId: "a" });
+  it("prefers the active profile", () => {
+    expect(askingState([seat("a"), seat("b")], "b", off)).toMatchObject({ kind: "ready", profileId: "b" });
+    expect(askingState([seat("a"), seat("b")], null, off)).toMatchObject({ kind: "ready", profileId: "a" });
   });
 
-  it("skips view-only seats when another profile can send", () => {
-    expect(askingState([seat("a", {}, "VIEWER"), seat("b")], "a")).toMatchObject({ kind: "ready", requesterId: "b" });
-    expect(askingState([seat("a", {}, "VIEWER")])).toEqual({ kind: "viewOnly", name: "Profile a" });
+  it("asks as another profile when the active one only has a view-only seat", () => {
+    expect(askingState([seat("a", {}, "VIEWER"), seat("b")], "a", off)).toMatchObject({ kind: "ready", profileId: "b" });
+    expect(askingState([seat("a", {}, "VIEWER")], "a", off)).toEqual({ kind: "viewOnly", name: "Profile a" });
   });
 
-  it("is unfinished while waiting for approval or payment", () => {
-    expect(askingState([seat("a", { status: "PENDING" })])).toEqual({ kind: "unfinished" });
-    expect(askingState([seat("a", { onboardingFeePaidAt: null, subscriptionEndsAt: null })])).toEqual({ kind: "unfinished" });
+  it("lets managers ask", () => {
+    expect(askingState([seat("a", {}, "MANAGER")], "a", off)).toMatchObject({ kind: "ready", profileId: "a" });
   });
 
-  it("is lapsed when the yearly plan has ended", () => {
-    expect(askingState([seat("a", { subscriptionEndsAt: past() })])).toEqual({ kind: "lapsed", requesterId: "a" });
+  it("is unverified until the ID check is approved", () => {
+    for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MORE_INFO_NEEDED", "REJECTED"]) {
+      expect(askingState([seat("a", { status })], "a", off)).toEqual({ kind: "unverified" });
+    }
   });
 
-  it("names the lapsed profile to renew, not a pending one or a view-only seat", () => {
+  it("points to their own profile's ID check before a view-only seat elsewhere", () => {
+    expect(askingState([seat("a", { status: "SUBMITTED" }), seat("b", { displayName: "Brand" }, "VIEWER")], "a", off)).toEqual({
+      kind: "unverified",
+    });
+  });
+
+  it("never asks for a membership while the fee is off", () => {
+    expect(askingState([seat("a", { status: "SUBMITTED" }), seat("b", { membershipEndsAt: past() })], "a", off)).toMatchObject({
+      kind: "ready",
+      profileId: "b",
+    });
+  });
+});
+
+describe("askingState with the membership fee on", () => {
+  const on = true;
+
+  it("is ready with a membership that hasn't ended", () => {
+    expect(askingState([seat("a", { membershipEndsAt: future() })], "a", on)).toMatchObject({ kind: "ready", profileId: "a" });
+  });
+
+  it("needs a membership when there is none or it has ended", () => {
+    expect(askingState([seat("a")], "a", on)).toEqual({ kind: "membership", profileId: "a" });
+    expect(askingState([seat("a", { membershipEndsAt: past() })], "a", on)).toEqual({ kind: "membership", profileId: "a" });
+  });
+
+  it("names a profile this person can pay for, not an unverified one or a view-only seat", () => {
     expect(
-      askingState([
-        seat("a", { status: "PENDING", onboardingFeePaidAt: null, subscriptionEndsAt: null }),
-        seat("b", { subscriptionEndsAt: past() }, "VIEWER"),
-        seat("c", { subscriptionEndsAt: past() }),
-      ]),
-    ).toEqual({ kind: "lapsed", requesterId: "c" });
+      askingState(
+        [seat("a", { status: "SUBMITTED" }), seat("b", {}, "VIEWER"), seat("c", { membershipEndsAt: past() })],
+        "b",
+        on,
+      ),
+    ).toEqual({ kind: "membership", profileId: "c" });
+  });
+
+  it("offers a membership for their own profile before a view-only seat elsewhere", () => {
+    expect(
+      askingState(
+        [seat("a", { membershipEndsAt: past() }), seat("b", { displayName: "Brand", membershipEndsAt: future() }, "VIEWER")],
+        "b",
+        on,
+      ),
+    ).toEqual({ kind: "membership", profileId: "a" });
+  });
+
+  it("is view-only when their only seat that can send is a viewer's", () => {
+    expect(askingState([seat("b", { displayName: "Brand", membershipEndsAt: future() }, "VIEWER")], "b", on)).toEqual({
+      kind: "viewOnly",
+      name: "Brand",
+    });
+  });
+
+  it("is still unverified before the ID check, whatever the membership", () => {
+    expect(askingState([seat("a", { status: "SUBMITTED", membershipEndsAt: future() })], "a", on)).toEqual({ kind: "unverified" });
   });
 });
 
 describe("feeLine", () => {
-  const owner = { consentPrice: "25.00", consentPriceCurrency: "USD" };
+  const owner = { consentPrice: "500.00", consentPriceCurrency: "INR" };
 
-  it("shows the base fee plus the platform fee", () => {
-    expect(feeLine(owner, [], ["news"])).toEqual({ price: "$25.00", note: " · plus the platform fee" });
+  it("is free to ask without a consent request fee", () => {
+    expect(feeLine({ consentPrice: null, consentPriceCurrency: "INR" }, [], [])).toEqual({ free: true });
+    expect(feeLine({ consentPrice: "0", consentPriceCurrency: "INR" }, [], ["news"])).toEqual({ free: true });
   });
 
-  it("never reads as free: no fee still carries the platform fee", () => {
-    expect(feeLine({ consentPrice: null, consentPriceCurrency: "USD" }, [], [])).toEqual({
-      price: null,
-      note: " · plus the platform fee",
+  it("shows the fee plus the 20% platform fee, in the profile's currency", () => {
+    expect(feeLine(owner, [], ["news"])).toEqual({ free: false, price: "₹500.00", note: " + 20% platform fee" });
+    expect(feeLine({ consentPrice: "25.00", consentPriceCurrency: "USD" }, [], [])).toEqual({
+      free: false,
+      price: "$25.00",
+      note: " + 20% platform fee",
     });
   });
 
   it("shows a range when the fee depends on what it's for", () => {
-    expect(feeLine(owner, [{ intentCategoryId: "news", amount: "0" }], ["news", "promo"])).toEqual({
-      price: "$0.00 to $25.00",
-      note: " · depends on what it's for, plus the platform fee",
+    expect(feeLine(owner, [{ intentCategoryId: "news", amount: "100" }], ["news", "promo"])).toEqual({
+      free: false,
+      price: "₹100.00 to ₹500.00",
+      note: " + 20% platform fee · depends on what it's for",
     });
+  });
+
+  it("says when some uses are free", () => {
+    expect(feeLine(owner, [{ intentCategoryId: "news", amount: "0" }], ["news", "promo"])).toEqual({
+      free: false,
+      price: "up to ₹500.00",
+      note: " + 20% platform fee · free for some uses",
+    });
+  });
+
+  it("is free when every use is free, and charges when only a per-use fee is set", () => {
+    expect(feeLine({ consentPrice: null, consentPriceCurrency: "INR" }, [{ intentCategoryId: "news", amount: "0" }], ["news"])).toEqual({
+      free: true,
+    });
+    expect(
+      feeLine({ consentPrice: null, consentPriceCurrency: "INR" }, [{ intentCategoryId: "promo", amount: "250" }], ["news", "promo"]),
+    ).toEqual({ free: false, price: "up to ₹250.00", note: " + 20% platform fee · free for some uses" });
   });
 });

@@ -4,7 +4,7 @@ import { pausedMessage, type Capacity } from "@/lib/capacity";
 const MARK = "\u0000";
 
 /**
- * The one sentence a requester sees when an owner has paused new requests
+ * The one sentence an asker sees when the profile they ask has paused new requests
  * (pausedMessage), with the date it opens again shown in the viewer's own
  * time zone. Renders nothing when requests aren't paused.
  */

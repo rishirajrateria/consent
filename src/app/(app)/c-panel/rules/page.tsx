@@ -5,18 +5,24 @@ import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { toggleRuleAction, deleteRuleAction, moveRuleAction } from "./actions";
 import { NewRuleForm } from "./new-rule-form";
-import { titleCase, fmtDate } from "@/lib/utils";
+import { fmtDate } from "@/lib/utils";
+import { CREATOR_TYPES, creatorLabel } from "@/app/(app)/onboarding/application";
 import type { RuleConditions } from "@/lib/rules";
 import { ArrowUp, ArrowDown, Zap } from "lucide-react";
+import { permLabel, seatPerms } from "../team/roles";
 
 export const metadata = { title: "Standing rules" };
 
-const REQUESTER_TYPES = ["INDIVIDUAL_CREATOR", "NEWS_CHANNEL", "PODCAST", "MEME_PAGE", "MEDIA_HOUSE", "AGENCY", "OTHER"];
+const ACTION_LABEL: Record<string, string> = {
+  AUTO_APPROVE: "Approve automatically",
+  AUTO_DENY: "Decline automatically",
+  ROUTE_TO_MEMBER: "Send to a team member",
+};
 
 export default async function RulesPage({ searchParams }: PageProps<"/c-panel/rules">) {
   const sp = await searchParams;
   const { consenter, member } = await requireConsenter();
-  const canEdit = member.role === "OWNER" || member.canEditRules;
+  const canEdit = seatPerms(member).canEditRules;
   const [rules, platforms, assetTypes, members] = await Promise.all([
     db.standingRule.findMany({ where: { consenterId: consenter.id }, orderBy: { priority: "asc" } }),
     db.platform.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, include: { formats: { where: { active: true } } } }),
@@ -30,7 +36,7 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
   function routedTo(userId: string): string {
     const m = members.find((x) => x.userId === userId);
     if (!m) return "a former member";
-    return m.role === "OWNER" || m.canApprove ? m.user.name : `${m.user.name}, who can't answer requests`;
+    return seatPerms(m).canApprove ? m.user.name : `${m.user.name}, who can't answer requests`;
   }
 
   function describe(c: RuleConditions): string {
@@ -38,11 +44,11 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
     if (c.platformIds?.length) parts.push(`platforms: ${c.platformIds.map((i) => platformName.get(i) ?? "?").join(", ")}`);
     if (c.formatIds?.length) parts.push(`formats: ${c.formatIds.map((i) => formatName.get(i) ?? "?").join(", ")}`);
     if (c.assetTypeIds?.length) parts.push(`assets: ${c.assetTypeIds.map((i) => assetName.get(i) ?? "?").join(", ")}`);
-    if (c.requesterTypes?.length) parts.push(`requester type: ${c.requesterTypes.map(titleCase).join(", ")}`);
+    if (c.requesterTypes?.length) parts.push(`asker is: ${c.requesterTypes.map(creatorLabel).join(", ")}`);
     if (c.maxDurationSec) parts.push(`duration ≤ ${c.maxDurationSec}s`);
-    if (c.minScore) parts.push(`requester score ≥ ${c.minScore}`);
+    if (c.minScore) parts.push(`asker's Consent Score ≥ ${c.minScore}`);
     if (c.categories?.length) parts.push(`categories: ${c.categories.join(", ")}`);
-    if (c.whitelistOnly) parts.push("whitelisted requesters only");
+    if (c.whitelistOnly) parts.push("people on your whitelist only");
     return parts.length ? parts.join(" · ") : "matches every request";
   }
 
@@ -69,7 +75,7 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
                 </div>
                 <div className="text-xs text-ink-soft">{describe(r.conditions as RuleConditions)}</div>
                 <div className="mt-0.5 text-[11px] text-ink-faint">
-                  → {titleCase(r.action)}
+                  → {ACTION_LABEL[r.action] ?? r.action}
                   {r.action === "ROUTE_TO_MEMBER" && r.routeToUserId ? `: ${routedTo(r.routeToUserId)}` : ""}{" "}
                   · set by {r.createdByName} on {fmtDate(r.createdAt)}
                 </div>
@@ -110,14 +116,14 @@ export default async function RulesPage({ searchParams }: PageProps<"/c-panel/ru
               formats: p.formats.map((f) => ({ id: f.id, name: f.name })),
             }))}
             assetTypes={assetTypes.map((a) => ({ id: a.id, name: a.name }))}
-            requesterTypes={REQUESTER_TYPES.map((t) => ({ id: t, name: titleCase(t) }))}
+            requesterTypes={CREATOR_TYPES.map((t) => ({ id: t.value, name: t.label }))}
             // Routed requests need someone who can answer them.
             approvers={members
-              .filter((m) => m.role === "OWNER" || m.canApprove)
+              .filter((m) => seatPerms(m).canApprove)
               .map((m) => ({ id: m.userId, name: m.user.name }))}
           />
         ) : (
-          <Alert>You can view these rules. Editing needs the &lsquo;Edit matrix &amp; rules&rsquo; permission.</Alert>
+          <Alert>You can view these rules. Editing needs the &lsquo;{permLabel("canEditRules")}&rsquo; permission.</Alert>
         )}
       </Card>
     </div>

@@ -1,29 +1,38 @@
 import Link from "next/link";
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, StatusBadge, EmptyState } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, EmptyState, ButtonLink } from "@/components/ui";
 import { fmtDate } from "@/lib/utils";
-import { Award } from "lucide-react";
+import { Award, Search } from "lucide-react";
 
-export const metadata = { title: "Grants" };
+export const metadata = { title: "Certificates you hold" };
 
-export default async function RequesterGrants() {
+export default async function CertificatesYouHold() {
   const { requester } = await requireRequester();
   const grants = await db.grant.findMany({
     where: { request: { requesterId: requester.id } },
     orderBy: { issuedAt: "desc" },
-    include: { request: { include: { consenter: true } } },
+    include: { request: { include: { consenter: { select: { displayName: true } } } } },
   });
 
   return (
     <div className="space-y-6">
       <PageHeader
         kicker={requester.displayName}
-        title="Consent grants"
-        desc="Every grant keeps its certificate and verification link forever — even after your subscription lapses."
+        title="Certificates you hold"
+        desc="Consent you were given. Each certificate keeps its verification link for good."
       />
       {grants.length === 0 ? (
-        <EmptyState icon={Award} title="No grants yet" desc="Approved requests appear here with their certificates." />
+        <EmptyState
+          icon={Award}
+          title="No certificates yet"
+          desc="When someone says yes to your request, its certificate shows up here."
+          action={
+            <ButtonLink href="/find">
+              <Search className="size-4" aria-hidden /> Find someone to ask
+            </ButtonLink>
+          }
+        />
       ) : (
         <div className="space-y-2">
           {grants.map((g) => (

@@ -15,7 +15,7 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Create your account</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          One account, both sides — write the terms for your own identity, or create with someone else&apos;s, with permission.
+          Ask anyone for consent, and decide who can use yours.
         </p>
       </div>
       <ErrorNote error={sp.error as string | undefined} />

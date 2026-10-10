@@ -1,7 +1,7 @@
 import { Card, SectionTitle, Field, Input, Textarea, Select, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { fileReportAction, respondReportAction } from "@/app/(app)/requests/report-actions";
-import { ViewOnlyNote, type FullRequest } from "@/components/request-view";
+import { ViewOnlyNote, sideName, type FullRequest } from "@/components/request-view";
 import { fmtDateTime } from "@/lib/utils";
 import { Flag } from "lucide-react";
 
@@ -26,22 +26,24 @@ export function ReportPanel({
 }: {
   request: FullRequest;
   side: "consenter" | "requester";
-  /** False for read-only seats (requester viewers): the reports only, no forms. */
+  /** False for view-only seats (on either side): the reports only, no forms. */
   canAct?: boolean;
 }) {
   const reports = request.reports ?? [];
+  // The other side of the request, by name.
+  const other = sideName(request, side === "consenter" ? "requester" : "consenter");
   return (
     <Card className="space-y-4" id="report">
       <SectionTitle
         title="Breach reports"
-        desc="Upheld reports affect the public Consent Score. Consent takes no further enforcement action — legal matters stay between the parties."
+        desc="Upheld reports lower the Consent Score. Consent takes no other action. Legal matters stay between you."
       />
       {reports.map((r) => (
         <div key={r.id} className="glass-subtle space-y-2 px-4 py-3 text-sm">
           <div className="flex flex-wrap items-center gap-2">
             <Flag className="size-4" aria-hidden />
             <span className="font-medium">{r.reason}</span>
-            <span className="text-xs text-ink-faint">by {r.bySide} · {fmtDateTime(r.createdAt)}</span>
+            <span className="text-xs text-ink-faint">by {sideName(request, r.bySide) ?? r.bySide} · {fmtDateTime(r.createdAt)}</span>
             <StatusBadge status={r.status} className="ml-auto" />
           </div>
           <p className="text-xs text-ink-soft">{r.description}</p>
@@ -54,7 +56,7 @@ export function ReportPanel({
               <input type="hidden" name="reportId" value={r.id} />
               <div className="min-w-48 flex-1">
                 <Field label="Your response">
-                  <Input name="response" placeholder="Your side of the story for the review team" required />
+                  <Input name="response" placeholder="Your side of the story, for the Consent team" required />
                 </Field>
               </div>
               <SubmitButton variant="secondary" size="sm">Respond</SubmitButton>
@@ -67,7 +69,7 @@ export function ReportPanel({
       {canAct && (
         <details>
           <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-ink">
-            <Flag className="mr-1 inline size-4" aria-hidden /> Report a breach on this {side === "consenter" ? "requester" : "consenter"}
+            <Flag className="mr-1 inline size-4" aria-hidden /> Report a breach by {other}
           </summary>
           <form action={fileReportAction} className="mt-3 space-y-3 border-l-2 border-ink/10 pl-4">
             <input type="hidden" name="id" value={request.id} />

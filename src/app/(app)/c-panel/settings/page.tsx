@@ -6,74 +6,93 @@ import { SubmitButton } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { audit } from "@/lib/audit";
 import { redirect } from "next/navigation";
-import { Grid3x3, Zap, Ban, Users, Wallet, Megaphone } from "lucide-react";
-import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../requests/fee-split";
+import { Grid3x3, Zap, Ban, Users, Wallet, Megaphone, CreditCard } from "lucide-react";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT, PLATFORM_PCT } from "../requests/fee-split";
 import { requestCapacity } from "@/lib/capacity";
 import { getSettings } from "@/lib/settings";
 import { notifyConsenterTeam } from "@/lib/notify";
 import { pausedNotice, fmtUtc } from "@/lib/requests";
+import { activeCurrencies } from "@/lib/currencies";
+import { currencyForCountry } from "@/lib/currency-rules";
 import { LIMIT_FIELDS, LIMITS_ERROR, MAX_LIMIT, readLimits } from "./limits";
+import { readFeeForm, tierMode } from "./fee-form";
 import { CapacityLine } from "./request-limits";
+import { FeeFields } from "./fee-fields";
 
-export const metadata = { title: "Profile settings" };
+export const metadata = { title: "Profile, fee & limits" };
+
+/** "About you" needs this many characters, as at onboarding. */
+const MIN_BIO = 40;
+const MAX_BIO = 2000;
+
+function fail(error: string): never {
+  redirect(`/c-panel/settings?error=${encodeURIComponent(error)}`);
+}
 
 async function saveAction(formData: FormData) {
   "use server";
   const { session, consenter, member } = await requireConsenter("canEditRules");
-  // Check the request limits before saving anything, so a typo saves nothing.
+  // Check everything before saving anything, so a typo saves nothing.
+  const category = String(formData.get("category") ?? "").trim().slice(0, 120);
+  const bio = String(formData.get("bio") ?? "").trim();
+  if (!category) fail("Say what you do, like actor, musician or TV show.");
+  if (bio.length < MIN_BIO) fail(`Write at least ${MIN_BIO} characters in “About you”.`);
+  if (bio.length > MAX_BIO) fail(`Keep “About you” under ${MAX_BIO.toLocaleString("en-US")} characters.`);
   const limits = readLimits(formData);
-  if (!limits) redirect(`/c-panel/settings?error=${encodeURIComponent(LIMITS_ERROR)}`);
+  if (!limits) fail(LIMITS_ERROR);
+  const [currencies, intents] = await Promise.all([
+    activeCurrencies(),
+    db.intentCategory.findMany({ where: { active: true }, select: { id: true, name: true } }),
+  ]);
+  const read = readFeeForm(formData, currencies, intents);
+  if (!read.ok) fail(read.error);
+  const { fee } = read;
+
   const before = await requestCapacity(consenter.id).catch(() => null);
   // Where the money goes is the owner's call alone, whatever else a team member may edit.
   const isOwner = member.role === "OWNER";
-  await db.consenterProfile.update({
-    where: { id: consenter.id },
-    data: {
-      bio: String(formData.get("bio") ?? "").trim() || null,
-      category: String(formData.get("category") ?? "").trim() || null,
-      shareEmail: formData.get("shareEmail") === "on",
-      sharePhone: formData.get("sharePhone") === "on",
-      shareAddress: formData.get("shareAddress") === "on",
-      shareManager: formData.get("shareManager") === "on",
-      contactEmail: String(formData.get("contactEmail") ?? "").trim() || null,
-      contactPhone: String(formData.get("contactPhone") ?? "").trim() || null,
-      contactAddress: String(formData.get("contactAddress") ?? "").trim().slice(0, 300) || null,
-      managerContact: String(formData.get("managerContact") ?? "").trim() || null,
-      ...limits,
-      defaultRequireLegalAgreementForPaid: formData.get("defaultLegal") === "on",
-      consentPrice: (() => {
-        const v = parseFloat(String(formData.get("consentPrice") ?? ""));
-        return v > 0 ? v.toFixed(2) : null;
-      })(),
-      consentPriceCurrency:
-        String(formData.get("consentPriceCurrency") ?? "USD").toUpperCase().slice(0, 3) || "USD",
-      ...(isOwner ? { payoutDetails: String(formData.get("payoutDetails") ?? "").trim() || null } : {}),
-    },
-  });
-  // Per-intent consent request fees: empty field = fall back to the base fee.
-  const intents = await db.intentCategory.findMany({ where: { active: true } });
-  for (const intent of intents) {
-    const raw = String(formData.get(`tier_${intent.id}`) ?? "").trim();
-    const v = parseFloat(raw);
-    if (raw !== "" && v >= 0) {
-      await db.consentPriceTier.upsert({
-        where: { consenterId_intentCategoryId: { consenterId: consenter.id, intentCategoryId: intent.id } },
-        update: { amount: v.toFixed(2) },
-        create: { consenterId: consenter.id, intentCategoryId: intent.id, amount: v.toFixed(2) },
-      });
-    } else {
-      await db.consentPriceTier.deleteMany({
-        where: { consenterId: consenter.id, intentCategoryId: intent.id },
-      });
+  await db.$transaction(async (tx) => {
+    await tx.consenterProfile.update({
+      where: { id: consenter.id },
+      data: {
+        bio,
+        category,
+        ...limits,
+        consentPrice: fee.consentPrice == null ? null : fee.consentPrice.toFixed(2),
+        consentPriceCurrency: fee.currency,
+        ...(isOwner ? { payoutDetails: String(formData.get("payoutDetails") ?? "").trim().slice(0, 300) || null } : {}),
+      },
+    });
+    // The sending half shows the same description.
+    await tx.requesterProfile.updateMany({
+      where: { consenterId: consenter.id },
+      data: { description: bio, categories: [category] },
+    });
+    // A fee per kind of consent: none (the profile's fee), 0 (free) or the fee.
+    for (const [intentCategoryId, amount] of fee.tiers) {
+      if (amount == null) {
+        await tx.consentPriceTier.deleteMany({ where: { consenterId: consenter.id, intentCategoryId } });
+      } else {
+        await tx.consentPriceTier.upsert({
+          where: { consenterId_intentCategoryId: { consenterId: consenter.id, intentCategoryId } },
+          update: { amount: amount.toFixed(2) },
+          create: { consenterId: consenter.id, intentCategoryId, amount: amount.toFixed(2) },
+        });
+      }
     }
-  }
+  });
   await audit({
     actorId: session.userId,
     actorName: session.user.name,
     action: "consenter_settings_saved",
     module: "consent_settings",
     targetId: consenter.id,
-    detail: { limits },
+    detail: {
+      limits,
+      consentPrice: fee.consentPrice,
+      currency: fee.currency,
+      tiers: Object.fromEntries([...fee.tiers].filter(([, v]) => v != null)),
+    },
   });
   // Lowering a limit can pause new requests straight away: tell the whole team once.
   if (before && !before.paused) {
@@ -90,35 +109,50 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
   const { consenter, member } = await requireConsenter();
   const isOwner = member.role === "OWNER";
   const canEdit = isOwner || member.canEditRules;
-  const [intents, tiers, capacity, settings] = await Promise.all([
+  const [intents, tiers, capacity, settings, currencies] = await Promise.all([
     db.intentCategory.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     db.consentPriceTier.findMany({ where: { consenterId: consenter.id } }),
     requestCapacity(consenter.id),
     getSettings(),
+    activeCurrencies(),
   ]);
-  const tierFor = new Map(tiers.map((t) => [t.intentCategoryId, t.amount.toString()]));
+  const tierFor = new Map(tiers.map((t) => [t.intentCategoryId, t.amount]));
+  // A currency people can no longer choose falls back to the country's (or the first one).
+  const currency =
+    [consenter.consentPriceCurrency, currencyForCountry(consenter.country)].find((c) => currencies.some((x) => x.code === c)) ??
+    currencies[0]?.code ??
+    "INR";
+  // The stored fee's currency is no longer offered: never move the old numbers
+  // into another currency on the next save. The fees have to be entered again.
+  const paid = !!consenter.consentPrice && Number(consenter.consentPrice) > 0;
+  const paidTiers = tiers.some((t) => Number(t.amount) > 0);
+  const retired =
+    (paid || paidTiers) && !currencies.some((c) => c.code === consenter.consentPriceCurrency)
+      ? consenter.consentPriceCurrency
+      : null;
 
   // The matrix is no longer in the bottom nav (Find took its place), so keep it the first shortcut.
   const shortcuts = [
     ["/c-panel/matrix", "Consent matrix", Grid3x3],
     ["/c-panel/rules", "Standing rules", Zap],
     ["/c-panel/lists", "Blacklist & whitelist", Ban],
-    ["/c-panel/team", "Team access", Users],
-    ["/c-panel/earnings", "Earnings & settlements", Wallet],
-    ["/c-panel/tipoffs", "Public tip-offs", Megaphone],
+    ["/c-panel/team", "Team", Users],
+    ["/c-panel/earnings", "Earnings & payouts", Wallet],
+    ["/r-panel/billing", "Payments & membership", CreditCard],
+    ["/c-panel/tipoffs", "Tip-offs", Megaphone],
   ] as const;
 
   return (
     <div className="space-y-6">
-      <PageHeader kicker={consenter.displayName} title="Profile settings" />
+      <PageHeader kicker={consenter.displayName} title="Profile, fee & limits" />
       {sp.saved && <SuccessNote msg="Settings saved." />}
       <ErrorNote error={sp.error} />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {shortcuts.map(([href, label, Icon]) => (
           <Link key={href} href={href}>
-            <Card className="flex items-center gap-2.5 py-4 transition-all hover:shadow-glass-lg">
-              <Icon className="size-4 text-ink-soft" aria-hidden />
+            <Card className="flex h-full items-center gap-2.5 py-4 transition-all hover:shadow-glass-lg">
+              <Icon className="size-4 shrink-0 text-ink-soft" aria-hidden />
               <span className="text-sm font-medium">{label}</span>
             </Card>
           </Link>
@@ -128,129 +162,82 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
       <form action={saveAction}>
         <fieldset disabled={!canEdit} className="min-w-0 space-y-5">
           <Card className="space-y-4">
-            <SectionTitle title="Public profile" />
-            <Field label="Category">
-              <Input name="category" defaultValue={consenter.category ?? ""} placeholder="actor, musician, TV drama…" />
-            </Field>
-            <Field label="Bio">
-              <Textarea name="bio" defaultValue={consenter.bio ?? ""} maxLength={2000} />
-            </Field>
-          </Card>
-
-          <Card className="space-y-4">
             <SectionTitle
-              title="Contact details you share"
-              desc="Nothing is shared automatically. When you approve a request, or any time after, you tick which of these the requester sees. The ones you tick here start ticked."
+              title="Public profile"
+              desc="What people see on your public profile. Your name and photo come from your ID check."
             />
-            <div className="space-y-2">
-              <label className="flex items-center gap-3 text-sm">
-                <input type="checkbox" name="shareEmail" defaultChecked={consenter.shareEmail} className="size-4 accent-black" /> Share email
-              </label>
-              <label className="flex items-center gap-3 text-sm">
-                <input type="checkbox" name="sharePhone" defaultChecked={consenter.sharePhone} className="size-4 accent-black" /> Share phone
-              </label>
-              <label className="flex items-center gap-3 text-sm">
-                <input type="checkbox" name="shareAddress" defaultChecked={consenter.shareAddress} className="size-4 accent-black" /> Share address
-              </label>
-              <label className="flex items-center gap-3 text-sm">
-                <input type="checkbox" name="shareManager" defaultChecked={consenter.shareManager} className="size-4 accent-black" /> Share manager contact
-              </label>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Contact email">
-                <Input name="contactEmail" type="email" defaultValue={consenter.contactEmail ?? ""} />
-              </Field>
-              <Field label="Contact phone">
-                <Input name="contactPhone" type="tel" defaultValue={consenter.contactPhone ?? ""} />
-              </Field>
-            </div>
-            <Field label="Contact address" hint="A postal or office address, e.g. for in-person meetings or paperwork.">
+            <Field label="What you do" required>
               <Input
-                name="contactAddress"
-                maxLength={300}
-                autoComplete="street-address"
-                defaultValue={consenter.contactAddress ?? ""}
-                placeholder="Street, city, postcode, country"
+                name="category"
+                required
+                maxLength={120}
+                defaultValue={consenter.category ?? ""}
+                placeholder="actor, musician, TV drama…"
               />
             </Field>
-            <Field label="Manager / agency contact">
-              <Input name="managerContact" defaultValue={consenter.managerContact ?? ""} />
+            <Field label="About you" hint={`At least ${MIN_BIO} characters.`} required>
+              <Textarea name="bio" required minLength={MIN_BIO} maxLength={MAX_BIO} defaultValue={consenter.bio ?? ""} />
             </Field>
           </Card>
 
-          <Card className="space-y-4">
+          <Card className="space-y-4" id="fee">
             <SectionTitle
               title="Your consent request fee"
-              desc={`What someone pays to send you a request. It's held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}. It filters out careless asks. Leave empty to let anyone ask for free.`}
+              desc={`What someone pays to send you a request. It's held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}. They also pay a ${PLATFORM_PCT} platform fee on top. A fee filters out careless asks; free lets anyone verified ask.`}
             />
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Consent request fee" hint="0 or empty = free to ask.">
-                <Input
-                  name="consentPrice"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  defaultValue={consenter.consentPrice ? consenter.consentPrice.toString() : ""}
-                  placeholder="25"
-                />
-              </Field>
-              <Field label="Currency">
-                <Input name="consentPriceCurrency" maxLength={3} defaultValue={consenter.consentPriceCurrency} className="uppercase" />
-              </Field>
-            </div>
+            {retired && (
+              <Alert tone="warn">
+                {retired} is no longer offered. Choose a currency and enter your fee again.
+              </Alert>
+            )}
+            <FeeFields
+              currencies={currencies.map((c) => ({ code: c.code, name: c.name, minConsentFee: c.minConsentFee }))}
+              initial={{
+                mode: paid ? "paid" : "free",
+                amount: paid && !retired ? String(consenter.consentPrice) : "",
+                currency,
+              }}
+              intents={intents.map((i) => {
+                const amount = tierFor.get(i.id);
+                const mode = tierMode(amount);
+                return { id: i.id, name: i.name, mode, amount: mode === "paid" && amount && !retired ? amount.toString() : "" };
+              })}
+            />
+            <p className="text-xs text-ink-faint">
+              A request expires when neither side acts for {settings.slaDays} days. If it ends without a
+              yes, {REFUND_PCT} of the consent request fee goes back to them, so silence never pays. See
+              everything under{" "}
+              <Link href="/c-panel/earnings" className="underline underline-offset-4">Earnings &amp; payouts</Link>.
+            </p>
+          </Card>
+
+          <Card className="space-y-4" id="payout">
+            <SectionTitle title="Payout details" desc={`Where your ${OWNER_PCT} of the fees you say yes to is paid, every Friday.`} />
             <Field
               label="Payout details"
               hint={
                 isOwner
-                  ? "Where your weekly settlements are paid (bank / UPI / PayPal). Visible only to you and finance admins."
-                  : "Where weekly settlements are paid. Only the profile owner can see or change this."
+                  ? "Bank, UPI or PayPal. Only you and our finance team can see it."
+                  : "Only the profile owner can see or change this."
               }
             >
               {isOwner ? (
-                <Input name="payoutDetails" defaultValue={consenter.payoutDetails ?? ""} placeholder="e.g. HDFC •• 4821 / name@upi" />
+                <Input
+                  name="payoutDetails"
+                  maxLength={300}
+                  defaultValue={consenter.payoutDetails ?? ""}
+                  placeholder="e.g. HDFC •• 4821 / name@upi"
+                />
               ) : (
                 <Input disabled placeholder={consenter.payoutDetails ? "Added (only the owner can see it)" : "Not added yet"} />
               )}
             </Field>
-            <div className="space-y-2 border-t hairline pt-3">
-              <div className="text-xs font-semibold uppercase tracking-wider text-ink-soft">
-                Fee by intent
-              </div>
-              <p className="text-xs text-ink-faint">
-                Charge differently by why they&apos;re asking — e.g. News 0 (free), Promotion 250.
-                Empty = your consent request fee above. 0 = free for that intent.
-              </p>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {intents.map((i) => (
-                  <label key={i.id} className="flex items-center gap-2 text-sm">
-                    <span className="w-28 shrink-0 truncate text-xs text-ink-soft">{i.name}</span>
-                    <Input
-                      name={`tier_${i.id}`}
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      defaultValue={tierFor.get(i.id) ?? ""}
-                      placeholder="base"
-                      className="py-1.5 text-xs"
-                      aria-label={`Consent request fee for ${i.name}`}
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-            <p className="text-xs text-ink-faint">
-              A request expires when neither side acts for {settings.slaDays} days. If it expires without a
-              yes, {REFUND_PCT} of the consent request fee is refunded to the requester, so silence never
-              pays. Any usage fee you negotiate after approval is still settled directly between you and
-              the requester, never through Consent. Track everything under{" "}
-              <Link href="/c-panel/earnings" className="underline underline-offset-4">Earnings & settlements</Link>.
-            </p>
           </Card>
 
           <Card className="space-y-4" id="limits">
             <SectionTitle
               title="Request limits"
-              desc="Pause new requests when you have too many to answer. While paused, nobody can send you a request or pay for one, and they see when it opens again. Leave a box empty for no limit."
+              desc="Pause new requests when you have too many to answer. While paused, nobody can send you a request or pay for one, and they see when it opens again. Requests resume as you answer. Leave a box empty for no limit."
             />
             <CapacityLine capacity={capacity} />
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -270,22 +257,9 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
               ))}
             </div>
             <p className="text-xs text-ink-faint">
-              Answering a request (yes, a fee, an Ask or no) frees its place in &lsquo;Max waiting for your
+              Answering a request (yes, an Ask or no) frees its place in &lsquo;Max waiting for your
               answer&rsquo;. When they answer your Ask, it waits for you again and counts. Day, week and
               month limits count requests sent in the last 24 hours, 7 days and 30 days.
-            </p>
-          </Card>
-
-          <Card className="space-y-3">
-            <SectionTitle title="Agreement preference" />
-            <label className="flex items-center gap-3 text-sm">
-              <input type="checkbox" name="defaultLegal" defaultChecked={consenter.defaultRequireLegalAgreementForPaid} className="size-4 accent-black" />
-              Propose a legally binding agreement for paid requests by default
-            </label>
-            <p className="text-xs text-ink-faint">
-              When you approve a paid request, the box starts ticked, and you can untick it each time. If
-              the requester accepts a fee you offered, we propose the agreement for you. Either way, the
-              requester must still accept.
             </p>
           </Card>
 

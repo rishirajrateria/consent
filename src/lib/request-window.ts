@@ -1,41 +1,33 @@
 /* Every open request expires a fixed number of days (Admin → settings, 7 by
-   default) after its last action. Any action from either side (an answer, an
-   offer, asking for changes, an upload, an agreement step or a message) starts
-   a fresh window. The last action is read from what those actions leave
-   behind, so no action has to remember to reset a timer. */
+   default) after its last action. Any action from either side (an answer,
+   asking a question, answering it, an upload) starts a fresh window. The last
+   action is read from what those actions leave behind, so no action has to
+   remember to reset a timer. */
 
 import type { RequestStatus } from "@prisma/client";
 import { db } from "./db";
 
-/** Requests that are still in play: before a certificate and not ended. */
-export const OPEN_STATUSES: RequestStatus[] = [
-  "SUBMITTED",
-  "PENDING",
-  "IN_NEGOTIATION",
-  "CHANGES_REQUESTED",
-  "DEAL_AGREED",
-  "APPROVED_IN_PRINCIPLE",
-  "AGREEMENT_MODE_PENDING",
-  "LEGAL_AGREEMENT_PENDING",
-];
+/** Requests that are still in play: sent, and neither certified nor ended. */
+export const OPEN_STATUSES: RequestStatus[] = ["SUBMITTED", "PENDING", "CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"];
 
 export type Side = "consenter" | "requester";
 
-/** Whose move it is. "either" when both sides can act (e.g. signing an agreement). */
-export function waitingOn(status: RequestStatus, latestOpenOfferBy?: string | null): Side | "either" {
+/**
+ * Whose move it is on an open request: the person asked ("consenter") while it
+ * waits for their answer, the person asking ("requester") while it waits for
+ * their reply to a question or for the final file. Null when nobody has a move
+ * (a draft, or the request has ended).
+ */
+export function waitingOn(status: RequestStatus): Side | null {
   switch (status) {
     case "SUBMITTED":
     case "PENDING":
       return "consenter";
     case "CHANGES_REQUESTED":
-    case "DEAL_AGREED":
     case "APPROVED_IN_PRINCIPLE":
-    case "AGREEMENT_MODE_PENDING":
       return "requester";
-    case "IN_NEGOTIATION":
-      return latestOpenOfferBy === "consenter" ? "requester" : latestOpenOfferBy === "requester" ? "consenter" : "either";
     default:
-      return "either";
+      return null;
   }
 }
 
@@ -49,28 +41,27 @@ const latest = (...dates: (Date | null | undefined)[]) =>
 
 /**
  * Last action per request: the latest of submission, a person's timeline
- * event, a message, an offer or an upload. System events (reminders,
- * refunds, expiry) don't count.
+ * event, an old message or an upload. System events (reminders, refunds,
+ * expiry) don't count.
  */
 export async function lastActivity(requests: { id: string; submittedAt: Date | null; createdAt: Date }[]) {
   const ids = requests.map((r) => r.id);
   const out = new Map<string, Date>();
   if (ids.length === 0) return out;
-  const [events, messages, offers, files] = await Promise.all([
+  const [events, messages, files] = await Promise.all([
     db.requestEvent.groupBy({
       by: ["requestId"],
       where: { requestId: { in: ids }, actorSide: { in: ["consenter", "requester", "admin"] } },
       _max: { createdAt: true },
     }),
     db.requestMessage.groupBy({ by: ["requestId"], where: { requestId: { in: ids } }, _max: { createdAt: true } }),
-    db.negotiationOffer.groupBy({ by: ["requestId"], where: { requestId: { in: ids } }, _max: { createdAt: true } }),
     db.storedFile.groupBy({ by: ["requestId"], where: { requestId: { in: ids } }, _max: { createdAt: true } }),
   ]);
   const pick = (rows: { requestId: string | null; _max: { createdAt: Date | null } }[]) =>
     new Map(rows.filter((r) => r.requestId).map((r) => [r.requestId as string, r._max.createdAt]));
-  const [e, m, o, f] = [pick(events), pick(messages), pick(offers), pick(files)];
+  const [e, m, f] = [pick(events), pick(messages), pick(files)];
   for (const r of requests) {
-    out.set(r.id, latest(r.submittedAt ?? r.createdAt, e.get(r.id), m.get(r.id), o.get(r.id), f.get(r.id))!);
+    out.set(r.id, latest(r.submittedAt ?? r.createdAt, e.get(r.id), m.get(r.id), f.get(r.id))!);
   }
   return out;
 }

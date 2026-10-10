@@ -6,7 +6,7 @@ import { db } from "./db";
 
 const HOUR = 3600_000;
 export const WINDOWS = { daily: 24 * HOUR, weekly: 7 * 24 * HOUR, monthly: 30 * 24 * HOUR } as const;
-/** Waiting for the owner's first answer. Answering (yes, a fee, changes or no) frees the slot. */
+/** Waiting for the owner's first answer. Answering (yes, a question or no) frees the slot. */
 export const UNANSWERED = ["SUBMITTED", "PENDING"] as const;
 
 export type Limits = {

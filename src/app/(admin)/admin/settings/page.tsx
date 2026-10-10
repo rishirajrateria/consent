@@ -2,8 +2,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin, hasAdminPerm } from "@/lib/auth";
 import { ViewOnlyPage } from "../no-permission";
 import { getSettings, saveSettings } from "@/lib/settings";
-import { PageHeader, Card, Field, Input, SectionTitle, Select } from "@/components/ui";
-import { db } from "@/lib/db";
+import { PageHeader, Card, Field, Input, SectionTitle } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { runSweeps } from "@/lib/jobs";
@@ -18,16 +17,14 @@ async function saveAction(formData: FormData) {
     const v = parseInt(String(formData.get(k) ?? ""), 10);
     return isNaN(v) || v < 1 ? fallback : v;
   };
-  // One request window covers every open request, negotiation included, so
-  // the old separate negotiation-idle setting is no longer read or edited.
+  // One request window covers every open request. The membership switch is
+  // on the pricing page; it is kept as stored here.
   s.slaDays = num("slaDays", s.slaDays);
   s.takedownResponseDays = num("takedownResponseDays", s.takedownResponseDays);
   s.maxUploadMb = num("maxUploadMb", s.maxUploadMb);
   s.minCreativePlanChars = num("minCreativePlanChars", s.minCreativePlanChars);
   s.requesterMinScoreGate = num("requesterMinScoreGate", s.requesterMinScoreGate);
   await saveSettings(s);
-  const esign = String(formData.get("esignProvider") ?? "in-app");
-  await db.setting.upsert({ where: { key: "esign_provider" }, update: { value: esign }, create: { key: "esign_provider", value: esign } });
   await audit({ actorId: session.userId, actorName: session.user.name, action: "system_settings_saved", module: "settings" });
   revalidatePath("/admin/settings");
 }
@@ -44,8 +41,6 @@ export default async function AdminSettings() {
   const canEdit = hasAdminPerm(session.user.adminRole, "settings", "edit");
   const s = await getSettings();
   const brokenAt = await verifyAuditChain();
-  const esignRow = await db.setting.findUnique({ where: { key: "esign_provider" } });
-  const esignProvider = (esignRow?.value as string) ?? "in-app";
 
   return (
     <div className="space-y-6">
@@ -58,7 +53,7 @@ export default async function AdminSettings() {
             <div className="grid gap-3 sm:grid-cols-2">
               <Field
                 label="Request window (days)"
-                hint="Open requests expire this many days after the last action from either side. If it was waiting on the owner, it counts against their score; otherwise it closes. If it ends before a yes, 80% of the consent request fee is refunded. The platform fee is never refunded. One reminder goes out when under 48 hours remain."
+                hint="Open requests end this many days after the last action from either side. If it was waiting on the person asked, it expires and counts against their score; if it was waiting on the person who asked, it closes. If it ends before a yes, 80% of the consent request fee is refunded. The platform fee is never refunded. One reminder goes out when under 48 hours remain."
               >
                 <Input name="slaDays" type="number" min={1} step={1} defaultValue={s.slaDays} />
               </Field>
@@ -71,15 +66,8 @@ export default async function AdminSettings() {
               <Field label="Min creative plan length (chars)">
                 <Input name="minCreativePlanChars" type="number" min={1} defaultValue={s.minCreativePlanChars} />
               </Field>
-              <Field label="Requester minimum score gate" hint="Requesters below this cannot send requests at all.">
+              <Field label="Minimum Consent Score to send requests" hint="Profiles whose asking score is below this can't send requests. Being asked is never blocked.">
                 <Input name="requesterMinScoreGate" type="number" min={0} max={1000} defaultValue={s.requesterMinScoreGate} />
-              </Field>
-              <Field label="E-signature provider" hint="in-app signs with typed name + OTP + timestamp + IP. DocuSign / Leegality plug into the same interface once keys are configured.">
-                <Select name="esignProvider" defaultValue={esignProvider}>
-                  <option value="in-app">In-app (typed name + OTP)</option>
-                  <option value="docusign">DocuSign (not configured)</option>
-                  <option value="leegality">Leegality / Digio (not configured)</option>
-                </Select>
               </Field>
             </div>
             <SubmitButton>Save settings</SubmitButton>
@@ -88,7 +76,7 @@ export default async function AdminSettings() {
       </form>
 
       <Card className="space-y-3">
-        <SectionTitle title="Background jobs" desc="Request window expiry and reminders, grant expiry, takedown windows, renewal reminders. Run by the worker / cron; trigger manually here." />
+        <SectionTitle title="Background jobs" desc="Request window expiry and reminders, certificate expiry, takedown windows, Friday payouts and membership reminders. Run by the worker / cron; trigger manually here." />
         <form action={runJobsAction}>
           <fieldset disabled={!canEdit} className="min-w-0">
             <SubmitButton variant="secondary">Run all sweeps now</SubmitButton>

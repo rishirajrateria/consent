@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUser, setActiveProfile } from "@/lib/auth";
-import { requesterActive } from "@/lib/payments";
+import { ensureAsker, profilesOf } from "@/lib/profiles";
+import { canSend } from "@/lib/membership";
 import { getSettings } from "@/lib/settings";
 import { createDraftAction } from "../r-panel/requests/actions";
 
@@ -15,78 +16,75 @@ function backToFind(formData: FormData, error: string): never {
 
 /**
  * "Ask for permission" on Find. Opening Find never switches profiles; asking
- * does, because the draft lives in the requester workspace. Every check that
- * can fail here runs before the switch, so a failed ask leaves the person on
- * Find in the workspace they were in. Then switch to the asking profile Find
- * showed, so createDraftAction uses that one even when the person is in their
- * owner workspace or has more than one profile.
+ * does when the person asks as a profile other than the active one, because
+ * the draft belongs to the profile that asks. Every check that can fail runs
+ * here first, so a failed ask leaves the person on Find with the profile they
+ * were using.
  */
 export async function askFromFindAction(formData: FormData) {
   const session = await requireUser();
-  const requesterId = String(formData.get("requester") ?? "");
+  const profileId = String(formData.get("profile") ?? "");
   const slug = String(formData.get("consenter") ?? "");
-  const [member, ownSeat] = await Promise.all([
-    requesterId
-      ? db.requesterMember.findUnique({
-          where: { requesterId_userId: { requesterId, userId: session.userId } },
-          include: { requester: true },
-        })
-      : null,
-    slug
-      ? db.consenterMember.findFirst({
-          where: { userId: session.userId, consenter: { slug } },
-          select: { id: true },
-        })
-      : null,
-  ]);
-  if (ownSeat) backToFind(formData, "You can't ask your own profile.");
-  if (!member || member.role === "VIEWER" || !requesterActive(member.requester))
-    backToFind(formData, "Your asking profile can't send requests right now.");
+  const [profiles, settings] = await Promise.all([profilesOf(session.userId), getSettings()]);
+
+  if (slug && profiles.some((m) => m.consenter.slug === slug))
+    backToFind(formData, "This is your profile. You can't ask yourself.");
+  const seat = profiles.find((m) => m.consenterId === profileId);
+  if (!seat) backToFind(formData, "We couldn't find the profile you ask as.");
+  if (seat.role === "VIEWER")
+    backToFind(formData, `You have view-only access to ${seat.consenter.displayName}, so you can't send requests for it.`);
+  const asker = seat.consenter.asker ?? (await ensureAsker(seat.consenterId));
+  if (!canSend({ status: seat.consenter.status, membershipEndsAt: asker.membershipEndsAt }, settings.membershipFeeOn))
+    backToFind(
+      formData,
+      seat.consenter.status !== "APPROVED"
+        ? "You can ask once your ID check is approved."
+        : "Sending requests needs a membership. Get one in Payments & membership.",
+    );
 
   // The same checks createDraftAction makes, run here first: if one failed
-  // there, it would happen after the switch and land on New request instead.
+  // there, it would happen after the switch.
   const owner = slug
     ? await db.consenterProfile.findUnique({ where: { slug }, select: { id: true, displayName: true, status: true } })
     : null;
   if (!owner || owner.status !== "APPROVED") backToFind(formData, "We couldn't find that profile.");
-  const [blocked, settings] = await Promise.all([
-    db.listEntry.findUnique({
-      where: {
-        kind_consenterId_requesterId: { kind: "BLACKLIST", consenterId: owner.id, requesterId: member.requesterId },
-      },
-      select: { id: true },
-    }),
-    getSettings(),
-  ]);
+  const blocked = await db.listEntry.findUnique({
+    where: { kind_consenterId_requesterId: { kind: "BLACKLIST", consenterId: owner.id, requesterId: asker.id } },
+    select: { id: true },
+  });
   if (blocked) backToFind(formData, `${owner.displayName} isn't taking requests from you.`);
-  if (member.requester.score < settings.requesterMinScoreGate)
+  if (asker.score < settings.requesterMinScoreGate)
     backToFind(
       formData,
-      `Your Consent Score (${member.requester.score}) is below the ${settings.requesterMinScoreGate} needed to send requests.`,
+      `Your Consent Score is too low to send requests right now (the minimum is ${settings.requesterMinScoreGate}).`,
     );
 
-  await setActiveProfile({ kind: "requester", id: member.requesterId });
-  // The session is read once per request, so keep that copy in step too.
-  session.activeProfile = `requester:${member.requesterId}`;
+  // Switch only when asking as a different profile. setActiveProfile keeps
+  // this request's copy of the session in step, so createDraftAction sees it.
+  if (session.activeProfile !== `consenter:${seat.consenterId}`) {
+    await setActiveProfile({ kind: "consenter", id: seat.consenterId });
+  }
   // createDraftAction checks again (nothing changes in between) and opens the draft.
   return createDraftAction(formData);
 }
 
 /**
- * "Renew your plan" on Find. Billing shows the active asking profile, so
- * switch to the one whose plan ended first; otherwise a person with more than
- * one asking profile could land on billing for a different one.
+ * "Get a membership" on Find (only while the membership fee is on). Payments
+ * & membership shows the active profile, so switch to the one that needs it
+ * first; otherwise a person with more than one profile could land on another.
  */
-export async function renewFromFindAction(formData: FormData) {
+export async function membershipFromFindAction(formData: FormData) {
   const session = await requireUser();
-  const requesterId = String(formData.get("requester") ?? "");
-  const member = requesterId
-    ? await db.requesterMember.findUnique({
-        where: { requesterId_userId: { requesterId, userId: session.userId } },
-        select: { requesterId: true },
+  const profileId = String(formData.get("profile") ?? "");
+  const member = profileId
+    ? await db.consenterMember.findUnique({
+        where: { consenterId_userId: { consenterId: profileId, userId: session.userId } },
+        select: { consenterId: true },
       })
     : null;
-  if (!member) backToFind(formData, "We couldn't find that asking profile.");
-  await setActiveProfile({ kind: "requester", id: member.requesterId });
+  if (!member) backToFind(formData, "We couldn't find that profile.");
+  if (session.activeProfile !== `consenter:${member.consenterId}`) {
+    await setActiveProfile({ kind: "consenter", id: member.consenterId });
+  }
   redirect("/r-panel/billing");
 }

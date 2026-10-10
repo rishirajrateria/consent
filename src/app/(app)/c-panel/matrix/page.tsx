@@ -6,13 +6,14 @@ import { SubmitButton } from "@/components/form";
 import { SuccessNote } from "@/components/error-note";
 import { saveMatrixAction } from "./actions";
 import { cn } from "@/lib/utils";
+import { permLabel, seatPerms } from "../team/roles";
 
 export const metadata = { title: "Consent matrix" };
 
 export default async function MatrixPage({ searchParams }: PageProps<"/c-panel/matrix">) {
   const sp = await searchParams;
   const { consenter, member } = await requireConsenter();
-  const canEdit = member.role === "OWNER" || member.canEditRules;
+  const canEdit = seatPerms(member).canEditRules;
   const platforms = await db.platform.findMany({
     where: { active: true },
     orderBy: { sortOrder: "asc" },
@@ -79,7 +80,7 @@ export default async function MatrixPage({ searchParams }: PageProps<"/c-panel/m
         <strong>Legend:</strong> <span className="font-mono">—</span> Ask me (default) ·{" "}
         <span className="font-mono">✓</span> Allowed without asking · <span className="font-mono">✕</span> Never allowed.
         Row options apply to the whole format row. A ✓ still asks you first when the clip is longer than
-        the cap, the request uses a thumbnail you haven&apos;t allowed, or the row is paid by default.
+        the cap, or the request uses a thumbnail you haven&apos;t allowed.
         {canEdit && " Switching platforms saves your changes first."}
       </Alert>
 
@@ -145,10 +146,6 @@ export default async function MatrixPage({ searchParams }: PageProps<"/c-panel/m
                             <input type="checkbox" name={`thumb_${f.id}`} defaultChecked={opts?.thumbnailAllowed ?? true} className="size-3.5 accent-black" />
                             Thumbnail allowed
                           </label>
-                          <label className="flex items-center gap-1.5 text-[11px] text-ink-soft">
-                            <input type="checkbox" name={`paid_${f.id}`} defaultChecked={opts?.paidDefault ?? false} className="size-3.5 accent-black" />
-                            Paid by default
-                          </label>
                         </div>
                       </td>
                     </tr>
@@ -162,7 +159,7 @@ export default async function MatrixPage({ searchParams }: PageProps<"/c-panel/m
           {canEdit ? (
             <SubmitButton>Save {platform.name} matrix</SubmitButton>
           ) : (
-            <Alert>You can view these settings. Editing needs the &lsquo;Edit matrix &amp; rules&rsquo; permission.</Alert>
+            <Alert>You can view these settings. Editing needs the &lsquo;{permLabel("canEditRules")}&rsquo; permission.</Alert>
           )}
         </div>
       </form>

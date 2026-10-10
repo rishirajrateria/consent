@@ -1,27 +1,45 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { RequestStatus } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { openSentRequestAction } from "./sent-actions";
-import type { Step } from "./sent-step";
+import { sentHref, type Step } from "./sent-step";
 
 /**
- * Opens a request this person made, in the requester workspace. It always
- * goes through openSentRequestAction: the action switches to the profile the
- * request was sent from, then redirects, so the whole page (requester nav and
- * profile switcher included) renders for that profile. A plain link would keep
- * the owner nav on screen while the active profile had already changed.
+ * Opens a request this person sent. One sent from the active profile is a
+ * plain link (`direct`). One sent from another of their profiles goes through
+ * openSentRequestAction, which switches to that profile first, so the whole
+ * page (header and profile switcher included) shows the profile it was sent
+ * from. Either way the row's accessible name is `label`.
  */
 export function SentLink({
   request,
   label,
   className,
+  direct = false,
   children,
 }: {
   request: { id: string; status: RequestStatus };
   label: string;
   className?: string;
+  /** Sent from the active profile: open it with a plain link, no switch needed. */
+  direct?: boolean;
   children: ReactNode;
 }) {
+  if (direct) {
+    return (
+      <Link
+        href={sentHref(request)}
+        aria-label={label}
+        className={cn(
+          "group block rounded-[var(--radius-glass)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ink/10",
+          className,
+        )}
+      >
+        {children}
+      </Link>
+    );
+  }
   return (
     <form action={openSentRequestAction} className={cn("group relative", className)}>
       <input type="hidden" name="id" value={request.id} />

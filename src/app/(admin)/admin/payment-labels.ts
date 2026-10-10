@@ -1,17 +1,14 @@
 /* How admin pages name a payment and describe a refund. Shared by
-   admin/payments and the requester detail page. */
+   admin/payments and the profile pages that list payments. */
 
 import type { PaymentPurpose, Prisma } from "@prisma/client";
 import { fmtDateTime, fmtMoney } from "@/lib/utils";
+import { PAYMENT_LABEL } from "@/app/(app)/pay/lines";
 
 type Decimal = Prisma.Decimal;
 
-export const PURPOSE: Record<PaymentPurpose, string> = {
-  ONBOARDING: "Onboarding",
-  SUBSCRIPTION: "Subscription",
-  PER_REQUEST: "Platform fee",
-  CONSENT_PRICE: "Consent request fee",
-};
+/** "Membership", "Platform fee (20%)", "Consent request fee": the same names people see. */
+export const PURPOSE: Record<PaymentPurpose, string> = PAYMENT_LABEL;
 
 /** "Refunded $80.00 (80%) · Oct 10, 2026, 9:00 AM": the part actually returned (older refunds returned it all). */
 export function refundLine(p: { amount: Decimal; refundedAmount: Decimal | null; refundedAt: Date | null; currency: string }) {

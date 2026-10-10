@@ -26,8 +26,8 @@ export type AutoDecision =
   | { kind: "none" };
 
 /**
- * Evaluates a submitted request against the consenter's standing rules
- * (priority order), then the consent matrix defaults.
+ * Evaluates a submitted request against the owner's standing rules
+ * (priority order), then their consent matrix (their terms).
  * A decision applies only if it covers EVERY selected platform×format×asset
  * combination (auto-deny fires if ANY combination is Never allowed).
  */
@@ -89,19 +89,17 @@ export async function evaluateAutoDecision(opts: {
 
 /**
  * Whether one matrix cell lets a request through without asking. A ✓ still
- * falls back to Ask when the clip is longer than the row's cap, when the
- * request uses a thumbnail the row doesn't allow, or when the row is paid by
- * default (so the owner can set a fee).
+ * falls back to Ask when the clip is longer than the row's cap or when the
+ * request uses a thumbnail the row doesn't allow.
  */
 export function cellAutoApproves(
-  e: Pick<ConsentMatrixEntry, "policy" | "maxDurationSec" | "thumbnailAllowed" | "paidDefault">,
+  e: Pick<ConsentMatrixEntry, "policy" | "maxDurationSec" | "thumbnailAllowed">,
   sel: Pick<Selection, "durationSec">,
   thumbnailUsed: boolean
 ): boolean {
   if (e.policy !== "AUTO_APPROVE") return false;
   if (e.maxDurationSec != null && sel.durationSec != null && sel.durationSec > e.maxDurationSec) return false;
   if (thumbnailUsed && !e.thumbnailAllowed) return false;
-  if (e.paidDefault) return false;
   return true;
 }
 

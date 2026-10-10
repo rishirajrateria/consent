@@ -57,7 +57,7 @@ describe("ruleMatches", () => {
 });
 
 describe("cellAutoApproves", () => {
-  const allow = { policy: "AUTO_APPROVE" as const, maxDurationSec: null, thumbnailAllowed: true, paidDefault: false };
+  const allow = { policy: "AUTO_APPROVE" as const, maxDurationSec: null, thumbnailAllowed: true };
 
   it("approves a plain ✓ cell", () => {
     expect(cellAutoApproves(allow, sel("yt", 20), true)).toBe(true);
@@ -78,7 +78,11 @@ describe("cellAutoApproves", () => {
     expect(cellAutoApproves(noThumb, sel("yt", 20), false)).toBe(true);
   });
 
-  it("asks when the row is paid by default", () => {
-    expect(cellAutoApproves({ ...allow, paidDefault: true }, sel("yt", 20), false)).toBe(false);
+  it("never asks just because a consent request fee is set (the fee is paid before the decision)", () => {
+    expect(cellAutoApproves(allow, sel("yt", 20), false)).toBe(true);
+  });
+
+  it("never approves a cell that is never allowed", () => {
+    expect(cellAutoApproves({ ...allow, policy: "AUTO_DENY" }, sel("yt", 20), false)).toBe(false);
   });
 });

@@ -92,7 +92,7 @@ ${session.user.name} searched for you on Consent and wants to ask your permissio
 
 Consent is where you set the terms for your own likeness: what's allowed, what's never allowed, and what it costs — platform by platform. Every approval becomes a signed, verifiable certificate. Verification is strict, and it costs you nothing.
 ${d.note ? `\nTheir note: "${d.note}"\n` : ""}
-Claim your identity: ${base}/signup?next=%2Fonboarding%2Fconsenter
+Claim your identity: ${base}/signup?next=%2Fonboarding
 
 — Consent · Your likeness. Your terms.`
     );
@@ -108,54 +108,4 @@ Claim your identity: ${base}/signup?next=%2Fonboarding%2Fconsenter
   });
 
   go({ invited: d.targetName.trim(), demand: String(demand) });
-}
-
-/**
- * Claim loop: when a consenter profile is created (or verified), match open
- * invites by normalized name or the owner's login email, mark them claimed
- * and tell every inviter their person has arrived.
- */
-export async function claimInvitesForConsenter(opts: {
-  consenterId: string;
-  displayName: string;
-  normalizedLegalName: string;
-  ownerEmail: string;
-  stage: "joined" | "verified";
-}) {
-  const { notifyUser } = await import("@/lib/notify");
-  const where =
-    opts.stage === "joined"
-      ? {
-          claimedAt: null,
-          OR: [
-            { normalizedName: opts.normalizedLegalName },
-            { normalizedName: normalizeLegalName(opts.displayName) },
-            { email: { equals: opts.ownerEmail, mode: "insensitive" as const } },
-          ],
-        }
-      : { claimedByConsenterId: opts.consenterId };
-  const invites = await db.appInvite.findMany({ where });
-  if (invites.length === 0) return;
-
-  if (opts.stage === "joined") {
-    await db.appInvite.updateMany({
-      where: { id: { in: invites.map((i) => i.id) } },
-      data: { claimedAt: new Date(), claimedByConsenterId: opts.consenterId },
-    });
-  }
-  const message =
-    opts.stage === "joined"
-      ? {
-          title: `${opts.displayName} just joined Consent`,
-          body: "The person you invited has claimed their identity. You'll be able to send requests once they're verified.",
-        }
-      : {
-          title: `${opts.displayName} is now verified`,
-          body: "The person you asked for is live. You can send your consent request now.",
-        };
-  await Promise.all(
-    [...new Set(invites.map((i) => i.invitedById))].map((userId) =>
-      notifyUser({ userId, ...message, href: opts.stage === "verified" ? `/directory?q=${encodeURIComponent(opts.displayName)}` : "/notifications" })
-    )
-  );
 }

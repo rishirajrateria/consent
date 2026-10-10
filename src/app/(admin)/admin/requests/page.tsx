@@ -27,13 +27,14 @@ async function adminRequestAction(formData: FormData) {
   const note = String(formData.get("note") ?? "").trim();
   const back = (key: "error" | "done", msg: string) => redirect(`/admin/requests?${key}=${encodeURIComponent(msg)}`);
   if (op === "close") {
-    if (!note) back("error", "Add a reason to close this request. Both sides will see it.");
+    if (!note) back("error", "Add a reason to close this request. Both of them will see it.");
     const r = await db.consentRequest.findUnique({ where: { id }, include: { consenter: true } });
     if (!r) return back("error", "That request no longer exists.");
     if (FINISHED.includes(r.status)) back("error", `Request #${r.number} is already finished.`);
-    // CLOSED, not EXPIRED_NO_RESPONSE: that status is kept for the SLA job and
-    // counts against the owner as "ignored". As on every close, the platform
-    // fee stays; 80% of a consent request fee still held (no yes yet) is refunded.
+    // CLOSED, not EXPIRED_NO_RESPONSE: that status is kept for the request
+    // window and counts against the person asked as "ignored". As on every
+    // close, the platform fee stays; 80% of a consent request fee still held
+    // (no yes yet) is refunded.
     await db.$transaction([
       db.consentRequest.update({ where: { id }, data: { status: "CLOSED", closedReason: `Closed by Consent: ${note}` } }),
       db.requestEvent.create({
@@ -44,7 +45,7 @@ async function adminRequestAction(formData: FormData) {
     // End the admin's reason with a full stop so the next sentence doesn't run into it.
     const reason = `Reason: ${/[.!?]$/.test(note) ? note : `${note}.`}`;
     await notifyConsenterTeam(r.consenterId, { title, body: reason, href: `/c-panel/requests/${id}` });
-    // Only a fee still held (no yes yet) is refunded; a released fee stays with the owner.
+    // Only a fee still held (no yes yet) is refunded; a released fee stays with the person who said yes.
     const outcome = await syncConsentPrice(id);
     await notifyRequesterTeam(r.requesterId, {
       title,
@@ -53,7 +54,7 @@ async function adminRequestAction(formData: FormData) {
     });
     await audit({ actorId: session.userId, actorName: session.user.name, action: "request_closed_by_admin", module: "requests", targetId: id, reason: note });
     revalidatePath("/admin/requests");
-    back("done", `Request #${r.number} closed. Both sides were told why.`);
+    back("done", `Request #${r.number} closed. Both of them were told why.`);
   }
   if (op === "note") {
     if (!note) back("error", "Write the note first.");
@@ -91,7 +92,7 @@ export default async function AdminRequests({ searchParams }: PageProps<"/admin/
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{g.certificateId}</div>
                   <div className="text-xs text-ink-faint">
-                    {g.request.consenter.displayName} → {g.request.requester.displayName} · issued {fmtDateTime(g.issuedAt)}
+                    {g.request.requester.displayName}, from {g.request.consenter.displayName} · issued {fmtDateTime(g.issuedAt)}
                   </div>
                 </div>
                 <Link href={`/v/${g.publicId}`} className="text-xs underline underline-offset-4">verification page</Link>
@@ -125,7 +126,7 @@ export default async function AdminRequests({ searchParams }: PageProps<"/admin/
             <Card key={r.id} className="space-y-2 py-4">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">#{r.number} · {r.requester.displayName} → {r.consenter.displayName}</div>
+                  <div className="text-sm font-medium">#{r.number} · {r.requester.displayName} asked {r.consenter.displayName}</div>
                   <div className="text-xs text-ink-faint">{r.assetTypeNames.join(", ")} · updated {fmtDateTime(r.updatedAt)}</div>
                 </div>
                 <StatusBadge status={r.status} />
@@ -144,11 +145,11 @@ export default async function AdminRequests({ searchParams }: PageProps<"/admin/
                       </summary>
                       <form action={adminRequestAction} className="space-y-2 border-l-2 border-ink/10 pl-4">
                         <input type="hidden" name="id" value={r.id} />
-                        <Field label="Reason (both sides see this)" required>
-                          <Input name="note" required placeholder="e.g. Stuck on signing for 30 days; closed at the requester's ask." className="text-xs" />
+                        <Field label="Reason (both of them see this)" required>
+                          <Input name="note" required placeholder="e.g. Duplicate of request #120; closed at the sender's ask." className="text-xs" />
                         </Field>
                         <ConfirmSubmit
-                          confirm={`Close request #${r.number}? Both sides will see your reason. This can't be undone.`}
+                          confirm={`Close request #${r.number}? Both of them will see your reason. This can't be undone.`}
                           name="op"
                           value="close"
                         >

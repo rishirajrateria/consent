@@ -1,4 +1,4 @@
-/* Requester channels (YouTube, Instagram, X…): recognise the platform, keep
+/* A profile's social channels (YouTube, Instagram, X…): recognise the platform, keep
    links safe to render, and format follower counts. Channel URLs are typed
    by applicants, so only http(s) addresses ever become clickable links. */
 

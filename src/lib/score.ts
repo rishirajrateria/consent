@@ -1,3 +1,13 @@
+/* The two stored scores behind a profile's Consent Score. Every profile
+   keeps one for how it answers requests (ConsenterProfile.score: answering
+   in time, takedowns, reports against it) and one for how it asks
+   (RequesterProfile.score, its sending half: approvals, revocations, ignored
+   takedowns, questions asked of it). People only ever see one number,
+   profileScore() from profiles-pure, the average of the two, and anything
+   that compares a score against a threshold uses that same number: standing
+   rules ("asker's Consent Score ≥ N") and the pre-send check read it through
+   askerScore() in requests.ts. */
+
 import { db } from "./db";
 import { getSettings } from "./settings";
 
@@ -65,7 +75,7 @@ async function requesterRawScore(r: { id: string; createdAt: Date }): Promise<nu
   return score;
 }
 
-/** Recalculates a requester's Consent Score from events; logs the change. */
+/** Recalculates a profile's asking score (its sending half) from events; logs the change. */
 export async function recalcRequesterScore(requesterId: string, reason = "Recalculation") {
   const r = await db.requesterProfile.findUnique({ where: { id: requesterId } });
   if (!r) return;
@@ -129,7 +139,7 @@ async function consenterRawScore(consenterId: string): Promise<number> {
   return score;
 }
 
-/** Recalculates a consenter's Consent Score from events; logs the change. */
+/** Recalculates a profile's answering score (the profile itself) from events; logs the change. */
 export async function recalcConsenterScore(consenterId: string, reason = "Recalculation") {
   const c = await db.consenterProfile.findUnique({ where: { id: consenterId } });
   if (!c) return;

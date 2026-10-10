@@ -13,8 +13,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
 
   const mobileItems: NavItem[] = [
     { href: "/admin", label: "Admin", icon: "shield" },
-    { href: "/admin/consenters", label: "Verify", icon: "grid" },
-    { href: "/admin/requesters", label: "Apps", icon: "inbox" },
+    { href: "/admin/consenters", label: "Profiles", icon: "grid" },
+    { href: "/admin/requests", label: "Requests", icon: "inbox" },
     { href: "/admin/reports", label: "Reports", icon: "bell" },
     // Every other module, plus the way back to the app, lives behind "More" on phones.
     { href: "/admin/more", label: "More", icon: "menu" },

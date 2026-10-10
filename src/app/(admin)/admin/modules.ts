@@ -1,10 +1,10 @@
-/** Every admin module, grouped. Shared by the desktop sidebar and the mobile "More" page. */
+/** Every admin module, grouped. Shared by the desktop sidebar and the mobile "More" page.
+ *  "Profiles" is the one ID-check queue: every account is the same and is checked once. */
 export const ADMIN_MODULES: { group: string; links: [string, string][] }[] = [
   {
     group: "Queues",
     links: [
-      ["/admin/requesters", "Requester applications"],
-      ["/admin/consenters", "Consenter verification"],
+      ["/admin/consenters", "Profiles"],
       ["/admin/reports", "Reports & disputes"],
       ["/admin/takedowns", "Takedowns"],
     ],
@@ -23,8 +23,7 @@ export const ADMIN_MODULES: { group: string; links: [string, string][] }[] = [
     links: [
       ["/admin/catalog", "Platforms & catalog"],
       ["/admin/pricing", "Pricing & coupons"],
-      ["/admin/templates", "Agreement templates"],
-      ["/admin/cms", "CMS pages"],
+      ["/admin/cms", "Pages & messages"],
       ["/admin/settings", "System settings"],
       ["/admin/roles", "Admin roles"],
     ],

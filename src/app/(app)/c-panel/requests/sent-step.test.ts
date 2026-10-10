@@ -1,24 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { RequestStatus } from "@prisma/client";
-import { actingFor, askerStep, askingSeats, madeBy, sentHref } from "./sent-step";
-
-type Agreement = NonNullable<Parameters<typeof askerStep>[0]["agreement"]>;
+import { ASKER_MOVE, actingFor, askerStep, askingSeats, madeBy, sentHref } from "./sent-step";
 
 function req(status: RequestStatus, extra: Partial<Parameters<typeof askerStep>[0]> = {}) {
-  return { status, consenter: { displayName: "Jane Carter" }, offers: [], agreement: null, grant: null, ...extra };
-}
-
-function legal(a: Partial<Agreement>) {
-  return req("LEGAL_AGREEMENT_PENDING", {
-    agreement: {
-      status: "PROPOSED",
-      proposedBySide: "consenter",
-      uploadedFileId: null,
-      uploadConfirmedBySide: null,
-      signatures: [],
-      ...a,
-    },
-  });
+  return { status, consenter: { displayName: "Jane Carter" }, grant: null, ...extra };
 }
 
 describe("askerStep", () => {
@@ -31,28 +16,11 @@ describe("askerStep", () => {
     expect(askerStep(req("CHANGES_REQUESTED"))).toEqual({ move: "you", text: "Answer Jane Carter's question." });
   });
 
-  it("follows the open offer in a negotiation", () => {
-    expect(askerStep(req("IN_NEGOTIATION", { offers: [{ bySide: "consenter" }] })).move).toBe("you");
-    expect(askerStep(req("IN_NEGOTIATION", { offers: [{ bySide: "requester" }] })).move).toBe("them");
-    expect(askerStep(req("IN_NEGOTIATION")).move).toBe("either");
-  });
-
-  it("works out whose move it is on a legal agreement", () => {
-    expect(askerStep(legal({ status: "PROPOSED", proposedBySide: "consenter" })).move).toBe("you");
-    expect(askerStep(legal({ status: "PROPOSED", proposedBySide: "requester" })).move).toBe("them");
-    expect(askerStep(legal({ status: "DRAFTING" })).move).toBe("you");
-    expect(askerStep(legal({ status: "UPLOAD_PENDING_CONFIRMATION" })).text).toBe("Upload the signed agreement.");
-    expect(
-      askerStep(legal({ status: "UPLOAD_PENDING_CONFIRMATION", uploadedFileId: "f1", uploadConfirmedBySide: "consenter" })).move,
-    ).toBe("you");
-    expect(
-      askerStep(legal({ status: "UPLOAD_PENDING_CONFIRMATION", uploadedFileId: "f1", uploadConfirmedBySide: "requester" })).move,
-    ).toBe("them");
-    expect(askerStep(legal({ status: "AWAITING_SIGNATURES" })).text).toBe("Sign the legal agreement.");
-    expect(askerStep(legal({ status: "AWAITING_SIGNATURES", signatures: [{ side: "requester" }] })).move).toBe("them");
-    expect(askerStep(legal({ status: "DECLINED", proposedBySide: "requester" })).move).toBe("you");
-    expect(askerStep(legal({ status: "DECLINED", proposedBySide: "consenter" })).move).toBe("them");
-    expect(askerStep(req("LEGAL_AGREEMENT_PENDING")).move).toBe("either");
+  it("asks for the final content file after a yes in principle", () => {
+    expect(askerStep(req("APPROVED_IN_PRINCIPLE"))).toEqual({
+      move: "you",
+      text: "Upload the final content file to get your certificate.",
+    });
   });
 
   it("says how an ended request ended", () => {
@@ -61,10 +29,17 @@ describe("askerStep", () => {
     expect(askerStep(req("DENIED"))).toEqual({ move: "done", text: "Jane Carter said no." });
     expect(askerStep(req("EXPIRED_NO_RESPONSE")).move).toBe("done");
     expect(askerStep(req("WITHDRAWN")).text).toBe("You withdrew this request.");
+    expect(askerStep(req("CLOSED"))).toEqual({ move: "done", text: "Closed." });
   });
 
   it("marks a draft as the asker's to finish", () => {
     expect(askerStep(req("DRAFT")).move).toBe("you");
+  });
+});
+
+describe("ASKER_MOVE", () => {
+  it("is the asker's move only to answer a question or upload the final file", () => {
+    expect(ASKER_MOVE).toEqual({ status: { in: ["CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"] } });
   });
 });
 

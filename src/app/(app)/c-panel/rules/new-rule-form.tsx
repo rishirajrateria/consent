@@ -56,9 +56,9 @@ export function NewRuleForm({
     if (platformIds.length) parts.push(`on ${names(platformIds, platformName, " or ")}`);
     if (formatIds.length) parts.push(`as ${names(formatIds, formatName, " or ")}`);
     if (assetTypeIds.length) parts.push(`using only ${names(assetTypeIds, assetName, ", ")}`);
-    if (types.length) parts.push(`from ${names(types, typeName, " or ")} requesters`);
+    if (types.length) parts.push(`from ${names(types, typeName, " or ").toLowerCase()} profiles`);
     if (num("maxDurationSec") > 0) parts.push(`up to ${num("maxDurationSec")} seconds`);
-    if (num("minScore") > 0) parts.push(`from requesters scoring ${num("minScore")} or more`);
+    if (num("minScore") > 0) parts.push(`from someone with a Consent Score of ${num("minScore")} or more`);
     if (categories.length) parts.push(`about ${categories.join(" or ")}`);
     if (fd.get("whitelistOnly") === "on") parts.push("from your whitelist");
     return { action: String(fd.get("action") ?? ""), routeTo: String(fd.get("routeToUserId") ?? ""), parts };
@@ -124,7 +124,7 @@ export function NewRuleForm({
               ))}
             </select>
           </Field>
-          <Field label="Requester types">
+          <Field label="Who's asking (creator type)">
             <select name="requesterTypes" multiple size={4} className="input-glass">
               {requesterTypes.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
@@ -135,7 +135,7 @@ export function NewRuleForm({
             <Field label="Max duration (seconds)">
               <Input name="maxDurationSec" type="number" min={1} placeholder="30" />
             </Field>
-            <Field label="Minimum requester Consent Score">
+            <Field label="Asker's minimum Consent Score">
               <Input name="minScore" type="number" min={0} max={1000} placeholder="650" />
             </Field>
             <Field label="Content categories" hint="Comma separated.">
@@ -143,7 +143,7 @@ export function NewRuleForm({
             </Field>
             <label className="flex min-h-10 items-center gap-2 text-sm">
               <input type="checkbox" name="whitelistOnly" className="size-4 accent-black" />
-              Only whitelisted requesters
+              Only people on your whitelist
             </label>
           </div>
         </div>

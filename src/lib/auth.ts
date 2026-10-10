@@ -196,7 +196,8 @@ export async function requireConsenter(minPerm?: ProfilePerm) {
   const member = await activeMembership(session);
   if (!member) redirect("/onboarding");
   if (!session.user.totpEnabled) redirect("/settings/security?admin2fa=1");
-  if (minPerm && member.role !== "OWNER" && !member[minPerm]) redirect("/c-panel?denied=1");
+  // Owners can do everything; viewers nothing, whatever their flags say.
+  if (minPerm && member.role !== "OWNER" && (member.role === "VIEWER" || !member[minPerm])) redirect("/c-panel?denied=1");
   return { session, member, consenter: member.consenter };
 }
 

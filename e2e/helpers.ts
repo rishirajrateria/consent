@@ -10,12 +10,19 @@ export const TOTP_SECRET_FILE = path.join(__dirname, ".totp-secret.json");
 
 export const AUTH_DIR = path.join(__dirname, ".auth");
 
+/**
+ * The seeded people the specs act as. Every account has 2FA now (every
+ * account can answer consent requests), so every persona signs in with TOTP.
+ * Each one except the admin runs one profile that can both ask and be asked:
+ * jane → Jane Carter, show → Nightwatch (TV series), clips → Acme Clips,
+ * news → Daily Lens News.
+ */
 export const PERSONAS = {
-  admin: { email: "admin@consent.app", totp: true },
-  jane: { email: "jane@demo.consent", totp: true },
-  show: { email: "show@demo.consent", totp: true },
-  clips: { email: "clips@demo.consent", totp: false },
-  news: { email: "news@demo.consent", totp: false },
+  admin: { email: "admin@consent.app" },
+  jane: { email: "jane@demo.consent" },
+  show: { email: "show@demo.consent" },
+  clips: { email: "clips@demo.consent" },
+  news: { email: "news@demo.consent" },
 } as const;
 
 export type PersonaKey = keyof typeof PERSONAS;
@@ -47,27 +54,28 @@ export async function visit(page: Page, path: string) {
   await page.waitForLoadState("networkidle").catch(() => {});
 }
 
-/** Logs a persona in via the UI, completing /2fa when TOTP is enabled. */
-export async function login(page: Page, email: string, opts: { totp?: boolean } = {}) {
+/** Where a signed-in person lands: Home with a profile, the dashboard without one. */
+const landed = (url: URL) => url.pathname === "/dashboard" || url.pathname === "/c-panel";
+
+/** Logs a persona in via the UI, completing /2fa with the shared TOTP secret. */
+export async function login(page: Page, email: string) {
   await visit(page, "/login");
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
-  if (opts.totp) {
-    await page.waitForURL(/\/2fa/);
-    const secret = loadTotpSecret();
-    for (let attempt = 0; attempt < 4; attempt++) {
-      await page.fill('input[name="code"]', await totpCode(secret));
-      await page.getByRole("button", { name: "Verify" }).click();
-      try {
-        await page.waitForURL(/\/dashboard/, { timeout: 7000 });
-        break;
-      } catch {
-        // invalid/expired code — the page is back on /2fa with an error; retry
-      }
+  await page.waitForURL(/\/2fa/);
+  const secret = loadTotpSecret();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await page.fill('input[name="code"]', await totpCode(secret));
+    await page.getByRole("button", { name: "Verify" }).click();
+    try {
+      await page.waitForURL(landed, { timeout: 7000 });
+      break;
+    } catch {
+      // invalid/expired code — the page is back on /2fa with an error; retry
     }
   }
-  await page.waitForURL(/\/dashboard/);
+  await page.waitForURL(landed);
 }
 
 /** New page in a context restored from the persona's saved storage state. */
@@ -76,21 +84,33 @@ export async function pageFor(browser: Browser, persona: PersonaKey): Promise<Pa
   return ctx.newPage();
 }
 
-/** Runs all background sweeps (SLA expiry, settlements, …) once. */
+/** Runs all background sweeps (window expiry, settlements, certificates…) once. */
 export async function runJobs(request: APIRequestContext) {
-  const res = await request.post("/api/jobs/tick");
+  const secret = process.env.JOBS_SECRET;
+  const res = await request.post("/api/jobs/tick", {
+    headers: secret ? { authorization: `Bearer ${secret}` } : undefined,
+  });
   expect(res.ok(), "POST /api/jobs/tick should succeed").toBeTruthy();
 }
 
+/** Waits for a request's status in the DB (actions redirect before the page shows it). */
+export async function expectStatus(requestId: string, status: string) {
+  await expect
+    .poll(async () => (await db.consentRequest.findUnique({ where: { id: requestId } }))?.status, {
+      message: `request ${requestId} should become ${status}`,
+    })
+    .toBe(status);
+}
+
 const DEFAULT_CONTEXT =
-  "E2E test content: the consenter appears prominently in a short piece produced for this automated flow.";
+  "E2E test content: the profile asked appears prominently in a short piece produced for this automated flow.";
 const DEFAULT_PLAN =
-  "E2E creative plan: this automated test composes a short piece that features the consenter respectfully, explains why the material is used, covers intent in detail, and pads this text well past the minimum one hundred and twenty characters required by the platform settings.";
+  "E2E creative plan: this automated test composes a short piece that features the profile asked respectfully, explains why the material is used, covers intent in detail, and pads this text well past the minimum one hundred and twenty characters required by the platform settings.";
 
 export type RequestSpec = {
-  /** Consenter profile slug (e.g. jane-carter) used to pick the card. */
+  /** Slug of the profile asked (e.g. jane-carter), used to pick its card on Find. */
   slug: string;
-  /** Search query typed into /r-panel/new. */
+  /** Search typed into Find (/find?q=…). */
   query: string;
   formats: { platform: string; format: string; durationSec?: number }[];
   /** Asset type names, e.g. ["Name", "Photo/picture"]. */
@@ -101,11 +121,16 @@ export type RequestSpec = {
   intent: string;
   context?: string;
   plan?: string;
-  /** Assert the mock checkout charges a single line (no consent price). */
-  expectSingleCharge?: boolean;
+  /**
+   * What sending costs. "free": sent at once with no checkout. "paid": goes
+   * through the mock checkout. Left out, either is accepted.
+   */
+  charge?: "free" | "paid";
+  /** For a paid ask: the exact total on the Pay button, e.g. "$120.00". */
+  expectTotal?: string;
 };
 
-async function uploadDraftFile(page: Page, kind: "ASSET" | "RAW_CONTENT" | "THUMBNAIL") {
+export async function uploadDraftFile(page: Page, kind: "ASSET" | "RAW_CONTENT" | "THUMBNAIL"): Promise<string> {
   const name = `e2e-${kind.toLowerCase()}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.txt`;
   const form = page.locator(`form:has(input[name="kind"][value="${kind}"])`);
   await form.locator('input[name="file"]').setInputFiles({
@@ -116,12 +141,19 @@ async function uploadDraftFile(page: Page, kind: "ASSET" | "RAW_CONTENT" | "THUM
   await form.locator('button[type="submit"]').click();
   // the page re-renders with the uploaded file listed (in Uploads and again in the review summary)
   await expect(page.getByText(name).first()).toBeVisible();
+  return name;
+}
+
+/** The single send button in step 4: "Pay $X & send" for a paid ask, "Send request" for a free one. */
+export function sendButton(page: Page) {
+  return page.getByRole("button", { name: /& send$|^Send request$/ });
 }
 
 /**
- * Drives the full request wizard: pick consenter, scope, uploads, details,
- * accept terms, pay the mock checkout. Returns the request id. Ends on the
- * request detail page (/r-panel/requests/{id}?submitted=1).
+ * Asks someone from start to finish: Find (/find?q=) → "Ask for permission"
+ * → the draft editor (scope, uploads, details, terms) → send. A free ask is
+ * sent at once and lands on /r-panel/requests/{id}; a paid one goes through
+ * /pay/mock first. Returns the request id.
  */
 export async function submitBasicRequest(page: Page, spec: RequestSpec): Promise<string> {
   // Resolve catalog ids directly from the DB for deterministic selectors.
@@ -139,9 +171,9 @@ export async function submitBasicRequest(page: Page, spec: RequestSpec): Promise
   const assets = await db.assetType.findMany({ where: { name: { in: spec.assetTypes } } });
   if (assets.length !== spec.assetTypes.length) throw new Error("Asset type lookup failed");
 
-  // 0. pick the consenter
-  await visit(page, `/r-panel/new?q=${encodeURIComponent(spec.query)}`);
-  await page.locator(`form:has(input[name="consenter"][value="${spec.slug}"]) button`).click();
+  // 0. find them and ask (opens a new draft, or the one already started for them)
+  await visit(page, `/find?q=${encodeURIComponent(spec.query)}`);
+  await page.locator(`form:has(input[name="consenter"][value="${spec.slug}"])`).getByRole("button").click();
   await page.waitForURL(/\/r-panel\/requests\/[^/?#]+\/edit/);
   await page.waitForLoadState("networkidle").catch(() => {});
   const requestId = page.url().match(/requests\/([^/?#]+)\/edit/)![1];
@@ -164,7 +196,7 @@ export async function submitBasicRequest(page: Page, spec: RequestSpec): Promise
   // 3. details
   await page.fill('textarea[name="context"]', spec.context ?? DEFAULT_CONTEXT);
   await page.fill('textarea[name="creativePlan"]', spec.plan ?? DEFAULT_PLAN);
-  // Intent options show the owner's price when they charge, e.g. "Commentary — $10.00".
+  // Intent options can carry the fee, e.g. "Review — $100.00 consent request fee" or "News — free to ask".
   const intentValue = await page
     .locator('select[name="intentCategoryId"] option', { hasText: new RegExp(`^${spec.intent}( —|$)`) })
     .first()
@@ -173,17 +205,26 @@ export async function submitBasicRequest(page: Page, spec: RequestSpec): Promise
   await page.getByRole("button", { name: "Save details" }).click();
   await page.waitForURL(/saved=details/);
 
-  // 4. accept terms + pay & submit
+  // 4. accept the terms and send ("Send request" when free, "Pay … & send" when paid)
   await page.locator('input[name="acceptTerms"]').check();
-  await page.getByRole("button", { name: /& submit/ }).click();
-  await page.waitForURL(/\/pay\/mock\//);
+  const send = sendButton(page);
+  await expect(send).toBeEnabled();
+  if (spec.charge === "free") await expect(send).toHaveText(/^Send request$/);
+  if (spec.charge === "paid") await expect(send).toHaveText(/^Pay .+ & send$/);
+  await send.click();
 
-  const payButton = page.getByRole("button", { name: /^Pay/ });
-  await expect(payButton).toHaveCount(1);
-  if (spec.expectSingleCharge) {
-    await expect(payButton).not.toContainText("+");
+  const sentPath = `/r-panel/requests/${requestId}`;
+  await page.waitForURL((url) => url.pathname === sentPath || url.pathname.startsWith("/pay/mock/"));
+  if (new URL(page.url()).pathname.startsWith("/pay/mock/")) {
+    expect(spec.charge, "a free ask must not open a checkout").not.toBe("free");
+    const payButton = page.getByRole("button", { name: /^Pay/ });
+    await expect(payButton).toHaveCount(1);
+    if (spec.expectTotal) await expect(payButton).toHaveText(`Pay ${spec.expectTotal}`);
+    await payButton.click();
+    await page.waitForURL((url) => url.pathname === sentPath);
+  } else {
+    expect(spec.charge, "a paid ask must go through checkout").not.toBe("paid");
   }
-  await payButton.click();
-  await page.waitForURL(new RegExp(`/r-panel/requests/${requestId}`));
+  await expect(page.getByText(/^Request sent\./).first()).toBeVisible();
   return requestId;
 }

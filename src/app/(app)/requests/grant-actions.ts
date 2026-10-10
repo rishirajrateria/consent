@@ -20,8 +20,8 @@ export async function revokeGrantAction(formData: FormData) {
   const grant = await db.grant.findUnique({ where: { id: grantId }, include: { request: true } });
   if (!grant || grant.request.consenterId !== consenter.id) redirect("/c-panel/requests");
   const path = `/c-panel/requests/${grant.requestId}`;
-  if (grant.status !== "ACTIVE") fail(path, "Only active grants can be revoked");
-  if (!reason) fail(path, "A reason is mandatory for revocation");
+  if (grant.status !== "ACTIVE") fail(path, "This consent is no longer active, so it can't be revoked.");
+  if (!reason) fail(path, "Give a reason for revoking it.");
 
   await db.$transaction([
     db.grant.update({
@@ -47,12 +47,12 @@ export async function revokeGrantAction(formData: FormData) {
     reason,
   });
   await notifyRequesterTeam(grant.request.requesterId, {
-    title: `Grant ${grant.publicId} revoked`,
-    body: `Revocation applies to future use only — content published within scope before today remains covered. Reason: ${reason}`,
+    title: `${consenter.displayName} revoked consent for request #${grant.request.number}`,
+    body: `${consenter.displayName} revoked their consent for future use. Content published within the scope before today stays covered. Reason: ${reason}`,
     href: `/r-panel/requests/${grant.requestId}`,
     critical: true,
   });
-  await recalcRequesterScore(grant.request.requesterId, "Grant revoked by consenter");
+  await recalcRequesterScore(grant.request.requesterId, "Consent revoked");
   redirect(path);
 }
 
@@ -88,7 +88,7 @@ export async function raiseTakedownAction(formData: FormData) {
     },
   });
   await notifyRequesterTeam(grant.request.requesterId, {
-    title: `Takedown requested on grant ${grant.publicId}`,
+    title: `Takedown requested on request #${grant.request.number}`,
     body: `${consenter.displayName} asks you to take the published content down. Respond within ${settings.takedownResponseDays} days: mark it taken down, or decline with a reason. Reason: ${reason}`,
     href: `/r-panel/requests/${grant.requestId}`,
     critical: true,
@@ -104,10 +104,10 @@ export async function respondTakedownAction(formData: FormData) {
     where: { id: takedownId },
     include: { grant: { include: { request: true } } },
   });
-  if (!takedown || takedown.grant.request.requesterId !== requester.id) redirect("/r-panel/requests");
+  if (!takedown || takedown.grant.request.requesterId !== requester.id) redirect("/c-panel/requests?tab=Sent");
   const path = `/r-panel/requests/${takedown.grant.requestId}`;
   // Requester viewer seats are read-only: the answer moves the Consent Score.
-  if (member.role === "VIEWER") fail(path, "Viewers have read-only access");
+  if (member.role === "VIEWER") fail(path, "You have view-only access.");
   if (takedown.status !== "RAISED" && takedown.status !== "REJECTED_CLAIM")
     fail(path, "This takedown request is no longer open");
 
@@ -137,7 +137,7 @@ export async function respondTakedownAction(formData: FormData) {
       },
     });
     await notifyConsenterTeam(takedown.grant.request.consenterId, {
-      title: `Content marked as taken down (grant ${takedown.grant.publicId})`,
+      title: `Content marked as taken down on request #${takedown.grant.request.number}`,
       body: "Confirm in the app that the content is down, or reject the claim if it's still live.",
       href: `/c-panel/requests/${takedown.grant.requestId}`,
       critical: true,
@@ -159,8 +159,8 @@ export async function respondTakedownAction(formData: FormData) {
       },
     });
     await notifyConsenterTeam(takedown.grant.request.consenterId, {
-      title: `Takedown declined (grant ${takedown.grant.publicId})`,
-      body: `Reason: ${declineReason}. Consent records this; anything further is a real-world legal matter — you can export the Consent History Dossier.`,
+      title: `Takedown declined on request #${takedown.grant.request.number}`,
+      body: `Reason: ${declineReason}. Consent records this and takes no other action. You can export the history dossier from the request page.`,
       href: `/c-panel/requests/${takedown.grant.requestId}`,
     });
     await recalcRequesterScore(requester.id, "Takedown request declined");
@@ -194,8 +194,8 @@ export async function confirmTakedownAction(formData: FormData) {
       },
     });
     await notifyRequesterTeam(takedown.grant.request.requesterId, {
-      title: `Takedown confirmed (grant ${takedown.grant.publicId})`,
-      body: "The consenter confirmed the content is down. This is logged on the certificate.",
+      title: `Takedown confirmed on request #${takedown.grant.request.number}`,
+      body: `${consenter.displayName} confirmed the content is down. This is logged on the certificate.`,
       href: `/r-panel/requests/${takedown.grant.requestId}`,
     });
   } else {
@@ -209,8 +209,8 @@ export async function confirmTakedownAction(formData: FormData) {
       },
     });
     await notifyRequesterTeam(takedown.grant.request.requesterId, {
-      title: `Takedown claim rejected (grant ${takedown.grant.publicId})`,
-      body: "The consenter says the content is still live. The takedown request is back with you.",
+      title: `Takedown claim rejected on request #${takedown.grant.request.number}`,
+      body: `${consenter.displayName} says the content is still live. The takedown request is back with you.`,
       href: `/r-panel/requests/${takedown.grant.requestId}`,
       critical: true,
     });

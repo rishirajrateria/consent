@@ -1,27 +1,40 @@
 import { PageHeader, Card, Divider } from "@/components/ui";
-import { Search, FileUp, Scale, Award, QrCode, ShieldOff, Flag, Users } from "lucide-react";
-import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../fee-shares";
+import { Search, Scale, QrCode, ShieldOff, Flag, Users, Wallet } from "lucide-react";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT, PLATFORM_PCT } from "../fee-shares";
+import { db } from "@/lib/db";
+import { getSettings } from "@/lib/settings";
+import { fmtPrice } from "@/lib/currencies";
 
 export const metadata = {
   title: "How it works",
-  description: "How owners set the terms — and every approved use becomes a certificate anyone can check.",
+  description: "One verified account to ask anyone for consent and to decide who can use yours. Every yes becomes a certificate anyone can check.",
 };
 
-const STEPS = [
-  [Users, "Verified, once — on both sides", "Every consenter is verified manually — legal documents, official account proof (OAuth or manual), one entity = one account, and a mandatory verification meeting — so a yes is provably from its owner. Requesters are approval-gated with ID or business registration, then pay a one-time onboarding fee and a yearly subscription."],
-  [Search, "Ask for the exact use", `Requesters describe the exact intended use, filled manually — no templates, no duplicates. Platform(s) and format(s), duration in seconds for timed formats, asset types, the exact assets used, the raw final content file, a separate thumbnail if it features the consenter, context, a creative plan with intent category, and the requested validity. A small platform fee is paid at submission and is never refunded. If the owner sets a consent request fee, it is paid at the same time and held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to the requester. Consent keeps ${CONSENT_PCT}.`],
-  [Scale, "The owner decides — or their terms do", "The terms you wrote answer first: a consent matrix (allow / ask / never per platform × format × asset type) and prioritized standing rules can auto-approve, auto-deny or route requests. Otherwise the team approves (optionally with conditions), asks a question or for a change, sets a fee, or denies. A no needs no reason. An open request expires when neither side acts for a set number of days (7 by default); one left unanswered by the owner hurts their public Consent Score. Owners can also limit how many new requests they take; new requests pause until they catch up."],
-  [FileUp, "Deal fees are settled directly", "Deal fees never move through Consent. If a fee is wanted, you negotiate it inside Consent — each side can send up to 3 counter-offers. When a deal is agreed, the owner picks which contact details to share (email, phone, address or manager), either side can schedule a meeting that goes into both calendars, and payment happens directly between the parties — Consent never processes, tracks or confirms it."],
-  [Award, "You choose how formal the yes is", "The default is the in-app record. Either side can propose a legally binding agreement — platform-generated from jurisdiction templates and signed in-app (typed name + OTP + timestamp + IP), or your own signed contract uploaded and mutually confirmed."],
-  [QrCode, "On the record, verifiable forever", "Every approval becomes a tamper-proof certificate locked to the exact approved files and sealed by Consent — it can't be faked, and it can't be quietly edited. The public page checks the seal every time it loads, and can tell anyone whether a file is one of the approved originals. The verification link must appear in the published content."],
-  [ShieldOff, "A yes can become a no", "Owners can revoke future use (already-published content within scope stays covered) and raise takedown requests with a confirm-loop. Everything is recorded on the certificate."],
-  [Flag, "Reports & the Consent Score", "Either side can put a breach on the record, with evidence. Upheld reports, ignored takedowns and unanswered requests all feed the public 0–1000 Consent Score. Consent takes no further enforcement action — for legal matters, export the signed Consent History Dossier."],
+const steps = (membership: string, days: number) => [
+  [Users, "One account, verified once", `Every account is the same, and every account can ask and be asked. Everyone goes through one ID check: legal documents, your channels, one account per person or name. Our review team may ask for a short video call. Brands and shows can run a team profile that works the same way. ${membership}`],
+  [Search, "Ask for the exact use", `Describe the exact use: platforms and formats, duration in seconds for timed formats, what of theirs you use, the final content file, a thumbnail if it features them, the context, your plan, and how long you need it. Many people are free to ask. Others set a consent request fee, from about ₹100 in the currency they choose. You pay it when you send, plus a ${PLATFORM_PCT} platform fee. The fee is held until they answer: if they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} comes back to you. Consent keeps ${CONSENT_PCT}. The platform fee isn't refunded. A free ask has no platform fee and is sent at once.`],
+  [Scale, "They decide, or their terms do", `The terms they wrote answer first: allow, ask first or never, per platform, format and what is used, plus standing rules that can approve or decline on their own. Otherwise their team approves (with optional limits), asks you a question, or declines. A no needs no reason. Each step has ${days} days: a request nobody acts on ends, and one left unanswered lowers the Consent Score of the person asked. People can also limit how many requests they take; new requests pause until they catch up.`],
+  [QrCode, "A certificate, and the matter is closed", "A yes becomes a tamper-proof certificate locked to the exact approved files and sealed by Consent. It can't be faked or quietly edited. The public page checks the seal every time it loads and can tell anyone whether a file is one of the approved originals. Put the verification link in the published content. Once the certificate is issued, the matter is closed."],
+  [ShieldOff, "A yes can become a no", "The person who said yes can revoke future use (content already published within the approved scope stays covered) and ask for a takedown, which the other side confirms. Everything is recorded on the certificate."],
+  [Flag, "Reports and the Consent Score", "Either side can put a breach on the record, with evidence. Upheld reports, ignored takedowns and unanswered requests all feed the public 0–1000 Consent Score. Consent takes no further action. You can export the Consent History Dossier of any request as your record."],
+  [Wallet, "Where the money goes", `Consent request fees are held until the answer and paid out on Fridays: ${OWNER_PCT} to the person who said yes. The platform fee and the membership are Consent's.`],
 ] as const;
 
-export default function HowItWorksPage() {
+export default async function HowItWorksPage() {
+  const [settings, india] = await Promise.all([
+    getSettings(),
+    db.priceConfig.findUnique({ where: { country: "IN" } }),
+  ]);
+  const price = fmtPrice(india?.membershipFee ?? 1000, india?.currency ?? "INR");
+  const STEPS = steps(
+    settings.membershipFeeOn
+      ? `Membership is ${price} a year, the same for everyone. You need it to send requests; being asked never needs it.`
+      : `Membership is ${price} a year, the same for everyone, and free for now.`,
+    settings.slaDays,
+  );
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <PageHeader kicker="consent." title="How it works" desc="You set the terms. This is how every yes goes on the record." />
+      <PageHeader kicker="consent." title="How it works" desc="Ask anyone for consent. Decide who can use yours. Every yes goes on the record." />
       <div className="space-y-3">
         {STEPS.map(([Icon, title, body], i) => (
           <Card key={title} className="space-y-2">

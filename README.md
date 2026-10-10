@@ -1,27 +1,35 @@
 # Consent — Likeness & IP Permission Platform
 
-**A face is property. A voice is property. A story is property.** Consent is a platform where
-**identity owners** (people, TV shows, movies, brands, characters) record **platform-wise
-permissions** for how their name, picture, video references, voice and other identity assets may
-be used — and where **creators, news channels, meme pages, podcasts and media houses** get
-documented, verifiable approval before publishing.
+**Ask anyone for consent. Decide who can use yours.** Consent is a platform where people, creators,
+shows, brands, news channels and podcasts ask each other for **platform-wise permission** before
+using someone's name, picture, video, voice or work, and where everyone sets the terms for their own.
 
-Every approval produces a **tamper-proof consent certificate**: bound to the SHA-256 hashes of the
+**Every account is the same.** One ID check (documents, channels, one account per person or name;
+admin approves once) and the profile can both **send** and **receive** consent requests. Brands
+and shows can run a team profile that works the same way; the profile switcher only appears for
+people who belong to more than one profile. See `DECISIONS.md` #27. Onboarding is strictly
+mandatory: every field (photo, ID type, number and file, at least one channel, the declaration, the
+consent request fee and the receive limit) is required, except "Also known as", so an incomplete
+profile never reaches the ID-check queue (#34).
+
+Every yes produces a **tamper-proof consent certificate**: bound to the SHA-256 hashes of the
 exact approved files, signed with the platform's Ed25519 key, verifiable by anyone at a public link.
+Once it's issued, the matter is closed: there is no deal-making, paperwork, contact sharing or
+meeting scheduling between the two people (#28).
 
-Consent is **not a payment intermediary** between the two sides — agreed usage fees are settled
-directly. Consent charges requesters platform fees (onboarding, yearly subscription, and a platform
-fee on each request). An owner can also set a **consent request fee**: it is held until they answer,
-then 80% goes to the owner on a yes (paid out weekly on Fridays) or 80% is refunded to the requester
-otherwise; Consent keeps 20%. The platform fee is never refunded. See `DECISIONS.md` #25h.
+**Money** (#29–#31). Each profile sets a **consent request fee**: free, or at least about ₹100 in
+the currency they choose (per-currency minimums are admin-editable). A paid fee is held until they
+answer: on a yes 80% goes to them (paid out weekly on Fridays), otherwise 80% is refunded to the
+asker; Consent keeps 20%. The asker also pays a **platform fee** of 20% of the consent request fee,
+in the same currency, never refunded. A free ask has no platform fee and no checkout at all.
+**Membership** is ₹1,000 a year for every account, switched off (free) for now; when an admin
+switches it on, it is needed to send, never to be asked.
 
-Requests move on a **7-day window**: every open request expires 7 days (admin setting) after the
-last action from either side, and any action starts a fresh window. Owners can set **request
-limits** (how many may wait for their answer, and per day / week / month); while one is reached,
-new requests pause. There is no chat: an owner **asks** a question or for a change and the
-requester answers in writing. When approving, the owner picks which **contact details** to share,
-and either side can **schedule a meeting** that goes into both people's calendars. See
-`DECISIONS.md` #25i–#25l.
+Requests move on a **7-day window**: every open request ends 7 days (admin setting) after the last
+action from either side, and any action starts a fresh window. Profiles can set **request limits**
+(how many may wait for an answer, and per day / week / month); while one is reached, new requests
+pause. There is no chat: the person asked can **ask** a question and the asker answers in writing.
+See `DECISIONS.md` #25i–#25k.
 
 ## Stack
 
@@ -44,7 +52,7 @@ npm run db:seed
 
 # 4. Run (two terminals)
 npm run dev     # app on http://localhost:3000
-npm run jobs    # background worker: request-window expiry + reminders, grant expiry, takedowns, renewals
+npm run jobs    # background worker: request-window expiry + reminders, grant expiry, takedowns, payouts
 ```
 
 The seed enables the `pg_trgm` extension via migration; if your Postgres user cannot create
@@ -52,23 +60,27 @@ extensions, run `CREATE EXTENSION pg_trgm;` as a superuser once.
 
 ### Demo logins (password: `Password1!`)
 
-| Email | Role |
+Every demo account has one profile that can both ask and be asked.
+
+| Email | Profile |
 |---|---|
 | `admin@consent.app` | Super Admin (admin panel at `/admin`) |
-| `jane@demo.consent` | Consenter — person (actor) |
-| `show@demo.consent` | Consenter — TV show (Nightwatch) |
-| `brand@demo.consent` | Consenter — brand (Volt Energy) |
-| `clips@demo.consent` | Requester — individual creator (active) |
-| `news@demo.consent` | Requester — news channel (active) |
-| `pod@demo.consent` | Requester — application pending in the admin queue |
+| `jane@demo.consent` | Jane Carter — person (actor); fee USD 25, News free, Commentary USD 10 |
+| `show@demo.consent` | Nightwatch — TV show; fee USD 100 |
+| `brand@demo.consent` | Volt Energy — brand; free to ask |
+| `clips@demo.consent` | Acme Clips — creator; free to ask |
+| `news@demo.consent` | Daily Lens News — news channel; free to ask |
+| `pod@demo.consent` | Night Owls Podcast — ID check waiting in the admin queue |
 
-Seeded demo data includes requests in every state (pending with an expiry window, in negotiation
-with offers, an open Ask, deal agreed with revealed contacts, denied, auto-expired with the platform
-fee kept, withdrawn) plus one **issued certificate** with a live verification page, an open breach
-report and a raised takedown.
+Seeded demo data includes requests across the lifecycle (pending with an expiry window, paid and
+held, a free ask, an open Ask, approved in principle, declined, expired, withdrawn and closed with
+the 80% refunded, and one request in the other direction: Jane asking Acme Clips) plus one **issued
+certificate** with a live verification page, an open breach report and a raised takedown. Payments
+match the 80/20 split: a platform fee of 20% of each paid consent request fee, and none for free
+asks.
 
-**2FA note:** admin access and consenter panels require TOTP 2FA (per spec). On first access you'll
-be walked through a 30-second authenticator setup. **Mock providers:** all email/SMS (including OTP
+**2FA note:** every account (and the admin panel) requires TOTP 2FA. On first access you'll be
+walked through a 30-second authenticator setup. **Mock providers:** all email/SMS (including OTP
 codes) land in the in-app **dev inbox** (`/dev/inbox`); payments use a mock checkout that settles
 instantly. Real adapters (Resend, Twilio, Stripe, Razorpay, S3) plug into the same interfaces via
 env vars.
@@ -80,8 +92,8 @@ env vars.
 | `npm run dev` | Next.js dev server |
 | `npm run build` / `npm start` | Production build / serve |
 | `npm run jobs` | Background worker loop (also: `POST /api/jobs/tick` for cron, or the admin "Run jobs now" button) |
-| `npm run db:seed` | Idempotent seed (catalog, pricing, roles, templates, demo data) |
-| `npm test` | Vitest unit tests (rules engine, signing, escrow, negotiation, channels, utils) |
+| `npm run db:seed` | Idempotent seed (catalog, currencies, membership prices, roles, CMS pages, demo data) |
+| `npm test` | Vitest unit tests (rules engine, signing, escrow, platform fee, profile pairing, channels, utils) |
 | `npm run e2e:prep` then `npm run test:e2e` | Playwright browser tests against the separate `consent_e2e` database |
 | `npm run e2e:reset` | Wipe and re-seed `consent_e2e` (tests leave history behind, e.g. upheld reports lower Acme Clips' score; reset every few runs) |
 | `npx prisma migrate dev` | Apply migrations |
@@ -89,18 +101,19 @@ env vars.
 ## Where things live
 
 ```
-prisma/schema.prisma      # full data model (~45 models)
-prisma/seed.ts            # catalog + demo data
-src/lib/                  # auth, rbac, audit (hash-chained), storage+hashing, signing,
-                          # rules engine, score engine, jobs, payments, providers (mock/pluggable)
-src/app/(public)/         # home, how-it-works, pricing, directory, public profiles,
+prisma/schema.prisma      # full data model
+prisma/seed.ts            # catalog + demo data (createProfilePair: one profile per persona)
+src/lib/                  # auth, profiles (the profile pair), rbac, audit (hash-chained),
+                          # storage+hashing, signing, rules engine, score engine, jobs,
+                          # payments, currencies, platform fee, membership, providers (mock/pluggable)
+src/app/(public)/         # home, how-it-works, pricing, directory, public profile (/c/<slug>),
                           # certificate verification + file hash checker, CMS pages
 src/app/(auth)/           # signup, login, email/phone OTP, TOTP
-src/app/(app)/            # dashboard, onboarding, consenter panel (c-panel),
-                          # requester panel (r-panel), notifications, settings, dev inbox
-src/app/(admin)/admin/    # 15 admin modules with RBAC
+src/app/(app)/            # dashboard, onboarding (one ID check), Home (/c-panel), Find,
+                          # Requests (received and sent), Profile hub, notifications, settings
+src/app/(admin)/admin/    # admin modules with RBAC (one ID-check queue: Profiles)
 src/app/api/              # files (signed URLs), certificates/invoices/dossier PDFs,
-                          # badge SVG, jobs tick, data export
+                          # badge SVG, verification API, jobs tick, data export
 scripts/worker.ts         # background sweep loop
 ```
 

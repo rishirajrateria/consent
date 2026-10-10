@@ -1,24 +1,25 @@
 import { test, expect } from "@playwright/test";
 import { db, requesterBySlug } from "./db";
-import { pageFor, submitBasicRequest, visit } from "./helpers";
+import { expectStatus, pageFor, submitBasicRequest, visit } from "./helpers";
 
 /**
- * Flow 7 — report + score: Jane files a breach report on a freshly approved
- * request from Acme Clips; the admin upholds it in /admin/reports; clips'
- * requester score drops (checked via Prisma) and the report shows Upheld.
+ * Report + score: Jane files a breach report on a freshly approved request
+ * from Acme Clips; the admin upholds it in /admin/reports; the Consent Score
+ * Acme Clips earns for asking drops (its sending half, checked via Prisma)
+ * and the report shows Upheld.
  *
  * Issuing the fresh grant triggers a score recalculation, so the recorded
  * baseline is a freshly computed value and the uphold penalty must land
  * strictly below it.
  */
-test("upheld breach report lowers the requester score", async ({ browser }) => {
+test("an upheld breach report lowers the asker's score", async ({ browser }) => {
   const stamp = Date.now();
   const description = `E2E report ${stamp}: the published short is missing the mandatory consent verification link.`;
 
   // Older e2e reports would skew the recalculated baseline — clear them.
   await db.report.deleteMany({ where: { description: { startsWith: "E2E report" } } });
 
-  // ── Fresh approved request with a grant (matrix auto-approve) ─
+  // ── Fresh approved request with a certificate (Jane's terms approve it) ─
   const clips = await pageFor(browser, "clips");
   const requestId = await submitBasicRequest(clips, {
     slug: "jane-carter",
@@ -28,9 +29,9 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
     uploadAsset: true,
     uploadRaw: true,
     intent: "Entertainment",
+    charge: "paid", // Jane's consent request fee
   });
-  const approved = await db.consentRequest.findUnique({ where: { id: requestId } });
-  expect(approved!.status).toBe("APPROVED");
+  await expectStatus(requestId, "APPROVED");
 
   // Recalculate Acme's score with the app's own formula now that old e2e
   // reports are gone, so the baseline doesn't still carry their penalty.
@@ -43,7 +44,7 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
   // ── Jane files a report on the approved request ──────────────
   const jane = await pageFor(browser, "jane");
   await visit(jane, `/c-panel/requests/${requestId}`);
-  await jane.getByText(/Report a breach on this requester/).click();
+  await jane.getByText(/Report a breach by Acme Clips/).click();
   await jane.selectOption('select[name="reason"]', { label: "Missing consent link" });
   await jane.fill('textarea[name="description"]', description);
   await jane.getByRole("button", { name: "File report" }).click();
@@ -73,7 +74,7 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
   await expect.poll(async () => (await requesterBySlug("acme-clips")).score).toBeLessThan(before);
 
   await visit(jane, `/c-panel/requests/${requestId}`);
-  await expect(jane.getByText("Upheld", { exact: true })).toBeVisible();
+  await expect(jane.getByText("Upheld", { exact: true }).first()).toBeVisible();
 
   await visit(admin, "/admin/reports?tab=Upheld");
   await expect(admin.getByText(description)).toBeVisible();

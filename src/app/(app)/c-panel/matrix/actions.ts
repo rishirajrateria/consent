@@ -28,19 +28,13 @@ export async function saveMatrixAction(formData: FormData) {
     const durRaw = String(formData.get(`dur_${format.id}`) ?? "").trim();
     const maxDurationSec = durRaw ? Math.max(1, parseInt(durRaw, 10) || 0) : null;
     const thumbnailAllowed = formData.get(`thumb_${format.id}`) === "on";
-    const paidDefault = formData.get(`paid_${format.id}`) === "on";
     for (const at of assetTypes) {
       const policy = String(formData.get(`policy_${format.id}_${at.id}`) ?? "ASK") as MatrixPolicy;
       if (!["AUTO_APPROVE", "ASK", "AUTO_DENY"].includes(policy)) continue;
       // Note any difference (an unset cell reads as Ask with default row options),
       // but always write every cell so the stored matrix stays complete.
-      const was = current.get(`${format.id}_${at.id}`) ?? { policy: "ASK", maxDurationSec: null, thumbnailAllowed: true, paidDefault: false };
-      if (
-        was.policy !== policy ||
-        was.maxDurationSec !== maxDurationSec ||
-        was.thumbnailAllowed !== thumbnailAllowed ||
-        was.paidDefault !== paidDefault
-      )
+      const was = current.get(`${format.id}_${at.id}`) ?? { policy: "ASK", maxDurationSec: null, thumbnailAllowed: true };
+      if (was.policy !== policy || was.maxDurationSec !== maxDurationSec || was.thumbnailAllowed !== thumbnailAllowed)
         changed = true;
       ops.push(
         db.consentMatrixEntry.upsert({
@@ -52,7 +46,7 @@ export async function saveMatrixAction(formData: FormData) {
               assetTypeId: at.id,
             },
           },
-          update: { policy, maxDurationSec, thumbnailAllowed, paidDefault },
+          update: { policy, maxDurationSec, thumbnailAllowed },
           create: {
             consenterId: consenter.id,
             platformId,
@@ -61,7 +55,6 @@ export async function saveMatrixAction(formData: FormData) {
             policy,
             maxDurationSec,
             thumbnailAllowed,
-            paidDefault,
           },
         })
       );

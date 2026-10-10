@@ -1,13 +1,21 @@
 import { notFound, redirect } from "next/navigation";
 import { getSession, requireUser, setActiveProfile } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { ensureProfileFor, mirrorMember, profileRole } from "@/lib/profiles";
 import { Card, PageHeader, Alert, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { audit } from "@/lib/audit";
-import { titleCase } from "@/lib/utils";
 import { logoutAction } from "@/app/(auth)/actions";
+import { ROLE_LABEL } from "@/app/(app)/c-panel/team/roles";
 
 export const metadata = { title: "Team invitation" };
+
+/** The profile an invite is for: old invites to a sending-only team resolve to its profile. */
+async function inviteProfileId(invite: { profileKind: string; profileId: string }) {
+  if (invite.profileKind !== "requester") return invite.profileId;
+  const r = await db.requesterProfile.findUnique({ where: { id: invite.profileId }, select: { id: true } });
+  return r ? ensureProfileFor(r.id) : null;
+}
 
 // Public route (not under the app shell) so a signed-out invitee sees the
 // invite and keeps it through sign-in or signup via ?next=.
@@ -17,11 +25,15 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   const invite = await db.teamInvite.findUnique({ where: { token } });
   if (!invite || invite.acceptedAt || invite.expiresAt < new Date()) notFound();
 
-  const profileName =
-    invite.profileKind === "consenter"
-      ? (await db.consenterProfile.findUnique({ where: { id: invite.profileId } }))?.displayName
-      : (await db.requesterProfile.findUnique({ where: { id: invite.profileId } }))?.displayName;
-  if (!profileName) notFound();
+  // Read-only here; an old sending-only team gets its profile when the invite is accepted.
+  const profile =
+    invite.profileKind === "requester"
+      ? await db.requesterProfile.findUnique({ where: { id: invite.profileId }, select: { displayName: true } })
+      : await db.consenterProfile.findUnique({ where: { id: invite.profileId }, select: { displayName: true } });
+  if (!profile) notFound();
+  const profileName = profile.displayName;
+  // Old sending-only invites (Editor) join as managers without any extra permission.
+  const role = invite.profileKind === "requester" ? profileRole(invite.role) : invite.role;
 
   const back = encodeURIComponent(`/invite/${token}`);
   const emailMatches = !!session && invite.email.toLowerCase() === session.user.email.toLowerCase();
@@ -32,44 +44,44 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     const inv = await db.teamInvite.findUnique({ where: { token } });
     if (!inv || inv.acceptedAt || inv.expiresAt < new Date()) redirect("/dashboard");
     if (inv.email.toLowerCase() !== s.user.email.toLowerCase()) redirect("/dashboard");
-    if (inv.profileKind === "consenter") {
-      await db.consenterMember.upsert({
-        where: { consenterId_userId: { consenterId: inv.profileId, userId: s.userId } },
+    const consenterId = await inviteProfileId(inv);
+    if (!consenterId) redirect("/dashboard");
+    const legacy = inv.profileKind === "requester";
+    const joinAs = legacy ? profileRole(inv.role) : inv.role;
+    // Both halves: the profile seat and its mirror on the sending half.
+    await db.$transaction(async (tx) => {
+      const seat = await tx.consenterMember.upsert({
+        where: { consenterId_userId: { consenterId, userId: s.userId } },
         update: {},
         create: {
-          consenterId: inv.profileId,
+          consenterId,
           userId: s.userId,
-          role: inv.role,
-          canApprove: inv.canApprove,
-          canNegotiate: inv.canNegotiate,
-          canEditRules: inv.canEditRules,
-          canExport: inv.canExport,
-          canManageTeam: inv.canManageTeam,
+          role: joinAs,
+          ...(legacy || joinAs === "VIEWER"
+            ? {}
+            : {
+                canApprove: inv.canApprove,
+                canEditRules: inv.canEditRules,
+                canExport: inv.canExport,
+                canManageTeam: inv.canManageTeam,
+              }),
         },
       });
-    } else {
-      await db.requesterMember.upsert({
-        where: { requesterId_userId: { requesterId: inv.profileId, userId: s.userId } },
-        update: {},
-        create: { requesterId: inv.profileId, userId: s.userId, role: inv.role },
-      });
-    }
-    await db.teamInvite.update({ where: { token }, data: { acceptedAt: new Date() } });
+      await mirrorMember(seat, tx);
+      await tx.teamInvite.update({ where: { token }, data: { acceptedAt: new Date() } });
+    });
     await audit({
       actorId: s.userId,
       actorName: s.user.name,
       action: "team_invite_accepted",
       module: "teams",
-      targetId: inv.profileId,
-      detail: { role: inv.role, kind: inv.profileKind },
+      targetId: consenterId,
+      detail: { role: joinAs, kind: inv.profileKind },
     });
-    // Land in the team just joined, not on a generic dashboard.
-    if (inv.profileKind === "consenter") {
-      await setActiveProfile({ kind: "consenter", id: inv.profileId });
-      redirect("/c-panel");
-    }
-    await setActiveProfile({ kind: "requester", id: inv.profileId });
-    redirect("/r-panel");
+    // Land in the profile just joined.
+    await setActiveProfile({ kind: "consenter", id: consenterId });
+    if (!s.user.totpEnabled) redirect("/settings/security?next=%2Fc-panel");
+    redirect("/c-panel");
   }
 
   return (
@@ -77,8 +89,8 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
       <PageHeader kicker="Team invitation" title={profileName} />
       <Card strong className="space-y-4">
         <p className="text-sm text-ink-soft">
-          You&apos;ve been invited to join <strong>{profileName}</strong> as{" "}
-          <strong>{titleCase(invite.role)}</strong> ({invite.profileKind} team).
+          You&apos;re invited to help run <strong>{profileName}</strong> as <strong>{ROLE_LABEL[role]}</strong>.
+          {role === "MANAGER" ? " Managers can also send requests as this profile." : ""}
         </p>
         {!session ? (
           <>

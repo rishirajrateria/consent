@@ -2,42 +2,34 @@
 
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { requireUser, newTotpSecret, verifyTotp, hashPassword, verifyPassword } from "@/lib/auth";
+import { requireUser, verifyTotp, hashPassword, verifyPassword, safeNext } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-
-export async function beginTotpSetupAction() {
-  const session = await requireUser();
-  if (session.user.totpEnabled) redirect("/settings");
-  const secret = newTotpSecret();
-  await db.user.update({ where: { id: session.userId }, data: { totpSecret: secret, totpEnabled: false } });
-  redirect("/settings/security");
-}
 
 export async function confirmTotpAction(formData: FormData) {
   const session = await requireUser();
+  // Where the person was headed when 2FA was asked for (onboarding, a team invite).
+  const next = safeNext(formData.get("next"));
   const code = String(formData.get("code") ?? "").trim();
   const user = await db.user.findUnique({ where: { id: session.userId } });
   if (!user?.totpSecret || !verifyTotp(user.totpSecret, code)) {
-    redirect("/settings/security?error=" + encodeURIComponent("Invalid code — try again"));
+    const q = new URLSearchParams({ error: "That code didn't work. Try the newest code from your app." });
+    if (next) q.set("next", next);
+    redirect(`/settings/security?${q.toString()}`);
   }
   await db.user.update({ where: { id: session.userId }, data: { totpEnabled: true } });
   await db.session.update({ where: { id: session.id }, data: { totpPassed: true } });
   await audit({ actorId: session.userId, actorName: session.user.name, action: "totp_enabled", module: "auth" });
-  redirect("/settings?totp=on");
+  redirect(next ?? "/settings?totp=on");
 }
 
-export async function disableTotpAction(formData: FormData) {
-  const session = await requireUser();
-  const code = String(formData.get("code") ?? "").trim();
-  const user = await db.user.findUnique({ where: { id: session.userId }, include: { adminRole: true } });
-  if (user?.adminRole) redirect("/settings?error=" + encodeURIComponent("Admins must keep 2FA enabled"));
-  const isConsenterMember = await db.consenterMember.findFirst({ where: { userId: session.userId } });
-  if (isConsenterMember) redirect("/settings?error=" + encodeURIComponent("Consenter team members must keep 2FA enabled"));
-  if (!user?.totpSecret || !verifyTotp(user.totpSecret, code))
-    redirect("/settings?error=" + encodeURIComponent("Invalid authenticator code"));
-  await db.user.update({ where: { id: session.userId }, data: { totpEnabled: false, totpSecret: null } });
-  await audit({ actorId: session.userId, actorName: session.user.name, action: "totp_disabled", module: "auth" });
-  redirect("/settings?totp=off");
+/**
+ * Two-factor authentication is required for every account (everyone can
+ * answer requests), so it can't be turned off. Kept so an old form posting
+ * here gets a plain answer.
+ */
+export async function disableTotpAction() {
+  await requireUser();
+  redirect("/settings?error=" + encodeURIComponent("Every account keeps two-factor authentication on."));
 }
 
 export async function changePasswordAction(formData: FormData) {

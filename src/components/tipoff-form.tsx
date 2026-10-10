@@ -9,17 +9,19 @@ import { SuccessNote, ErrorNote } from "@/components/error-note";
 import { Megaphone } from "lucide-react";
 
 /**
- * Public tip-off: anyone — fan, journalist, bystander — can report
- * unauthorized use of this consenter's likeness. No account needed.
+ * Public tip-off: anyone (fan, journalist, bystander) can report use of this
+ * profile's name, image or work without permission. No account needed. The
+ * profile's whole team is told.
  */
 export function TipOffForm({
-  consenterId,
+  profileId,
   slug,
   displayName,
   sent,
   error,
 }: {
-  consenterId: string;
+  /** The profile (its id, the receiving half's). */
+  profileId: string;
   slug: string;
   displayName: string;
   sent?: boolean;
@@ -46,16 +48,16 @@ export function TipOffForm({
       redirect(`${back}?tiperror=${encodeURIComponent("Add at least one link and a short description (min 20 characters)")}#tipoff`);
     await db.publicTipOff.create({
       data: {
-        consenterId,
+        consenterId: profileId,
         links,
         description: description.slice(0, 2000),
         reporterName: String(formData.get("reporterName") ?? "").trim().slice(0, 100) || null,
         reporterEmail: String(formData.get("reporterEmail") ?? "").trim().slice(0, 200) || null,
       },
     });
-    await notifyConsenterTeam(consenterId, {
-      title: "Public tip-off: possible unauthorized use",
-      body: `Someone reported your likeness being used at ${links[0]}. Review it under Tip-offs.`,
+    await notifyConsenterTeam(profileId, {
+      title: "Public tip-off: possible use without permission",
+      body: `Someone reported you being used at ${links[0]}. Review it under Tip-offs.`,
       href: "/c-panel/tipoffs",
       critical: true,
     });
@@ -66,9 +68,9 @@ export function TipOffForm({
     <Card className="space-y-4" id="tipoff">
       <SectionTitle
         title={`Seen ${displayName} used without permission?`}
-        desc="Report it — no account needed. The owner and the Consent team are notified. Approved uses carry a verification link; if there isn't one, that's a signal."
+        desc="Report it. No account needed. They and the Consent team are told. Approved uses carry a verification link; if there isn't one, that's a signal."
       />
-      {sent && <SuccessNote msg="Thank you. The owner has been notified." />}
+      {sent && <SuccessNote msg="Thank you. They have been told." />}
       <ErrorNote error={error} />
       <form action={tipOffAction} className="space-y-3">
         <Field label="Where did you see it?" required hint="Links, one per line.">

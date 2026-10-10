@@ -5,154 +5,120 @@ import { db } from "@/lib/db";
 import { requireConsenter } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { notifyRequesterTeam } from "@/lib/notify";
-import { issueGrant } from "@/lib/grants";
-import { revealContacts } from "@/lib/requests";
+import { ApprovalError, approveAndIssue } from "@/lib/requests";
 import { recalcConsenterScore } from "@/lib/score";
 import type { Selection } from "@/lib/rules";
-import { Prisma } from "@prisma/client";
-import { canSendOffer, FEE_CHANGED } from "@/lib/negotiation";
-import { fmtMoney } from "@/lib/utils";
+import type { Prisma, RequestStatus } from "@prisma/client";
 import { syncConsentPrice } from "@/lib/escrow";
-import { MeetingError, meetingProblem, readMeetingInput, scheduleMeeting } from "@/lib/meetings";
-import { pickedContactFields } from "./contact-fields";
+import { conditionProblem } from "./conditions";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
 }
 
+/** Waiting for the owner's answer: sent to them, or asked about and not yet answered. */
+const DECIDABLE: RequestStatus[] = ["PENDING", "CHANGES_REQUESTED"];
+
 async function decidableRequest(id: string) {
-  const { session, member, consenter } = await requireConsenter("canApprove");
+  const { session, consenter } = await requireConsenter("canApprove");
   const request = await db.consentRequest.findUnique({
     where: { id },
-    include: { files: true, requester: true, offers: { orderBy: { version: "desc" } } },
+    include: { requester: { select: { displayName: true } } },
   });
-  if (!request || request.consenterId !== consenter.id) redirect("/c-panel/requests");
-  return { session, member, consenter, request };
+  if (!request || request.consenterId !== consenter.id || !request.submittedAt) redirect("/c-panel/requests");
+  return { session, consenter, request };
 }
 
-/** The fee still waiting for an answer, if any (only the latest offer can be open). */
-function openOfferOf<O extends { status: string }>(offers: O[]): O | null {
-  return offers[0]?.status === "OPEN" ? offers[0] : null;
+/** Why a request can't be answered any more, when it was withdrawn or has ended; null otherwise. */
+function endedReason(status: RequestStatus, asker: string): string | null {
+  if (status === "WITHDRAWN") return `${asker} withdrew this request.`;
+  if (status === "EXPIRED_NO_RESPONSE" || status === "CLOSED") return "This request has ended.";
+  return null;
 }
 
+/** Why an answer didn't go through when the request moved meanwhile: they withdrew, it ended, or a teammate answered first. */
+async function movedReason(id: string, asker: string): Promise<string> {
+  const now = await db.consentRequest.findUnique({ where: { id }, select: { status: true } });
+  return (now && endedReason(now.status, asker)) ?? "Someone on your team already answered this request.";
+}
+
+/** "2026-11-30" from a date input, stored like the dates they asked for (midnight UTC); null when not a date. */
+function dateOnly(raw: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Approve. Conditions can only narrow the request: fewer formats, shorter
+ * clips, no thumbnail, an earlier end date, and a short written condition
+ * that can't ask for money. The certificate is issued at once when the final
+ * content file is in; otherwise the request is approved in principle and the
+ * certificate follows the upload.
+ */
 export async function approveRequestAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, member, consenter, request } = await decidableRequest(id);
+  const { session, request } = await decidableRequest(id);
   const path = `/c-panel/requests/${id}`;
-  if (!["PENDING", "IN_NEGOTIATION", "CHANGES_REQUESTED"].includes(request.status))
-    fail(path, "This request can no longer be approved from here");
+  const asker = request.requester.displayName;
+  if (!DECIDABLE.includes(request.status))
+    fail(path, endedReason(request.status, asker) ?? "This request can no longer be approved.");
 
-  // Approving while a fee is open settles it: the requester's offer is accepted
-  // with the approval. The owner's own fee needs the requester's answer first.
-  const openOffer = openOfferOf(request.offers);
-  // Settle only the fee the owner saw on the button, never one changed meanwhile.
-  if ((openOffer?.id ?? "") !== String(formData.get("offerId") ?? "")) fail(path, FEE_CHANGED);
-  if (openOffer && openOffer.bySide !== "requester") {
-    const fee = fmtMoney(openOffer.amount.toString(), openOffer.currency);
-    const requester = request.requester.displayName;
-    fail(
-      path,
-      request.status === "IN_NEGOTIATION"
-        ? `Waiting for ${requester} to answer your fee of ${fee}`
-        : canSendOffer(request.offers, "consenter")
-          ? `Your fee of ${fee} hasn't been answered. Send it again with Set a fee so ${requester} can answer it`
-          : `You've used all your counter-offers. Ask a question or decline, or ${requester} can raise a new request.`
-    );
-  }
-  if (openOffer && member.role !== "OWNER" && !member.canNegotiate)
-    fail(path, "Accepting a fee needs the negotiate permission");
-
-  // Approve with conditions: optionally reduce scope
-  const keptFormatIds = formData.getAll("keepFormat").map(String);
+  // Fewer formats: the ticked ones stay (the form says it sent its ticks, so
+  // none ticked means none kept). None kept would approve nothing.
   const selections = request.selections as Selection[];
-  const approvedSelections = keptFormatIds.length
-    ? selections.filter((s) => keptFormatIds.includes(s.formatId))
-    : selections;
-  if (approvedSelections.length === 0) fail(path, "Keep at least one platform format");
+  const kept = formData.getAll("keepFormat").map(String);
+  const keptSelections =
+    formData.get("formatsShown") === "1" ? selections.filter((s) => kept.includes(s.formatId)) : selections;
+  if (keptSelections.length === 0) fail(path, "Keep at least one format, or decline.");
 
-  // Optional duration caps per kept selection
-  const cappedSelections = approvedSelections.map((s) => {
+  // Shorter clips: a cap below what was asked.
+  const approvedSelections = keptSelections.map((s) => {
     const cap = parseInt(String(formData.get(`cap_${s.formatId}`) ?? ""), 10);
-    if (s.durationSec && cap > 0 && cap < s.durationSec) return { ...s, durationSec: cap };
-    return s;
+    return s.durationSec && cap > 0 && cap < s.durationSec ? { ...s, durationSec: cap } : s;
   });
 
-  const typedConditions = String(formData.get("conditionsNote") ?? "").trim() || null;
-  // The note sent with the accepted fee is part of the deal, so it becomes a condition.
-  const conditionsNote =
-    [typedConditions, openOffer?.scopeNote ? `Agreed with the fee: ${openOffer.scopeNote}` : null]
-      .filter(Boolean)
-      .join(" — ") || null;
-  const approvedThumbnail =
-    formData.get("removeThumbnail") === "on" ? false : request.thumbnailUsed;
+  // Browsers send textarea line breaks as CRLF: count them once, as the form's limit does.
+  const conditionsNote = String(formData.get("conditionsNote") ?? "").replace(/\r\n?/g, "\n").trim() || null;
+  const problem = conditionProblem(conditionsNote ?? "");
+  if (problem) fail(path, problem);
 
-  // Optionally shorten validity
-  let validUntil = request.validUntil;
-  const shortenRaw = String(formData.get("validUntil") ?? "");
+  const approvedThumbnail = request.thumbnailUsed && formData.get("removeThumbnail") === "on" ? false : request.thumbnailUsed;
+
+  // Shorter validity: only for a time window, an end date after today and before theirs.
+  // (Single publication and perpetual have no end date to move, and the
+  // certificate would still call them that.)
+  const shortenRaw = String(formData.get("validUntil") ?? "").trim();
+  let validUntil: Date | null = null;
+  if (shortenRaw && request.validityKind !== "DATE_RANGE")
+    fail(path, "Only a request for a time window can get an earlier end date.");
   if (shortenRaw) {
-    const d = new Date(shortenRaw);
-    if (!isNaN(d.getTime())) validUntil = d;
+    validUntil = dateOnly(shortenRaw);
+    if (!validUntil) fail(path, "Enter the end date as a date.");
+    if (validUntil.getTime() <= Date.now()) fail(path, "Pick an end date after today.");
+    if (request.validFrom && validUntil <= request.validFrom) fail(path, "Pick an end date after the start of the time window.");
+    if (request.validUntil && validUntil >= request.validUntil)
+      fail(path, "The end date can only make the time shorter. Pick a date before the one they asked for.");
   }
 
-  const scopeChanged =
-    cappedSelections.length !== selections.length ||
-    JSON.stringify(cappedSelections) !== JSON.stringify(selections) ||
-    approvedThumbnail !== request.thumbnailUsed ||
-    !!conditionsNote ||
-    (validUntil?.getTime() ?? 0) !== (request.validUntil?.getTime() ?? 0);
-
-  // The tick is pre-set from the owner's settings; what they submit is final.
-  const requireLegal = formData.get("proposeLegal") === "on";
-
-  // Sharing contact details shares only the details the owner ticked.
-  const shareContacts = formData.get("shareContacts") === "on";
-  const shareFields = shareContacts ? pickedContactFields(formData, consenter) : [];
-  if (shareContacts && shareFields.length === 0)
-    fail(path, "Tick at least one contact detail to share, or untick Share my contact details");
-  // Check the meeting before anything is committed, so a mistake in it can't
-  // leave the request approved without the meeting the owner asked for.
-  const wantsMeeting = formData.get("scheduleMeeting") === "on";
-  const meetingInput = wantsMeeting ? readMeetingInput(formData, "meeting_") : null;
-  if (meetingInput) {
-    // One meeting per request: scheduling here would move one the requester set up.
-    const live = await db.requestMeeting.findFirst({ where: { requestId: id, status: "SCHEDULED" }, select: { id: true } });
-    if (live) fail(path, "A meeting is already scheduled. Move it from the Meeting card.");
-    const meetingIssue = meetingProblem(meetingInput);
-    if (meetingIssue) fail(path, meetingIssue);
+  // Answered, withdrawn or ended meanwhile (by a teammate, or them): say so, change nothing.
+  let refused = false;
+  try {
+    await approveAndIssue({
+      requestId: id,
+      decidedById: session.userId,
+      decidedByName: session.user.name,
+      actorSide: "consenter",
+      conditionsNote,
+      approvedSelections: approvedSelections as unknown as Prisma.InputJsonValue,
+      approvedThumbnail,
+      ...(validUntil ? { validUntil } : {}),
+    });
+  } catch (e) {
+    if (!(e instanceof ApprovalError)) throw e;
+    refused = true;
   }
-
-  await db.$transaction([
-    ...(openOffer
-      ? [db.negotiationOffer.update({ where: { id: openOffer.id }, data: { status: "ACCEPTED" } })]
-      : []),
-    db.consentRequest.update({
-      where: { id },
-      data: {
-        approvedSelections: cappedSelections as unknown as object,
-        approvedThumbnail,
-        conditionsNote,
-        validUntil,
-        decidedAt: new Date(),
-        decidedById: session.userId,
-        status: "AGREEMENT_MODE_PENDING",
-        ...(openOffer ? { agreedAmount: openOffer.amount, agreedCurrency: openOffer.currency } : {}),
-      },
-    }),
-    db.requestEvent.create({
-      data: {
-        requestId: id,
-        type: scopeChanged ? "approved_with_conditions" : "approved",
-        actorName: session.user.name,
-        actorSide: "consenter",
-        detail: {
-          conditionsNote,
-          approvedThumbnail,
-          validUntil: validUntil?.toISOString() ?? null,
-          ...(openOffer ? { amount: openOffer.amount.toString(), currency: openOffer.currency } : {}),
-        },
-      },
-    }),
-  ]);
+  if (refused) fail(path, await movedReason(id, asker));
   await audit({
     actorId: session.userId,
     actorName: session.user.name,
@@ -160,61 +126,13 @@ export async function approveRequestAction(formData: FormData) {
     module: "requests",
     targetId: id,
   });
-
-  const shared = shareContacts ? await revealContacts(id, session.user.name, shareFields) : null;
-  const contactLine = shared ? ` ${consenter.displayName} also shared their contact details.` : "";
-  const feeLine = openOffer
-    ? ` Agreed fee: ${fmtMoney(openOffer.amount.toString(), openOffer.currency)}, paid directly between you, never through Consent.`
-    : "";
-
-  if (requireLegal) {
-    await db.agreement.upsert({
-      where: { requestId: id },
-      update: { status: "PROPOSED", proposedBySide: "consenter" },
-      create: { requestId: id, status: "PROPOSED", proposedBySide: "consenter" },
-    });
-    await db.consentRequest.update({ where: { id }, data: { status: "LEGAL_AGREEMENT_PENDING" } });
-    await notifyRequesterTeam(request.requesterId, {
-      title: `Request #${request.number} approved — legally binding agreement proposed`,
-      body: `${consenter.displayName} approved${scopeChanged ? " with conditions" : ""} and proposes a legally binding agreement. You must accept or decline.${feeLine}${contactLine}`,
-      href: `/r-panel/requests/${id}`,
-      critical: true,
-    });
-  } else {
-    await notifyRequesterTeam(request.requesterId, {
-      title: `Request #${request.number} approved${scopeChanged ? " with conditions" : ""}`,
-      body: `Choose the agreement mode to receive your certificate (default: Consent-app record).${feeLine}${contactLine}`,
-      href: `/r-panel/requests/${id}`,
-      critical: true,
-    });
-  }
-  await recalcConsenterScore(consenter.id, `Responded to request #${request.number}`);
-  // A yes releases the owner's 80% of the held consent request fee.
-  await syncConsentPrice(id);
-
-  // The meeting was checked above, so only sending it can fail here. The
-  // approval stands; the owner can schedule it again from the Meeting card.
-  let meetingError: string | null = null;
-  if (meetingInput) {
-    try {
-      await scheduleMeeting({
-        requestId: id,
-        userId: session.userId,
-        userName: session.user.name,
-        side: "consenter",
-        input: meetingInput,
-      });
-    } catch (e) {
-      if (!(e instanceof MeetingError)) console.error("Scheduling a meeting while approving failed", e);
-      meetingError = e instanceof MeetingError ? e.message : "The calendar invites couldn't be sent. Try again.";
-    }
-  }
-  if (meetingError) fail(path, `Approved. The meeting wasn't scheduled: ${meetingError}`);
   redirect(path);
 }
 
+const NOTE_MAX = 2000;
+
 /**
- * Ask: the owner asks a question or asks for a change. The requester answers in
+ * Ask: the owner asks a question or asks for a change. The asker answers in
  * writing (and may update their plan or upload a new file), which sends the
  * request back to the owner.
  */
@@ -223,14 +141,19 @@ export async function requestChangesAction(formData: FormData) {
   const { session, consenter, request } = await decidableRequest(id);
   const path = `/c-panel/requests/${id}`;
   if (request.status === "CHANGES_REQUESTED")
-    fail(path, `You already asked. Wait for ${request.requester.displayName} to answer`);
-  if (!["PENDING", "IN_NEGOTIATION"].includes(request.status))
-    fail(path, "You can ask only while the request is waiting for your answer");
-  const note = String(formData.get("note") ?? "").trim();
-  if (!note) fail(path, "Write what you want to ask or change");
-  await db.$transaction([
-    db.consentRequest.update({ where: { id }, data: { status: "CHANGES_REQUESTED" } }),
-    db.requestEvent.create({
+    fail(path, `You already asked. Wait for ${request.requester.displayName} to answer.`);
+  if (request.status !== "PENDING") fail(path, "You can ask only while the request is waiting for your answer.");
+  const note = String(formData.get("note") ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!note) fail(path, "Write what you want to ask or change.");
+  if (note.length > NOTE_MAX) fail(path, `Keep your question under ${NOTE_MAX.toLocaleString("en-US")} characters.`);
+  // Only one answer at a time, even if two teammates press at once.
+  const asked = await db.$transaction(async (tx) => {
+    const moved = await tx.consentRequest.updateMany({
+      where: { id, status: "PENDING" },
+      data: { status: "CHANGES_REQUESTED" },
+    });
+    if (moved.count === 0) return false;
+    await tx.requestEvent.create({
       data: {
         requestId: id,
         type: "changes_requested",
@@ -238,86 +161,38 @@ export async function requestChangesAction(formData: FormData) {
         actorSide: "consenter",
         detail: { note },
       },
-    }),
-  ]);
+    });
+    return true;
+  });
+  if (!asked) fail(path, await movedReason(id, request.requester.displayName));
   await notifyRequesterTeam(request.requesterId, {
     title: `${consenter.displayName} asked about request #${request.number}`,
-    body: `"${note}" Answer it on the request page. You can also update your plan or upload a new file.`,
+    body: `"${note.length > 280 ? `${note.slice(0, 277)}…` : note}" Answer it on the request page. You can also update your plan or upload a new file.`,
     href: `/r-panel/requests/${id}`,
     critical: true,
   });
   redirect(path);
 }
 
-export async function markPaidAction(formData: FormData) {
-  const id = String(formData.get("id"));
-  const { session, member, request } = await decidableRequest(id);
-  const path = `/c-panel/requests/${id}`;
-  if (member.role !== "OWNER" && !member.canNegotiate) fail(path, "You don't have negotiation permission");
-  if (!["PENDING", "CHANGES_REQUESTED"].includes(request.status))
-    fail(path, "A fee can only be set on open requests");
-  const amount = parseFloat(String(formData.get("amount") ?? ""));
-  const currency = String(formData.get("currency") ?? "USD").toUpperCase().slice(0, 3);
-  if (!(amount > 0)) fail(path, "Enter a fee amount");
-  // A fee set again after an earlier negotiation counts as a counter-offer.
-  const earlier = await db.negotiationOffer.findMany({ where: { requestId: id }, select: { version: true, bySide: true } });
-  // The owner has no Accept here; their yes is Approve in "Your answer".
-  if (!canSendOffer(earlier, "consenter"))
-    fail(path, "You've used all your counter-offers, so you can't set a new fee. Choose another answer in Your answer.");
-
-  await db.$transaction([
-    db.negotiationOffer.updateMany({ where: { requestId: id, status: "OPEN" }, data: { status: "SUPERSEDED" } }),
-    db.negotiationOffer.create({
-      data: {
-        requestId: id,
-        version: Math.max(0, ...earlier.map((o) => o.version)) + 1,
-        bySide: "consenter",
-        byUserId: session.userId,
-        amount: new Prisma.Decimal(amount.toFixed(2)),
-        currency,
-        scopeNote: String(formData.get("scopeNote") ?? "").trim() || null,
-      },
-    }),
-    db.consentRequest.update({
-      where: { id },
-      data: { status: "IN_NEGOTIATION", isPaid: true, lastOfferAt: new Date() },
-    }),
-    db.requestEvent.create({
-      data: {
-        requestId: id,
-        type: "marked_paid",
-        actorName: session.user.name,
-        actorSide: "consenter",
-        detail: { amount: amount.toFixed(2), currency },
-      },
-    }),
-  ]);
-  await notifyRequesterTeam(request.requesterId, {
-    title: `Request #${request.number}: fee requested`,
-    body: `${currency} ${amount.toFixed(2)} — accept, counter-offer or walk away. Payment is settled directly between you; Consent never processes it.`,
-    href: `/r-panel/requests/${id}`,
-    critical: true,
-  });
-  redirect(`${path}`);
-}
-
+/** Decline. A no needs no reason; 80% of a paid consent request fee goes back to them. */
 export async function denyRequestAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, consenter, request } = await decidableRequest(id);
   const path = `/c-panel/requests/${id}`;
-  if (!["PENDING", "IN_NEGOTIATION", "CHANGES_REQUESTED"].includes(request.status))
-    fail(path, "This request can no longer be denied");
+  if (!DECIDABLE.includes(request.status))
+    fail(path, endedReason(request.status, request.requester.displayName) ?? "This request can no longer be declined.");
   const reasonId = String(formData.get("reasonId") ?? "");
-  const freeText = String(formData.get("freeText") ?? "").trim();
+  const freeText = String(formData.get("freeText") ?? "").trim().slice(0, 500);
   const reason = reasonId ? (await db.denialReason.findUnique({ where: { id: reasonId } }))?.label : null;
   const denialReason = [reason, freeText].filter(Boolean).join(" — ") || null;
 
-  await db.$transaction([
-    db.consentRequest.update({
-      where: { id },
+  const declined = await db.$transaction(async (tx) => {
+    const moved = await tx.consentRequest.updateMany({
+      where: { id, status: { in: DECIDABLE } },
       data: { status: "DENIED", decidedAt: new Date(), decidedById: session.userId, denialReason },
-    }),
-    db.requestEvent.create({
+    });
+    if (moved.count === 0) return false;
+    await tx.requestEvent.create({
       data: {
         requestId: id,
         type: "denied",
@@ -325,8 +200,10 @@ export async function denyRequestAction(formData: FormData) {
         actorSide: "consenter",
         detail: { reason: denialReason },
       },
-    }),
-  ]);
+    });
+    return true;
+  });
+  if (!declined) fail(path, await movedReason(id, request.requester.displayName));
   await audit({
     actorId: session.userId,
     actorName: session.user.name,
@@ -335,61 +212,13 @@ export async function denyRequestAction(formData: FormData) {
     targetId: id,
     reason: denialReason,
   });
+  // A no refunds 80% of a held consent request fee (and says so to them).
+  await syncConsentPrice(id);
   await notifyRequesterTeam(request.requesterId, {
-    title: `Request #${request.number} denied`,
-    body: denialReason ?? "No reason given.",
+    title: `${consenter.displayName} declined request #${request.number}`,
+    body: denialReason ? `Their reason: ${denialReason}` : "They didn't give a reason.",
     href: `/r-panel/requests/${id}`,
   });
   await recalcConsenterScore(consenter.id, `Responded to request #${request.number}`);
-  // A no refunds 80% of the held consent request fee to the requester.
-  await syncConsentPrice(id);
-  redirect(path);
-}
-
-/** Consenter confirms app-record mode on their side (for free approvals they made). */
-export async function consenterProceedAppRecordAction(formData: FormData) {
-  const id = String(formData.get("id"));
-  const { session, request } = await decidableRequest(id);
-  if (request.status !== "AGREEMENT_MODE_PENDING") redirect(`/c-panel/requests/${id}`);
-  await db.consentRequest.update({ where: { id }, data: { agreementMode: "APP_RECORD" } });
-  // An agreement step, so it resets the request's window like any other action.
-  await db.requestEvent.create({
-    data: {
-      requestId: id,
-      type: "agreement_mode_chosen",
-      actorName: session.user.name,
-      actorSide: "consenter",
-      detail: { mode: "Consent-app record only" },
-    },
-  });
-  const hasRaw = request.files.some((f) => f.kind === "RAW_CONTENT");
-  if (hasRaw) {
-    await issueGrant(id, session.user.name);
-  } else {
-    await db.consentRequest.update({ where: { id }, data: { status: "APPROVED_IN_PRINCIPLE" } });
-  }
-  redirect(`/c-panel/requests/${id}`);
-}
-
-/** Consenter shares the contact details they tick, after approving (free or paid). */
-export async function shareContactsAction(formData: FormData) {
-  const id = String(formData.get("id"));
-  const { session, member, consenter } = await requireConsenter();
-  const path = `/c-panel/requests/${id}`;
-  if (member.role !== "OWNER" && !member.canApprove && !member.canNegotiate)
-    fail(path, "You don't have permission to share contact details");
-  const request = await db.consentRequest.findUnique({ where: { id } });
-  if (!request || request.consenterId !== consenter.id) redirect("/c-panel/requests");
-  if (request.contactsRevealed) redirect(path);
-  const shareable = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"];
-  if (!shareable.includes(request.status)) fail(path, "Contact details can be shared once the request is approved");
-  const fields = pickedContactFields(formData, consenter);
-  if (fields.length === 0) fail(path, "Tick at least one contact detail to share");
-  if (!(await revealContacts(id, session.user.name, fields))) fail(path, "Tick at least one contact detail to share");
-  await notifyRequesterTeam(request.requesterId, {
-    title: `${consenter.displayName} shared their contact details`,
-    body: `You can now reach them directly about request #${request.number}.`,
-    href: `/r-panel/requests/${id}`,
-  });
   redirect(path);
 }

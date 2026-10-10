@@ -16,7 +16,7 @@ export default async function AdminTakedowns() {
 
   return (
     <div className="space-y-6">
-      <PageHeader kicker="Admin" title="Takedown requests" desc="Overview only — the parties drive the flow; ignored requests are recorded by the background jobs." />
+      <PageHeader kicker="Admin" title="Takedown requests" desc="Overview only. The two profiles drive the flow; ignored takedowns are recorded by the background jobs." />
       {takedowns.length === 0 ? (
         <EmptyState icon={Siren} title="No takedown requests" />
       ) : (
@@ -26,7 +26,7 @@ export default async function AdminTakedowns() {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <Siren className="size-4" aria-hidden />
                 <span className="font-medium">
-                  {t.grant.request.consenter.displayName} → {t.grant.request.requester.displayName}
+                  {t.grant.request.consenter.displayName} asked {t.grant.request.requester.displayName} to take it down
                 </span>
                 <span className="text-xs text-ink-faint">grant {t.grant.publicId} · {fmtDateTime(t.createdAt)} · respond by {fmtDateTime(t.respondBy)}</span>
                 <StatusBadge status={t.status} className="ml-auto" />

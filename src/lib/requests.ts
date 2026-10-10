@@ -1,14 +1,25 @@
+import type { ConsentRequest, ConsenterProfile, Prisma, RequesterProfile, RequestStatus } from "@prisma/client";
 import { db } from "./db";
 import { getSettings } from "./settings";
 import { evaluateAutoDecision, type Selection } from "./rules";
 import { issueGrant } from "./grants";
 import { notifyConsenterTeam, notifyRequesterTeam, notifyUser } from "./notify";
-import { splitConsentFee } from "./escrow";
+import { splitConsentFee, syncConsentPrice } from "./escrow";
 import { fmtMoney } from "./utils";
 import { windowEnd } from "./request-window";
 import { requestCapacity, type Capacity } from "./capacity";
-import { MODE_LABEL, requestUrl, type Side } from "./meetings";
-import type { CallMode, ConsentRequest, ConsenterProfile, RequesterProfile } from "@prisma/client";
+import { recalcConsenterScore } from "./score";
+import { isSelfAsk } from "./profiles";
+import { profileScore } from "./profiles-pure";
+
+/* The request lifecycle on the server: sending a draft (after its checkout,
+   or straight away when asking is free), the automatic decision, and the one
+   approval path shared by the owner's Approve and automatic approvals.
+
+   DRAFT → SUBMITTED (passing) → DENIED | APPROVED_IN_PRINCIPLE / APPROVED | PENDING.
+   From PENDING: Approve → APPROVED (certificate) or APPROVED_IN_PRINCIPLE (waiting
+   for the final file), Ask → CHANGES_REQUESTED → PENDING, Decline → DENIED,
+   Withdraw → WITHDRAWN. The 7-day window expires or closes the rest (jobs.ts). */
 
 /** A moment for notifications and emails, which can't know the reader's time zone. */
 export function fmtUtc(d: Date): string {
@@ -23,17 +34,40 @@ export function fmtUtc(d: Date): string {
   }).format(d)} UTC`;
 }
 
+/** Joins sentences, skipping empty ones. */
+export function sentences(...parts: (string | null | undefined | false)[]): string {
+  return parts
+    .filter((p): p is string => !!p && !!p.trim())
+    .map((p) => p.trim())
+    .join(" ");
+}
+
 /**
- * What a requester is told when a request ends without a yes: 80% of the
- * owner's consent request fee comes back (Consent keeps 20%); the platform fee never does.
+ * What the person who asked is told when a request ends without a yes: 80% of
+ * the consent request fee comes back (Consent keeps 20%); the platform fee
+ * never does. Empty for a free request: nothing was paid, so nothing to say.
  */
-export async function noYesRefundNote(requestId: string, owner: string) {
-  const fee = await db.payment.findFirst({
-    where: { requestId, purpose: "CONSENT_PRICE", status: { in: ["PAID", "REFUNDED"] } },
+export async function noYesRefundNote(requestId: string, owner: string): Promise<string> {
+  const paid = await db.payment.findMany({
+    where: {
+      requestId,
+      purpose: { in: ["CONSENT_PRICE", "PER_REQUEST"] },
+      status: { in: ["PAID", "REFUNDED", "FORFEITED"] },
+    },
+    orderBy: { createdAt: "desc" },
   });
-  if (!fee) return "The platform fee isn't refunded.";
+  const fee = paid.find((p) => p.purpose === "CONSENT_PRICE");
+  if (!fee) return paid.length ? "The platform fee isn't refunded." : "";
   const back = fee.refundedAmount ?? splitConsentFee(Number(fee.amount.toString())).refund;
   return `80% of ${owner}'s consent request fee (${fmtMoney(back.toString(), fee.currency)}) is refunded to you; Consent keeps 20%. The platform fee isn't refunded.`;
+}
+
+/** Whether anything was paid to send this request (false for a free request). */
+export async function requestFeePaid(requestId: string): Promise<boolean> {
+  const n = await db.payment.count({
+    where: { requestId, purpose: { in: ["CONSENT_PRICE", "PER_REQUEST"] }, status: { in: ["PAID", "REFUNDED", "FORFEITED"] } },
+  });
+  return n > 0;
 }
 
 /**
@@ -55,130 +89,150 @@ export function pausedNotice(c: Capacity, fmt: (d: Date) => string): { title: st
   };
 }
 
-/** Called when the platform fee settles: submit + evaluate auto-decision. */
-export async function onRequestPaid(requestId: string) {
+/**
+ * The asker's Consent Score as everyone sees it (profileScore of the
+ * profile's two halves), for standing rules ("asker's Consent Score ≥ N")
+ * and the pre-send check, so a rule compares the same number the owner sees.
+ * A sending half with no paired profile has only its own score.
+ */
+export function askerScore(requester: { score: number; consenter?: { score: number } | null }): number {
+  return requester.consenter ? profileScore(requester.consenter.score, requester.score) : requester.score;
+}
+
+/** Shown when a profile tries to ask itself. */
+export const SELF_ASK_ERROR = "This is your profile. You can't send a request to yourself.";
+
+/**
+ * Sends a draft. Called when its checkout is paid, or straight away for a
+ * free request (no checkout). Submits it, records whether a fee was paid,
+ * and runs the automatic decision. Safe to call more than once: only a DRAFT
+ * moves. Returns the status the request ends up in, or null when nothing was
+ * sent (not a draft any more, or a profile asking itself).
+ */
+export async function onRequestPaid(requestId: string): Promise<RequestStatus | null> {
   const request = await db.consentRequest.findUnique({
     where: { id: requestId },
-    include: { requester: true, consenter: true, files: true },
+    include: {
+      requester: { include: { consenter: { select: { score: true } } } },
+      consenter: true,
+      files: { select: { kind: true } },
+    },
   });
-  if (!request || request.status !== "DRAFT") return;
+  if (!request || request.status !== "DRAFT") return null;
+  // A profile never asks itself. Drafts are checked when they are made and
+  // sent; this is the last line, so a self-ask is never submitted.
+  if (isSelfAsk(request.consenterId, request.requester)) {
+    console.warn(`Request ${requestId}: a profile can't ask itself; left as a draft.`);
+    return null;
+  }
   // Whether the owner's request limits already held new requests back before this one.
   const before = await requestCapacity(request.consenterId).catch(() => null);
-  await submitAndDecide(request);
+  const status = await submitAndDecide(request);
   // This request reached a limit: tell the owner's team once, as it happens.
-  if (before && !before.paused) {
+  if (status && before && !before.paused) {
     const after = await requestCapacity(request.consenterId).catch(() => null);
     if (after?.paused) {
       await notifyConsenterTeam(request.consenterId, { ...pausedNotice(after, fmtUtc), href: "/c-panel" });
     }
   }
+  return status;
 }
 
 async function submitAndDecide(
-  request: ConsentRequest & { requester: RequesterProfile; consenter: ConsenterProfile; files: { kind: string }[] },
-) {
+  request: ConsentRequest & {
+    requester: RequesterProfile & { consenter: { score: number } | null };
+    consenter: ConsenterProfile;
+    files: { kind: string }[];
+  },
+): Promise<RequestStatus | null> {
   const requestId = request.id;
   const settings = await getSettings();
   const now = new Date();
   // The first window: it expires this many days from now unless someone acts.
   const slaExpiresAt = windowEnd(now, settings.slaDays);
+  const feePaid = await requestFeePaid(requestId);
 
-  await db.consentRequest.update({
-    where: { id: requestId },
-    data: { status: "SUBMITTED", submittedAt: now, slaExpiresAt },
+  // Only a draft is sent, once, even if two payment confirmations race.
+  const sent = await db.$transaction(async (tx) => {
+    const res = await tx.consentRequest.updateMany({
+      where: { id: requestId, status: "DRAFT" },
+      data: { status: "SUBMITTED", submittedAt: now, slaExpiresAt },
+    });
+    if (res.count === 0) return false;
+    await tx.requestEvent.create({
+      data: { requestId, type: "submitted", actorSide: "requester", detail: { feePaid } },
+    });
+    return true;
   });
-  await db.requestEvent.create({
-    data: { requestId, type: "submitted", actorSide: "requester", detail: { feePaid: true } },
-  });
+  if (!sent) return null;
 
   const decision = await evaluateAutoDecision({
     consenterId: request.consenterId,
     requester: {
       id: request.requesterId,
       type: request.requester.type,
-      score: request.requester.score,
+      // The one Consent Score people see, not the sending half's alone.
+      score: askerScore(request.requester),
       categories: request.requester.categories,
     },
     selections: request.selections as Selection[],
     assetTypeIds: request.assetTypeIds,
     thumbnailUsed: request.thumbnailUsed,
   });
+  const owner = request.consenter.displayName;
 
-  if (decision.kind === "rule" && decision.action === "AUTO_DENY") {
-    await db.consentRequest.update({
-      where: { id: requestId },
-      data: {
-        status: "DENIED",
-        decidedAt: new Date(),
-        decidedByRuleId: decision.ruleId,
-        decidedByRuleName: decision.ruleName,
-        denialReason: `Auto-denied by standing rule "${decision.ruleName}"`,
-      },
-    });
-    await db.requestEvent.create({
-      data: { requestId, type: "auto_denied", actorSide: "system", detail: { rule: decision.ruleName } },
-    });
+  if (
+    (decision.kind === "rule" && decision.action === "AUTO_DENY") ||
+    (decision.kind === "matrix" && decision.policy === "AUTO_DENY")
+  ) {
+    const byRule = decision.kind === "rule";
+    await db.$transaction([
+      db.consentRequest.update({
+        where: { id: requestId },
+        data: {
+          status: "DENIED",
+          decidedAt: new Date(),
+          decidedByRuleId: byRule ? decision.ruleId : null,
+          decidedByRuleName: byRule ? decision.ruleName : "Consent matrix default (Never allowed)",
+          denialReason: byRule
+            ? `Declined automatically by the standing rule "${decision.ruleName}".`
+            : `${owner} never allows this platform, format and asset combination.`,
+        },
+      }),
+      db.requestEvent.create({
+        data: { requestId, type: "auto_denied", actorSide: "system", detail: { rule: byRule ? decision.ruleName : "matrix" } },
+      }),
+    ]);
+    // Without a yes, 80% of a held consent request fee goes back (no-op while unpaid or free).
+    await syncConsentPrice(requestId);
     await notifyRequesterTeam(request.requesterId, {
-      title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} has a standing rule that declines this kind of request. ${await noYesRefundNote(requestId, request.consenter.displayName)}`,
+      title: `Request #${request.number} declined`,
+      body: sentences(
+        byRule
+          ? `${owner} has a standing rule that declines this kind of request.`
+          : `${owner} never allows this combination.`,
+        await noYesRefundNote(requestId, owner),
+      ),
       href: `/r-panel/requests/${requestId}`,
     });
-    return;
+    return "DENIED";
   }
 
-  if (decision.kind === "matrix" && decision.policy === "AUTO_DENY") {
-    await db.consentRequest.update({
-      where: { id: requestId },
-      data: {
-        status: "DENIED",
-        decidedAt: new Date(),
-        decidedByRuleName: "Consent matrix default (Never allowed)",
-        denialReason: "The consenter never allows this platform/format/asset combination.",
-      },
-    });
-    await db.requestEvent.create({
-      data: { requestId, type: "auto_denied", actorSide: "system", detail: { rule: "matrix" } },
-    });
-    await notifyRequesterTeam(request.requesterId, {
-      title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} never allows this combination. ${await noYesRefundNote(requestId, request.consenter.displayName)}`,
-      href: `/r-panel/requests/${requestId}`,
-    });
-    return;
-  }
-
-  const autoApprove =
+  if (
     (decision.kind === "rule" && decision.action === "AUTO_APPROVE") ||
-    (decision.kind === "matrix" && decision.policy === "AUTO_APPROVE");
-
-  if (autoApprove) {
-    const ruleName =
-      decision.kind === "rule"
+    (decision.kind === "matrix" && decision.policy === "AUTO_APPROVE")
+  ) {
+    const byRule = decision.kind === "rule";
+    return approveAndIssue({
+      requestId,
+      decidedById: null,
+      decidedByName: byRule ? "Standing rule (automatic)" : "Consent matrix (automatic)",
+      actorSide: "system",
+      ruleId: byRule ? decision.ruleId : null,
+      ruleName: byRule
         ? `${decision.ruleName} (set by ${decision.createdByName} on ${decision.createdAt.toISOString().slice(0, 10)})`
-        : "Consent matrix default (Allowed without asking)";
-    await db.consentRequest.update({
-      where: { id: requestId },
-      data: {
-        status: "APPROVED_IN_PRINCIPLE",
-        decidedAt: new Date(),
-        decidedByRuleId: decision.kind === "rule" ? decision.ruleId : null,
-        decidedByRuleName: ruleName,
-      },
+        : "Consent matrix default (Allowed without asking)",
     });
-    await db.requestEvent.create({
-      data: { requestId, type: "auto_approved", actorSide: "system", detail: { rule: ruleName } },
-    });
-    const hasRaw = request.files.some((f) => f.kind === "RAW_CONTENT");
-    if (hasRaw) {
-      await issueGrant(requestId, "Standing rule (automatic)");
-    } else {
-      await notifyRequesterTeam(request.requesterId, {
-        title: `Request #${request.number} approved in principle`,
-        body: "Upload the final content file to receive your certificate — approval is bound to the exact file hash.",
-        href: `/r-panel/requests/${requestId}`,
-      });
-    }
-    return;
   }
 
   // Route or plain pending
@@ -191,17 +245,18 @@ async function submitAndDecide(
         include: { user: { select: { name: true } } },
       })
     : [];
+  const asker = request.requester.displayName;
+  const href = `/c-panel/requests/${requestId}`;
   // A rule can still name someone who has since left the team; then it's handled as a plain pending request.
   const routedTo = members.find((m) => m.userId === routeToUserId);
   if (decision.kind === "rule" && routedTo) {
     await db.requestEvent.create({
       data: { requestId, type: "routed", actorSide: "system", detail: { rule: decision.ruleName } },
     });
-    const href = `/c-panel/requests/${requestId}`;
     await notifyUser({
       userId: routedTo.userId,
       title: `Request #${request.number} routed to you`,
-      body: `Standing rule "${decision.ruleName}" routed the request from ${request.requester.displayName} to you. Respond within ${settings.slaDays} days.`,
+      body: `Standing rule "${decision.ruleName}" routed the request from ${asker} to you. Answer within ${settings.slaDays} days.`,
       href,
       critical: true,
     });
@@ -214,7 +269,7 @@ async function submitAndDecide(
           notifyUser({
             userId: m.userId,
             title: `New consent request #${request.number}`,
-            body: `${request.requester.displayName} asks to use ${request.assetTypeNames.join(", ")}. Standing rule "${decision.ruleName}" routed it to ${routedTo.user.name}. Respond within ${settings.slaDays} days.`,
+            body: `${asker} asks to use ${request.assetTypeNames.join(", ")}. Standing rule "${decision.ruleName}" routed it to ${routedTo.user.name}. Answer within ${settings.slaDays} days.`,
             href,
           })
         )
@@ -222,125 +277,127 @@ async function submitAndDecide(
   } else {
     await notifyConsenterTeam(request.consenterId, {
       title: `New consent request #${request.number}`,
-      body: `${request.requester.displayName} asks to use ${request.assetTypeNames.join(", ")}. Respond within ${settings.slaDays} days.`,
-      href: `/c-panel/requests/${requestId}`,
+      body: `${asker} asks to use ${request.assetTypeNames.join(", ")}. Answer within ${settings.slaDays} days.`,
+      href,
       critical: true,
     });
   }
+  return "PENDING";
 }
 
-export type ContactField = "email" | "phone" | "address" | "manager";
-export const CONTACT_FIELDS: ContactField[] = ["email", "phone", "address", "manager"];
+/** Where an approval can come from: a request just sent (automatic yes), or one waiting for the owner. */
+export const APPROVABLE_STATUSES: RequestStatus[] = ["SUBMITTED", "PENDING", "CHANGES_REQUESTED"];
 
-/** One side's details on a request, as shared. A detail that isn't shared is null. */
-export type SharedContact = {
-  name: string;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  manager: string | null;
-};
-export type ContactSnapshot = { consenter: SharedContact; requester: SharedContact; revealedAt: string };
-
-type ContactProfile = Pick<
-  ConsenterProfile,
-  | "displayName"
-  | "contactEmail"
-  | "contactPhone"
-  | "contactAddress"
-  | "managerContact"
-  | "shareEmail"
-  | "sharePhone"
-  | "shareAddress"
-  | "shareManager"
->;
-
-/** The details a profile shares unless told otherwise: its share switches in settings. */
-export function defaultContactFields(p: ContactProfile): ContactField[] {
-  const flags: [ContactField, boolean][] = [
-    ["email", p.shareEmail],
-    ["phone", p.sharePhone],
-    ["address", p.shareAddress],
-    ["manager", p.shareManager],
-  ];
-  return flags.filter(([, on]) => on).map(([f]) => f);
-}
+/** Thrown when a request is no longer in a state that can be approved. */
+export class ApprovalError extends Error {}
 
 /**
- * One side's shared details: only the chosen fields (by default the
- * profile's share switches), and only those that have a value.
+ * The one way a request is approved: the owner's Approve and every automatic
+ * approval (standing rule or consent matrix) go through here.
+ *
+ * Records the yes (decidedAt, who or which rule, any scope conditions), writes
+ * the approval event, then issues the certificate at once if the final content
+ * file (RAW_CONTENT) is uploaded (APPROVED), or leaves the request approved and
+ * waiting for that file (APPROVED_IN_PRINCIPLE; the asker's upload issues it).
+ * Releases the owner's 80% of a held consent request fee, tells the asker's
+ * team and recalculates the owner's score. Returns the status the request
+ * ends in. (The owner's action writes its own audit entry.)
+ *
+ * Conditions only narrow the scope: fewer formats or shorter clips
+ * (`approvedSelections`), no thumbnail (`approvedThumbnail: false`), a shorter
+ * validity (`validUntil`), and a short written condition (`conditionsNote`).
+ * Leave a field out to keep what was asked for.
+ *
+ * Throws ApprovalError when the request can no longer be approved (it was
+ * answered, withdrawn or ended meanwhile). Approving one that is already
+ * approved returns its status and changes nothing.
  */
-export function contactCard(p: ContactProfile, fields?: ContactField[]): SharedContact {
-  const chosen = new Set(fields ?? defaultContactFields(p));
-  const pick = (f: ContactField, v: string | null) => (chosen.has(f) ? v?.trim() || null : null);
-  return {
-    name: p.displayName,
-    email: pick("email", p.contactEmail),
-    phone: pick("phone", p.contactPhone),
-    address: pick("address", p.contactAddress),
-    manager: pick("manager", p.managerContact),
-  };
-}
-
-/** The fields of a shared card that carry a value. */
-export function sharedFields(c: SharedContact): ContactField[] {
-  return CONTACT_FIELDS.filter((f) => !!c[f]);
-}
-
-/**
- * Shares both sides' contact details on a request. Only ever called because
- * the owner chose to share — at approval, when accepting a fee, or later from
- * the request page. The owner's half has only the details they ticked
- * (`fields`; when left out, their profile's share switches decide) that have
- * a value. The requester's half follows the requester's own share switches.
- * Returns null and shares nothing when none of the owner's chosen details has
- * a value.
- */
-export async function revealContacts(
-  requestId: string,
-  sharedBy: string,
-  fields?: ContactField[],
-): Promise<ContactSnapshot | null> {
+export async function approveAndIssue(opts: {
+  requestId: string;
+  decidedById: string | null;
+  decidedByName: string;
+  actorSide: "consenter" | "system";
+  conditionsNote?: string | null;
+  approvedSelections?: Prisma.InputJsonValue | null;
+  approvedThumbnail?: boolean | null;
+  ruleId?: string | null;
+  ruleName?: string | null;
+  /** A shorter validity end; leave out to keep the one asked for. */
+  validUntil?: Date | null;
+}): Promise<"APPROVED" | "APPROVED_IN_PRINCIPLE"> {
+  const id = opts.requestId;
   const request = await db.consentRequest.findUniqueOrThrow({
-    where: { id: requestId },
-    include: { consenter: true, requester: true },
+    where: { id },
+    include: { files: { select: { kind: true } }, consenter: { select: { displayName: true } } },
   });
-  if (request.contactsRevealed && request.contactsSnapshot) {
-    return request.contactsSnapshot as unknown as ContactSnapshot;
+
+  const conditionsNote = opts.conditionsNote?.trim() || null;
+  const validUntil = opts.validUntil === undefined ? request.validUntil : opts.validUntil;
+  const narrowed =
+    !!conditionsNote ||
+    (opts.approvedSelections != null && JSON.stringify(opts.approvedSelections) !== JSON.stringify(request.selections)) ||
+    (opts.approvedThumbnail != null && opts.approvedThumbnail !== request.thumbnailUsed) ||
+    (validUntil?.getTime() ?? 0) !== (request.validUntil?.getTime() ?? 0);
+  const system = opts.actorSide === "system";
+
+  const moved = await db.$transaction(async (tx) => {
+    const res = await tx.consentRequest.updateMany({
+      where: { id, status: { in: APPROVABLE_STATUSES } },
+      data: {
+        // A yes waiting for the final file; issuing the certificate below makes it APPROVED.
+        status: "APPROVED_IN_PRINCIPLE",
+        decidedAt: new Date(),
+        decidedById: opts.decidedById,
+        decidedByRuleId: opts.ruleId ?? null,
+        decidedByRuleName: opts.ruleName ?? null,
+        conditionsNote,
+        ...(opts.approvedSelections != null ? { approvedSelections: opts.approvedSelections } : {}),
+        ...(opts.approvedThumbnail != null ? { approvedThumbnail: opts.approvedThumbnail } : {}),
+        ...(opts.validUntil !== undefined ? { validUntil: opts.validUntil } : {}),
+      },
+    });
+    if (res.count === 0) return false;
+    await tx.requestEvent.create({
+      data: {
+        requestId: id,
+        type: system ? "auto_approved" : narrowed ? "approved_with_conditions" : "approved",
+        actorName: system ? null : opts.decidedByName,
+        actorSide: opts.actorSide,
+        detail: system
+          ? { rule: opts.ruleName ?? null }
+          : {
+              conditionsNote,
+              approvedThumbnail: opts.approvedThumbnail ?? request.thumbnailUsed,
+              validUntil: validUntil?.toISOString() ?? null,
+            },
+      },
+    });
+    return true;
+  });
+  if (!moved) {
+    const now = await db.consentRequest.findUnique({ where: { id }, select: { status: true } });
+    if (now?.status === "APPROVED" || now?.status === "APPROVED_IN_PRINCIPLE") return now.status;
+    throw new ApprovalError("This request can no longer be approved.");
   }
-  const consenter = contactCard(request.consenter, fields);
-  const shared = sharedFields(consenter);
-  if (shared.length === 0) return null;
-  const snapshot: ContactSnapshot = {
-    consenter,
-    requester: contactCard(request.requester),
-    revealedAt: new Date().toISOString(),
-  };
-  await db.$transaction([
-    db.consentRequest.update({
-      where: { id: requestId },
-      data: { contactsRevealed: true, contactsSnapshot: snapshot },
-    }),
-    db.requestEvent.create({
-      data: { requestId, type: "contacts_shared", actorName: sharedBy, actorSide: "consenter", detail: { fields: shared } },
-    }),
-  ]);
-  return snapshot;
-}
 
-// ── Meetings: what calendars show ─────────────────────────────
-
-/** The event title, the same in emailed invites, downloads and add-to-calendar links. */
-export function meetingTitle(r: { number: number; consenter: { displayName: string }; requester: { displayName: string } }) {
-  return `Consent: ${r.consenter.displayName} × ${r.requester.displayName} (request #${r.number})`;
-}
-
-/** The event description for one side: how to join, the note, and that side's link to the request. */
-export function meetingDescription(
-  m: { requestId: string; mode: CallMode; link: string | null; location: string | null; note: string | null },
-  side: Side,
-) {
-  const how =
-    m.mode === "IN_PERSON" ? `In person at ${m.location}` : m.link ? `${MODE_LABEL[m.mode]}: ${m.link}` : MODE_LABEL[m.mode];
-  return [how, m.note, `Request on Consent: ${requestUrl(m.requestId, side)}`].filter(Boolean).join("\n\n");
+  let status: "APPROVED" | "APPROVED_IN_PRINCIPLE" = "APPROVED_IN_PRINCIPLE";
+  if (request.files.some((f) => f.kind === "RAW_CONTENT")) {
+    // Tells both teams and recalculates both scores.
+    await issueGrant(id, opts.decidedByName);
+    status = "APPROVED";
+  } else {
+    await notifyRequesterTeam(request.requesterId, {
+      title: `Request #${request.number} approved${narrowed ? " with conditions" : ""}`,
+      body: sentences(
+        `${request.consenter.displayName} said yes${narrowed ? " with conditions" : ""}.`,
+        "Upload the final content file to get your certificate. It is bound to that exact file.",
+      ),
+      href: `/r-panel/requests/${id}`,
+      critical: true,
+    });
+    await recalcConsenterScore(request.consenterId, `Responded to request #${request.number}`);
+  }
+  // A yes releases the owner's 80% of the held consent request fee (no-op while unpaid or free).
+  await syncConsentPrice(id);
+  return status;
 }

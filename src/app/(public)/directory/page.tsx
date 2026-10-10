@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { searchConsenters } from "@/lib/search";
+import { searchProfiles } from "@/lib/search";
 import { PageHeader, Card, Input, VerifiedBadge, EmptyState } from "@/components/ui";
 import { InvitePanel } from "@/components/invite-panel";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
@@ -8,20 +8,20 @@ import { Search, UserRound } from "lucide-react";
 
 export const metadata = {
   title: "Verified directory",
-  description: "Search verified people, shows, brands and IP on Consent.",
+  description: "Search every ID-checked person, creator, show and brand on Consent.",
 };
 
 export default async function DirectoryPage({ searchParams }: PageProps<"/directory">) {
   const sp = await searchParams;
   const q = typeof sp.q === "string" ? sp.q : "";
-  const results = await searchConsenters(q);
+  const results = await searchProfiles(q);
 
   return (
     <div className="space-y-6">
       <PageHeader
         kicker="Directory"
-        title="Verified consenters"
-        desc="People, shows, movies, brands and characters who manage their likeness through Consent."
+        title="Verified profiles"
+        desc="Every ID-checked person, creator, show and brand on Consent. Ask any of them for consent."
       />
       <form method="GET" className="relative max-w-xl">
         <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-ink-faint" aria-hidden />
@@ -30,7 +30,7 @@ export default async function DirectoryPage({ searchParams }: PageProps<"/direct
           defaultValue={q}
           placeholder="Search by name, alias, handle, category…"
           className="pl-10"
-          aria-label="Search consenters"
+          aria-label="Search verified profiles"
         />
       </form>
 
@@ -45,7 +45,7 @@ export default async function DirectoryPage({ searchParams }: PageProps<"/direct
         <EmptyState
           icon={UserRound}
           title={q ? `No verified profiles match “${q}”` : "No verified profiles yet"}
-          desc="Only manually verified consenters appear here."
+          desc="Only ID-checked profiles appear here. Try another name, alias or handle."
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

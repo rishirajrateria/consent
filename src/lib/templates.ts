@@ -4,7 +4,7 @@ import { db } from "./db";
 /**
  * Admin-editable message templates (admin → Templates). A template with a
  * matching key overrides the built-in copy; {{placeholders}} are substituted.
- * Keys in use: otp_email, otp_sms, signature_otp_email, invite_email.
+ * Keys in use: otp_email, otp_sms, invite_email.
  */
 export async function renderMessage(
   key: string,

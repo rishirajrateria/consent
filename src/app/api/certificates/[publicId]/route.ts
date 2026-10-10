@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import QRCode from "qrcode";
 import { db } from "@/lib/db";
 import { newDoc, pdfToBuffer, heading, sub, sectionTitle, kv, para, FAINT, INK } from "@/lib/pdf";
-import { fmtDateTime } from "@/lib/utils";
+import { eventLabel, fmtDateTime, shownEvent } from "@/lib/utils";
 import type { Selection } from "@/lib/rules";
 
 /** Public, downloadable consent certificate PDF (anyone with the link can verify). */
@@ -11,19 +11,36 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
   const grant = await db.grant.findUnique({
     where: { publicId },
     include: {
-      request: { include: { consenter: true, requester: true, events: { orderBy: { createdAt: "asc" } } } },
+      request: {
+        include: {
+          consenter: true,
+          requester: true,
+          events: { orderBy: { createdAt: "asc" } },
+        },
+      },
       takedowns: true,
     },
   });
   if (!grant) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Older certificates also carry `fee` and `agreementMode` in their signed
+  // payload. They stay there (the signature covers them) but are not shown.
   const payload = grant.payload as {
     scope: { selections: Selection[]; assetTypes: string[]; conditions: string | null; intentCategory: string | null; thumbnailAllowed: boolean };
-    fee: { note: string; amount: string | null; currency: string | null };
-    agreementMode: { mode: string; agreementId: string | null; agreementSha256: string | null };
+    fee?: unknown;
+    agreementMode?: unknown;
     decidedBy: string;
     files: { kind: string; name: string; sha256: string; version: number }[];
   };
+  const { request } = grant;
+  const sideName = (side: string | null) =>
+    side === "consenter"
+      ? request.consenter.displayName
+      : side === "requester"
+        ? request.requester.displayName
+        : side === "admin" || side === "system"
+          ? "Consent"
+          : null;
   const verifyUrl = `${process.env.APP_URL ?? ""}/v/${grant.publicId}`;
   const qrPng = await QRCode.toBuffer(verifyUrl, { margin: 1, width: 120, color: { dark: "#111111", light: "#ffffff" } });
 
@@ -38,8 +55,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
   doc.text("", doc.page.margins.left, 150);
 
   sectionTitle(doc, "Parties");
-  kv(doc, "Consenter", `${grant.request.consenter.legalName} ("${grant.request.consenter.displayName}") — profile ${grant.request.consenterId} — VERIFIED`);
-  kv(doc, "Requester", `${grant.request.requester.legalName} ("${grant.request.requester.displayName}") — profile ${grant.request.requesterId}`);
+  kv(doc, "Consent given by", `${request.consenter.legalName} ("${request.consenter.displayName}") — profile ${request.consenterId} — VERIFIED`);
+  kv(doc, "Consent given to", `${request.requester.legalName} ("${request.requester.displayName}") — profile ${request.requesterId}`);
 
   sectionTitle(doc, "Approved scope");
   kv(doc, "Platforms & formats", payload.scope.selections.map((s) => `${s.platformName} → ${s.formatName}${s.durationSec ? ` (max ${s.durationSec}s)` : ""}`).join("; "));
@@ -56,8 +73,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
         ? "Perpetual"
         : `${grant.validFrom?.toISOString()} → ${grant.validUntil?.toISOString()} (UTC)`
   );
-  kv(doc, "Usage fee", payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note);
-  kv(doc, "Agreement mode", payload.agreementMode.mode + (payload.agreementMode.agreementSha256 ? ` — agreement sha256 ${payload.agreementMode.agreementSha256}` : ""));
   kv(doc, "Decision", payload.decidedBy);
   kv(doc, "Issued", `${grant.issuedAt.toISOString()} (UTC)`);
 
@@ -74,8 +89,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
   }
 
   sectionTitle(doc, "Timeline (UTC)");
-  for (const e of grant.request.events.slice(0, 30)) {
-    kv(doc, e.createdAt.toISOString(), `${e.type}${e.actorName ? ` — ${e.actorName} (${e.actorSide})` : e.actorSide ? ` — ${e.actorSide}` : ""}`);
+  for (const e of request.events.filter(shownEvent).slice(0, 30)) {
+    const who = [e.actorName, sideName(e.actorSide)].filter(Boolean);
+    const by = who.length === 2 && who[0] !== who[1] ? `${who[0]} (${who[1]})` : who[0];
+    kv(doc, e.createdAt.toISOString(), `${eventLabel(e.type)}${by ? ` — ${by}` : ""}`);
   }
 
   sectionTitle(doc, "Digital signature");

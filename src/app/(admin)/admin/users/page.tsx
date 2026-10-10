@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, hasAdminPerm } from "@/lib/auth";
@@ -6,6 +7,7 @@ import { PageHeader, Card, Input, StatusBadge, EmptyState } from "@/components/u
 import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { audit } from "@/lib/audit";
 import { notifyConsenterTeam } from "@/lib/notify";
+import { syncPair } from "@/lib/profiles";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { NoPermission } from "../no-permission";
 import { fmtDate } from "@/lib/utils";
@@ -45,13 +47,17 @@ async function userAction(formData: FormData) {
       where: { userId: id, role: "OWNER", consenter: { status: "APPROVED" } },
       include: { consenter: true },
     });
-    if (owned.length === 0) back("error", `${user.name} owns no verified consenter profile.`);
+    if (owned.length === 0) back("error", `${user.name} owns no verified profile.`);
     for (const m of owned) {
-      await db.consenterProfile.update({ where: { id: m.consenterId }, data: { status: "UNDER_REVIEW" } });
+      // Both halves go back to review together: no sending or receiving until it's approved again.
+      await db.$transaction(async (tx) => {
+        await tx.consenterProfile.update({ where: { id: m.consenterId }, data: { status: "UNDER_REVIEW" } });
+        await syncPair(m.consenterId, tx);
+      });
       await notifyConsenterTeam(m.consenterId, {
         title: "Your profile needs to be verified again",
-        body: `${m.consenter.displayName} is hidden from search and can't receive new requests until it's verified again. Reason: ${reason}`,
-        href: "/onboarding/consenter",
+        body: `${m.consenter.displayName} is hidden from search and can't send or receive new requests until it's verified again. Reason: ${reason}`,
+        href: `/onboarding?profile=${m.consenterId}`,
         critical: true,
       });
     }
@@ -70,7 +76,7 @@ async function userAction(formData: FormData) {
     unsuspend: `${user.name} can sign in again.`,
     ban: `${user.name} is banned and signed out.`,
     unban: `${user.name} is no longer banned.`,
-    reverify: `${user.name}'s consenter profiles are back in review. The team was told why.`,
+    reverify: `${user.name}'s profiles are back in review. Their teams were told why.`,
   };
   if (done[op]) back("done", done[op]);
 }
@@ -89,7 +95,8 @@ export default async function AdminUsers({ searchParams }: PageProps<"/admin/use
     include: {
       adminRole: true,
       consenterMembers: { include: { consenter: true } },
-      requesterMembers: { include: { requester: true } },
+      // Only an old sending-only seat (not yet paired with a profile) is listed on its own.
+      requesterMembers: { where: { requester: { consenterId: null } }, include: { requester: true } },
     },
   });
 
@@ -118,10 +125,16 @@ export default async function AdminUsers({ searchParams }: PageProps<"/admin/use
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
                     {u.consenterMembers.map((m) => (
-                      <span key={m.id} className="rounded-full border border-ink/15 px-2 py-0.5 text-[10px]">consenter: {m.consenter.displayName}</span>
+                      <Link
+                        key={m.id}
+                        href={`/admin/consenters/${m.consenterId}`}
+                        className="rounded-full border border-ink/15 px-2 py-0.5 text-[10px] hover:border-ink/40"
+                      >
+                        {m.consenter.displayName} · {m.role.toLowerCase()} · {m.consenter.status === "APPROVED" ? "verified" : m.consenter.status.toLowerCase().replace(/_/g, " ")}
+                      </Link>
                     ))}
                     {u.requesterMembers.map((m) => (
-                      <span key={m.id} className="rounded-full border border-ink/15 px-2 py-0.5 text-[10px]">requester: {m.requester.displayName}</span>
+                      <span key={m.id} className="rounded-full border border-ink/15 px-2 py-0.5 text-[10px]">{m.requester.displayName} · not paired yet</span>
                     ))}
                   </div>
                 </div>
@@ -146,7 +159,7 @@ export default async function AdminUsers({ searchParams }: PageProps<"/admin/use
                   )}
                   {u.consenterMembers.some((m) => m.role === "OWNER" && m.consenter.status === "APPROVED") && (
                     <ConfirmSubmit
-                      confirm={`Send ${u.name}'s consenter profiles back to review? They leave search until verified again, and are told your reason.`}
+                      confirm={`Send ${u.name}'s profiles back to review? They leave search and can't send or receive until verified again, and are told your reason.`}
                       name="op"
                       value="reverify"
                       variant="ghost"

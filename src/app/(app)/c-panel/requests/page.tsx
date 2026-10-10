@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState, ButtonLink } from "@/components/ui";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { LocalTime } from "@/components/local-time";
 import { fmtDateTime, cn } from "@/lib/utils";
 import { getSettings } from "@/lib/settings";
@@ -14,40 +15,40 @@ import { SentLink, StepLine } from "./sent-list";
 export const metadata = { title: "Requests" };
 
 // "Received" sub-filters. Each adds its own filter on top of "sent to this
-// profile". Drafts the requester never sent (no submittedAt) are never shown
-// to the owner.
+// profile". Drafts nobody sent yet (no submittedAt) are never shown here.
 const TABS: [string, Prisma.ConsentRequestWhereInput][] = [
-  ["Needs action", { status: { in: ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"] } }],
-  ["Negotiation", { status: "IN_NEGOTIATION" }],
-  ["Waiting on them", { status: { in: ["CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"] } }],
-  ["Grants", { status: "APPROVED", grant: { is: { status: "ACTIVE" } } }],
-  ["Decided", { status: { in: ["APPROVED", "DENIED"] } }],
+  // Waiting for this profile's answer. Same count as "Needs your answer" on Home.
+  ["Needs you", { status: "PENDING" }],
+  // Open, waiting on them: being decided automatically, a question to answer, or the final file to upload.
+  ["In progress", { status: { in: ["SUBMITTED", "CHANGES_REQUESTED", "APPROVED_IN_PRINCIPLE"] } }],
+  ["Finished", { status: { in: ["APPROVED", "DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"] } }],
   ["All", { status: { not: "DRAFT" } }],
 ];
 
 // ?tab=Sent shows the requests this person made; any other tab is a "Received" filter.
 const SENT_TAB = "Sent";
 
-export default async function ConsenterRequests({ searchParams }: PageProps<"/c-panel/requests">) {
+export default async function RequestsPage({ searchParams }: PageProps<"/c-panel/requests">) {
   const sp = await searchParams;
   const { consenter, session } = await requireConsenter();
   const wanted = typeof sp.tab === "string" ? sp.tab.trim().toLowerCase() : "";
   const showSent = wanted === SENT_TAB.toLowerCase();
   const received = { consenterId: consenter.id, submittedAt: { not: null } };
 
-  const [needsAction, yourMove, settings] = await Promise.all([
-    // Same count as the "Needs action" tile on the owner home.
+  const [needsAction, yourMove, settings, asker] = await Promise.all([
     db.consentRequest.count({ where: { ...received, ...TABS[0][1] } }),
     // Only profiles where this person can act: a view-only seat never has a move.
     db.consentRequest.count({ where: { ...actingFor(session.userId), ...ASKER_MOVE } }),
     getSettings(),
+    // The active profile's sending half: its rows open with a plain link.
+    db.requesterProfile.findUnique({ where: { consenterId: consenter.id }, select: { id: true } }),
   ]);
 
-  const sent = showSent ? await loadSent(session.userId, settings.slaDays) : null;
+  const sent = showSent ? await loadSent(session.userId, settings.slaDays, asker?.id ?? null) : null;
   const inbox = showSent ? null : await loadReceived(consenter.id, wanted, settings.slaDays);
 
   const views = [
-    { label: "Received", href: "/c-panel/requests", count: needsAction, note: "need action", active: !showSent },
+    { label: "Received", href: "/c-panel/requests", count: needsAction, note: "need your answer", active: !showSent },
     { label: SENT_TAB, href: `/c-panel/requests?tab=${SENT_TAB}`, count: yourMove, note: "waiting on you", active: showSent },
   ];
 
@@ -58,7 +59,7 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
         title="Requests"
         desc={
           sent
-            ? `Requests you've made to other people. Each open request expires ${settings.slaDays} days after its last action from either side.`
+            ? `Requests you sent. Each open request expires ${settings.slaDays} days after its last action from either side.`
             : `Each open request expires ${settings.slaDays} days after its last action from either side. If it expires waiting for your answer, your Consent Score drops.`
         }
         action={
@@ -92,13 +93,15 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
         ))}
       </nav>
 
+      <ErrorNote error={sp.error} />
+      {sent && sp.discarded && <SuccessNote msg="Draft discarded." />}
       {inbox && <ReceivedList {...inbox} />}
       {sent && <SentList {...sent} />}
     </div>
   );
 }
 
-// ── Received: requests sent to this owner profile ──────────────
+// ── Received: requests sent to this profile ────────────────────
 
 async function loadReceived(consenterId: string, wanted: string, slaDays: number) {
   const [tab, tabWhere] = TABS.find(([t]) => t.toLowerCase() === wanted) ?? TABS[0];
@@ -125,14 +128,18 @@ function ReceivedList({ tab, rows, windows }: Awaited<ReturnType<typeof loadRece
             key={t}
             href={`/c-panel/requests?tab=${encodeURIComponent(t)}`}
             aria-current={t === tab ? "page" : undefined}
-            className={cn("whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium", t === tab ? "bg-ink text-white" : "text-ink-soft hover:bg-ink/5")}
+            className={cn("flex min-h-10 items-center whitespace-nowrap rounded-xl px-3 py-1.5 text-sm font-medium", t === tab ? "bg-ink text-white" : "text-ink-soft hover:bg-ink/5")}
           >
             {t}
           </Link>
         ))}
       </nav>
       {rows.length === 0 ? (
-        <EmptyState icon={Inbox} title="Nothing here" />
+        <EmptyState
+          icon={Inbox}
+          title={tab === TABS[0][0] ? "Nothing needs your answer." : "Nothing here yet."}
+          desc={tab === TABS[0][0] ? "New requests to this profile show up here." : undefined}
+        />
       ) : (
         <div className="space-y-2">
           {rows.map((r) => (
@@ -158,9 +165,9 @@ function ReceivedList({ tab, rows, windows }: Awaited<ReturnType<typeof loadRece
   );
 }
 
-// ── Sent: requests this person made from any of their requester profiles ──
+// ── Sent: requests this person sent from any of their profiles ──
 
-async function loadSent(userId: string, slaDays: number) {
+async function loadSent(userId: string, slaDays: number, activeAskerId: string | null) {
   const [rows, drafts, seats] = await Promise.all([
     // Everything sent from any profile this person is on, view-only seats included.
     db.consentRequest.findMany({
@@ -182,10 +189,10 @@ async function loadSent(userId: string, slaDays: number) {
     rows.filter((r) => OPEN_STATUSES.includes(r.status)),
     slaDays,
   );
-  return { rows, drafts, windows, ...askingSeats(seats) };
+  return { rows, drafts, windows, activeAskerId, ...askingSeats(seats) };
 }
 
-function SentList({ rows, drafts, windows, manyProfiles, viewOnly }: Awaited<ReturnType<typeof loadSent>>) {
+function SentList({ rows, drafts, windows, manyProfiles, viewOnly, activeAskerId }: Awaited<ReturnType<typeof loadSent>>) {
   return (
     <>
       {rows.length === 0 ? (
@@ -211,6 +218,7 @@ function SentList({ rows, drafts, windows, manyProfiles, viewOnly }: Awaited<Ret
               r={r}
               manyProfiles={manyProfiles}
               canAct={!viewOnly.has(r.requesterId)}
+              direct={r.requesterId === activeAskerId}
               expiresAt={windows.get(r.id)?.expiresAt}
             />
           ))}
@@ -223,7 +231,7 @@ function SentList({ rows, drafts, windows, manyProfiles, viewOnly }: Awaited<Ret
             <p className="text-xs text-ink-faint">Nobody sees these until you send them.</p>
           </div>
           {drafts.map((r) => (
-            <SentRow key={r.id} r={r} manyProfiles={manyProfiles} canAct />
+            <SentRow key={r.id} r={r} manyProfiles={manyProfiles} canAct direct={r.requesterId === activeAskerId} />
           ))}
         </section>
       )}
@@ -235,16 +243,19 @@ function SentRow({
   r,
   manyProfiles,
   canAct,
+  direct,
   expiresAt,
 }: {
   r: SentRequest;
   manyProfiles: boolean;
   canAct: boolean;
+  /** Sent from the active profile: a plain link. */
+  direct: boolean;
   expiresAt?: Date;
 }) {
   const owner = r.consenter.displayName;
   return (
-    <SentLink request={r} label={`Open request #${r.number} to ${owner}`}>
+    <SentLink request={r} label={`Open request #${r.number} to ${owner}`} direct={direct}>
       <Card className="flex flex-wrap items-center gap-3 py-4 transition-all group-hover:shadow-glass-lg">
         <div className="flex size-10 items-center justify-center rounded-xl bg-ink/5 font-semibold">{owner.charAt(0)}</div>
         <div className="min-w-0 flex-1 space-y-0.5">

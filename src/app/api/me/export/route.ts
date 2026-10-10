@@ -7,7 +7,7 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const userId = session.userId;
-  const [user, consenterMembers, requesterMembers, notifications, messages, offers] =
+  const [user, consenterMembers, requesterMembers, notifications, messages] =
     await Promise.all([
       db.user.findUnique({
         where: { id: userId },
@@ -17,10 +17,9 @@ export async function GET() {
       db.requesterMember.findMany({ where: { userId }, include: { requester: true } }),
       db.notification.findMany({ where: { userId } }),
       db.requestMessage.findMany({ where: { senderId: userId } }),
-      db.negotiationOffer.findMany({ where: { byUserId: userId } }),
     ]);
   return NextResponse.json(
-    { exportedAt: new Date().toISOString(), user, consenterMembers, requesterMembers, notifications, messages, offers },
+    { exportedAt: new Date().toISOString(), user, consenterMembers, requesterMembers, notifications, messages },
     { headers: { "Content-Disposition": 'attachment; filename="consent-data-export.json"' } }
   );
 }

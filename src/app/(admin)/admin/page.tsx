@@ -5,7 +5,7 @@ import { PageHeader, Card, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { runSweeps } from "@/lib/jobs";
 import { revalidatePath } from "next/cache";
-import { consentKeeps } from "./revenue";
+import { revenueByCurrency, fmtRevenue } from "./revenue";
 
 export const metadata = { title: "Overview" };
 
@@ -19,29 +19,27 @@ async function runJobsAction() {
 export default async function AdminOverview({ searchParams }: PageProps<"/admin">) {
   await requireAdmin();
   const sp = await searchParams;
-  const [pendingRequesters, pendingConsenters, openReports, pendingRequests, activeGrants, users, paid, ownersShare, openTakedowns] =
+  const [idChecks, openReports, pendingRequests, activeGrants, users, revenue, openTakedowns] =
     await Promise.all([
-      db.requesterProfile.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
+      // One ID check per profile (the profile half; its sending half follows it).
       db.consenterProfile.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
       db.report.count({ where: { status: { in: ["OPEN", "UNDER_REVIEW"] } } }),
       db.consentRequest.count({ where: { status: "PENDING" } }),
       db.grant.count({ where: { status: "ACTIVE" } }),
       db.user.count(),
-      // Consent's revenue: everything collected, less the refunded 80% and the owners' 80%.
-      db.payment.aggregate({ _sum: { amount: true, refundedAmount: true }, where: { status: { in: ["PAID", "FORFEITED", "REFUNDED"] } } }),
-      db.earningEntry.aggregate({ _sum: { amount: true }, where: { status: { in: ["HELD", "PENDING", "SETTLED"] } } }),
+      // Consent's revenue per currency: collected, less the refunded 80% and the profiles' 80%.
+      revenueByCurrency(),
       db.takedownRequest.count({ where: { status: { in: ["RAISED", "MARKED_DOWN"] } } }),
     ]);
 
   const stats: [string, string | number, string][] = [
-    ["Requester applications", pendingRequesters, "/admin/requesters"],
-    ["Consenter verifications", pendingConsenters, "/admin/consenters"],
+    ["ID checks waiting", idChecks, "/admin/consenters"],
     ["Open reports", openReports, "/admin/reports"],
     ["Open takedowns", openTakedowns, "/admin/takedowns"],
     ["Pending requests", pendingRequests, "/admin/requests"],
     ["Active grants", activeGrants, "/admin/requests?tab=grants"],
     ["Users", users, "/admin/users"],
-    ["Revenue (all time)", `$${consentKeeps(paid._sum, ownersShare._sum).toFixed(0)}`, "/admin/payments"],
+    ["Revenue (all time)", fmtRevenue(revenue), "/admin/payments"],
   ];
 
   return (

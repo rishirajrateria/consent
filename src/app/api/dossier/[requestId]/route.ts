@@ -3,12 +3,13 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { signPayload } from "@/lib/signing";
 import { newDoc, pdfToBuffer, heading, sub, sectionTitle, kv, para } from "@/lib/pdf";
+import { eventLabel, fmtMoney, shownEvent, statusLabel } from "@/lib/utils";
 
 /**
- * Consent History Dossier (for legal cases): all requests, file versions +
- * hashes, messages, offers, decisions, reports and the audit trail for one
- * request — as a signed PDF (?format=pdf, default) or signed JSON (?format=json).
- * Every export is logged.
+ * Consent History Dossier (for legal cases): the request, file versions +
+ * hashes, the consent request fee and where it went, decisions, reports, any
+ * older messages and the timeline for one request — as a signed PDF
+ * (?format=pdf, default) or signed JSON (?format=json). Every export is logged.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ requestId: string }> }) {
   const { requestId } = await params;
@@ -22,27 +23,42 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
       requester: true,
       files: true,
       messages: { include: { sender: true }, orderBy: { createdAt: "asc" } },
-      offers: { include: { byUser: true }, orderBy: { version: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
       grant: { include: { takedowns: true } },
-      agreement: { include: { signatures: { include: { user: true } } } },
       reports: true,
+      earning: true,
+      payments: { where: { purpose: "CONSENT_PRICE", status: { in: ["PAID", "REFUNDED"] } }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
   if (!request) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const [cm, rm] = await Promise.all([
+  // One rule for both profiles on the request: a seat can export when it is
+  // the OWNER or has the export permission. The asking profile's seat is read
+  // through its pair (the same roles and flags as the profile asked); an old
+  // sending-only profile has just a role, so only its OWNER can export.
+  const userId = session.userId;
+  const [receiving, askingPaired, askingOnly] = await Promise.all([
     db.consenterMember.findUnique({
-      where: { consenterId_userId: { consenterId: request.consenterId, userId: session.userId } },
+      where: { consenterId_userId: { consenterId: request.consenterId, userId } },
     }),
+    request.requester.consenterId
+      ? db.consenterMember.findUnique({
+          where: { consenterId_userId: { consenterId: request.requester.consenterId, userId } },
+        })
+      : null,
     db.requesterMember.findUnique({
-      where: { requesterId_userId: { requesterId: request.requesterId, userId: session.userId } },
+      where: { requesterId_userId: { requesterId: request.requesterId, userId } },
     }),
   ]);
+  const asking = askingPaired ?? (askingOnly ? { role: askingOnly.role, canExport: false } : null);
+  const canExport = (seat: { role: string; canExport: boolean } | null) => !!seat && (seat.role === "OWNER" || seat.canExport);
   const isAdmin = !!session.user.adminRole;
-  if (!cm && !rm && !isAdmin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (cm && cm.role !== "OWNER" && !cm.canExport)
-    return NextResponse.json({ error: "Export permission required" }, { status: 403 });
+  if (!receiving && !asking && !isAdmin) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!isAdmin && !canExport(receiving) && !canExport(asking))
+    return NextResponse.json(
+      { error: "You need the export permission on this profile to download its history dossier. Ask an owner of the profile." },
+      { status: 403 },
+    );
 
   await db.exportLog.create({
     data: {
@@ -52,6 +68,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
       byName: session.user.name,
     },
   });
+
+  const fee = request.payments[0] ?? null;
+  const feeOutcome =
+    request.earning?.status === "HELD"
+      ? "held until the answer"
+      : request.earning?.status === "PENDING" || request.earning?.status === "SETTLED"
+        ? `80% released to ${request.consenter.displayName}`
+        : request.earning?.status === "REFUNDED" || request.earning?.status === "REVERSED"
+          ? `80% refunded to ${request.requester.displayName}`
+          : null;
 
   const dossier = {
     generatedAt: new Date().toISOString(),
@@ -68,15 +94,23 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
       intent: request.intentCategoryName,
       validity: { kind: request.validityKind, from: request.validFrom, until: request.validUntil },
       conditions: request.conditionsNote,
-      isPaid: request.isPaid,
-      agreedAmount: request.agreedAmount?.toString() ?? null,
-      agreedCurrency: request.agreedCurrency,
+      // What the person asking paid the profile through Consent: held, then 80% to the
+      // profile on a yes or 80% back otherwise. Null for a free request.
+      consentRequestFee: fee
+        ? {
+            amount: fee.amount.toString(),
+            currency: fee.currency,
+            outcome: request.earning?.status ?? null,
+            refunded: fee.refundedAmount?.toString() ?? null,
+          }
+        : null,
       denialReason: request.denialReason,
     },
     files: request.files.map((f) => ({ kind: f.kind, name: f.name, version: f.version, sha256: f.sha256, uploadedAt: f.createdAt })),
     messages: request.messages.map((m) => ({ at: m.createdAt, by: m.sender.name, side: m.senderSide, body: m.body })),
-    offers: request.offers.map((o) => ({ version: o.version, by: o.byUser.name, side: o.bySide, amount: o.amount.toString(), currency: o.currency, status: o.status, at: o.createdAt })),
-    events: request.events.map((e) => ({ at: e.createdAt, type: e.type, actor: e.actorName, side: e.actorSide, detail: e.detail })),
+    events: request.events
+      .filter(shownEvent)
+      .map((e) => ({ at: e.createdAt, type: e.type, actor: e.actorName, side: e.actorSide, detail: e.detail })),
     grant: request.grant
       ? {
           certificateId: request.grant.certificateId,
@@ -86,14 +120,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
           revokedAt: request.grant.revokedAt,
           revokeReason: request.grant.revokeReason,
           takedowns: request.grant.takedowns,
-        }
-      : null,
-    agreement: request.agreement
-      ? {
-          kind: request.agreement.kind,
-          status: request.agreement.status,
-          sha256: request.agreement.sha256,
-          signatures: request.agreement.signatures.map((s) => ({ side: s.side, typedName: s.typedName, by: s.user.name, at: s.signedAt, otpVerified: s.otpVerified, ip: s.ip })),
         }
       : null,
     reports: request.reports.map((r) => ({ bySide: r.bySide, reason: r.reason, status: r.status, at: r.createdAt })),
@@ -112,22 +138,27 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
   heading(doc, "Consent History Dossier");
   sub(doc, `Request #${request.number} · ${request.consenter.displayName} ↔ ${request.requester.displayName} · generated ${new Date().toUTCString()}`);
   sectionTitle(doc, "Parties & request");
-  kv(doc, "Consenter", request.consenter.legalName);
-  kv(doc, "Requester", request.requester.legalName);
-  kv(doc, "Status", request.status);
+  kv(doc, "Profile asked", `${request.consenter.legalName} ("${request.consenter.displayName}")`);
+  kv(doc, "Asked by", `${request.requester.legalName} ("${request.requester.displayName}")`);
+  kv(doc, "Status", statusLabel(request.status));
   kv(doc, "Asset types", request.assetTypeNames.join(", "));
-  kv(doc, "Usage fee", request.isPaid ? `${request.agreedCurrency ?? ""} ${request.agreedAmount?.toString() ?? "under negotiation"} (settled directly between parties)` : "Free");
+  kv(doc, "Consent request fee", fee ? `${fmtMoney(fee.amount.toString(), fee.currency)}${feeOutcome ? ` — ${feeOutcome}` : ""}` : "Free");
   sectionTitle(doc, "File versions & hashes");
   for (const f of dossier.files) para(doc, `${f.kind} v${f.version} — ${f.name}\nsha256:${f.sha256}`, 7);
-  sectionTitle(doc, "Offers");
-  for (const o of dossier.offers) kv(doc, `v${o.version} (${o.side})`, `${o.currency} ${o.amount} — ${o.status} — ${o.by}`);
   // Messages were replaced by "Ask"; older requests may still have some.
   if (dossier.messages.length) {
     sectionTitle(doc, "Messages");
-    for (const m of dossier.messages.slice(0, 50)) para(doc, `[${new Date(m.at).toISOString()}] ${m.by} (${m.side}): ${m.body}`, 7);
+    // Each sender with the profile they wrote for, by name (never by side).
+    const sideName = (side: string) =>
+      side === "consenter" ? request.consenter.displayName : side === "requester" ? request.requester.displayName : "Consent";
+    for (const m of dossier.messages.slice(0, 50)) {
+      const profile = sideName(m.side);
+      const who = profile === m.by ? m.by : `${m.by} (${profile})`;
+      para(doc, `[${new Date(m.at).toISOString()}] ${who}: ${m.body}`, 7);
+    }
   }
   sectionTitle(doc, "Timeline");
-  for (const e of dossier.events) kv(doc, new Date(e.at).toISOString(), `${e.type}${e.actor ? ` — ${e.actor}` : ""}`);
+  for (const e of dossier.events) kv(doc, new Date(e.at).toISOString(), `${eventLabel(e.type)}${e.actor ? ` — ${e.actor}` : ""}`);
   if (dossier.grant) {
     sectionTitle(doc, "Grant");
     kv(doc, "Certificate", dossier.grant.certificateId);

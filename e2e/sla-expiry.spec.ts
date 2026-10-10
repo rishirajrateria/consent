@@ -1,19 +1,20 @@
 import { test, expect } from "@playwright/test";
 import { db, consenterBySlug, requesterBySlug } from "./db";
-import { pageFor, runJobs, submitBasicRequest, visit } from "./helpers";
+import { expectStatus, pageFor, runJobs, submitBasicRequest, visit } from "./helpers";
 
 /**
- * Flow 4 — SLA expiry: Daily Lens News asks Volt Energy (no consent price →
- * single checkout line). Every action on the request (submission, timeline
- * events, uploads) is backdated past the 7-day window via Prisma, the jobs
- * tick runs, and we assert: status Expired (no response), the
- * PER_REQUEST payment FORFEITED, and Volt's consenter score decreased.
+ * Window expiry: Daily Lens News asks Volt Energy. Volt is free to ask, so
+ * the request is sent at once with no checkout and no payment at all. Every
+ * action on the request (sending, timeline events, uploads) is backdated past
+ * the 7-day window via Prisma, the jobs tick runs, and we assert: status
+ * Expired (no response), still no payment, and Volt's Consent Score for
+ * answering decreased.
  *
  * The score is recomputed from scratch on expiry, so a throw-away expired
  * request establishes a recalculated baseline first; the second expiry must
  * then land strictly lower (worse response rate + bigger penalty).
  */
-test("unanswered request expires, forfeits the fee and dents the score", async ({ browser, request }) => {
+test("an unanswered free request expires and dents the owner's score", async ({ browser, request }) => {
   const news = await pageFor(browser, "news");
 
   const requestId = await submitBasicRequest(news, {
@@ -24,9 +25,12 @@ test("unanswered request expires, forfeits the fee and dents the score", async (
     uploadAsset: true,
     uploadRaw: false,
     intent: "News",
-    expectSingleCharge: true, // Volt has no consent price → one payment line
+    charge: "free", // Volt is free to ask → no checkout
   });
+  await expectStatus(requestId, "PENDING");
   await expect(news.getByText("Pending", { exact: true }).first()).toBeVisible();
+  await expect(news.getByText("Free to ask. Nothing was charged.")).toBeVisible();
+  expect(await db.payment.count({ where: { requestId } })).toBe(0);
 
   const volt = await consenterBySlug("volt-energy");
   const dailyLens = await requesterBySlug("daily-lens-news");
@@ -55,26 +59,23 @@ test("unanswered request expires, forfeits the fee and dents the score", async (
   const eightDaysAgo = new Date(Date.now() - 8 * 86400_000);
   await db.consentRequest.update({ where: { id: requestId }, data: { submittedAt: eightDaysAgo } });
   await db.requestEvent.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
+  await db.requestMessage.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
   await db.storedFile.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
-  await db.negotiationOffer.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
   await runJobs(request);
 
-  const expired = await db.consentRequest.findUnique({ where: { id: requestId } });
-  expect(expired!.status).toBe("EXPIRED_NO_RESPONSE");
-
-  const fee = await db.payment.findFirst({
-    where: { requestId, purpose: "PER_REQUEST" },
-  });
-  expect(fee).toBeTruthy();
-  expect(fee!.status).toBe("FORFEITED");
+  await expectStatus(requestId, "EXPIRED_NO_RESPONSE");
+  // A free ask has nothing to forfeit or refund.
+  expect(await db.payment.count({ where: { requestId } })).toBe(0);
+  expect(await db.earningEntry.count({ where: { requestId } })).toBe(0);
 
   const after = (await consenterBySlug("volt-energy")).score;
   expect(after).toBeLessThan(before);
 
-  // UI reflects the expiry for the requester.
+  // The asker sees the expiry.
   await visit(news, `/r-panel/requests/${requestId}`);
   await expect(news.getByText("Expired (no response)", { exact: true }).first()).toBeVisible();
   await expect(news.getByText(/did not respond within the window/)).toBeVisible();
+  await expect(news.getByRole("link", { name: /^Ask Volt Energy again/ })).toBeVisible();
 
   await news.context().close();
 });

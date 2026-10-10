@@ -2,14 +2,14 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { normalizeLegalName } from "@/lib/utils";
-import { searchConsenters } from "@/lib/search";
+import { searchProfiles } from "@/lib/search";
 import { Card, SectionTitle, Field, Input, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { sendAppInviteAction } from "@/app/(app)/invites/actions";
 import { UserPlus, Users } from "lucide-react";
 
 /**
- * "Not here yet? Summon them." — shown under directory / new-request search.
+ * "Not here yet? Summon them." — shown under the directory and Find searches.
  * Records demand per name and (optionally) emails the person an invite.
  * When the search found profiles, the form folds away so opening a found
  * profile stays the obvious next step.
@@ -28,7 +28,7 @@ export async function InvitePanel({
   const normalized = query ? normalizeLegalName(query) : "";
   const [demand, found] = await Promise.all([
     normalized ? db.appInvite.count({ where: { normalizedName: normalized, claimedAt: null } }) : 0,
-    hasResults ?? (query ? searchConsenters(query, 1).then((r) => r.length > 0) : false),
+    hasResults ?? (query ? searchProfiles(query, 1).then((r) => r.length > 0) : false),
   ]);
   const back = encodeURIComponent(returnTo);
 

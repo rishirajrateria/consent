@@ -33,10 +33,13 @@ export default async function VerifyPhonePage({ searchParams }: PageProps<"/veri
         </Field>
         <SubmitButton className="w-full">Verify phone</SubmitButton>
       </form>
-      <form action={skipPhoneAction}>
-        {keepNext}
-        <SubmitButton variant="ghost" className="w-full">Skip for now</SubmitButton>
-      </form>
+      {/* Joining a team doesn't need an ID check, so an invite can wait for the phone. */}
+      {next?.startsWith("/invite/") && (
+        <form action={skipPhoneAction}>
+          {keepNext}
+          <SubmitButton variant="ghost" className="w-full">Skip for now</SubmitButton>
+        </form>
+      )}
     </Card>
   );
 }

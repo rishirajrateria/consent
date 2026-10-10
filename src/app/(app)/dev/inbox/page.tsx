@@ -23,7 +23,7 @@ export default async function DevInboxPage() {
         title="Dev inbox"
         desc="Mock email and SMS provider output addressed to you. In production, these go through Resend / Twilio."
       />
-      <Alert>OTP codes for email, phone and e-signature verification land here.</Alert>
+      <Alert>Sign-in and verification codes for your email and phone land here.</Alert>
       {messages.length === 0 ? (
         <EmptyState icon={InboxIcon} title="No messages yet" desc="Trigger an OTP or state change to see mail here." />
       ) : (

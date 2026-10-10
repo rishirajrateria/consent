@@ -9,7 +9,18 @@ import { audit } from "@/lib/audit";
 
 export const metadata = { title: "Admin roles" };
 
-const MODULES = ["requesters", "consenters", "users", "requests", "reports", "scores", "catalog", "pricing", "payments", "settings", "templates", "cms", "audit", "takedowns", "analytics"];
+// "consenters" is the one ID-check module (every account is checked once).
+// Roles saved earlier may still hold "requesters" (and "templates"): they are
+// read as "consenters" (and "cms") here and replaced on the next save.
+const MODULES = ["consenters", "users", "requests", "reports", "scores", "catalog", "pricing", "payments", "settings", "cms", "audit", "takedowns", "analytics"];
+const MODULE_LABEL: Record<string, string> = { consenters: "profiles (ID checks)", cms: "pages & messages" };
+const RETIRED: Record<string, string> = { consenters: "requesters", cms: "templates" };
+
+/** A role's permissions on a module, counting the retired key it replaced. */
+function permsOn(perms: Record<string, string[]>, m: string): string[] {
+  const old = RETIRED[m];
+  return [...new Set([...(perms[m] ?? []), ...(old ? perms[old] ?? [] : [])])];
+}
 const PERMS = ["view", "create", "edit", "approve", "delete", "export"];
 
 async function saveRoleAction(formData: FormData) {
@@ -125,10 +136,10 @@ export default async function AdminRoles({ searchParams }: PageProps<"/admin/rol
                     <tbody>
                       {MODULES.map((m) => (
                         <tr key={m} className="border-t hairline">
-                          <td className="py-1.5 font-medium">{m}</td>
+                          <td className="py-1.5 font-medium">{MODULE_LABEL[m] ?? m}</td>
                           {PERMS.map((p) => (
                             <td key={p} className="px-2 text-center">
-                              <input type="checkbox" name={`${m}:${p}`} defaultChecked={perms[m]?.includes(p)} className="size-3.5 accent-black" aria-label={`${r.name} ${m} ${p}`} />
+                              <input type="checkbox" name={`${m}:${p}`} defaultChecked={permsOn(perms, m).includes(p)} className="size-3.5 accent-black" aria-label={`${r.name} ${MODULE_LABEL[m] ?? m} ${p}`} />
                             </td>
                           ))}
                         </tr>
@@ -140,7 +151,9 @@ export default async function AdminRoles({ searchParams }: PageProps<"/admin/rol
               </form>
             ) : (
               <p className="text-xs text-ink-faint">
-                {Object.entries(perms).map(([m, ps]) => `${m}: ${ps.join("/")}`).join(" · ") || "No permissions"}
+                {MODULES.filter((m) => permsOn(perms, m).length)
+                  .map((m) => `${MODULE_LABEL[m] ?? m}: ${permsOn(perms, m).join("/")}`)
+                  .join(" · ") || "No permissions"}
               </p>
             )}
           </Card>

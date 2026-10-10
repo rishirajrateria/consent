@@ -1,15 +1,16 @@
 import "server-only";
 import { db } from "@/lib/db";
-import type { ConsenterHit } from "@/lib/search";
+import type { ProfileHit } from "@/lib/search";
 import { requestCapacity, type Capacity } from "@/lib/capacity";
-import { feeLine } from "./asking";
+import { feeLine, type FeeLine } from "./asking";
 
 /**
  * What each result card shows besides the name: the consent request fee line
- * and, for owners whose request limits are reached, why new requests are paused.
+ * ("Free to ask" or the fee plus the platform fee) and, for profiles whose
+ * request limits are reached, why new requests are paused.
  */
-export async function resultDetails(results: ConsenterHit[]) {
-  if (!results.length) return { fees: new Map<string, ReturnType<typeof feeLine>>(), paused: new Map<string, Capacity>() };
+export async function resultDetails(results: ProfileHit[]) {
+  if (!results.length) return { fees: new Map<string, FeeLine>(), paused: new Map<string, Capacity>() };
   const ids = results.map((c) => c.id);
   const [tiers, intents, limited] = await Promise.all([
     db.consentPriceTier.findMany({
@@ -32,7 +33,7 @@ export async function resultDetails(results: ConsenterHit[]) {
     }),
   ]);
   const intentIds = intents.map((i) => i.id);
-  const fees = new Map(
+  const fees = new Map<string, FeeLine>(
     results.map((c) => [
       c.id,
       feeLine(

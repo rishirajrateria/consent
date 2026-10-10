@@ -75,12 +75,9 @@ export function statusLabel(s: string): string {
     APPROVED: "Approved",
     REJECTED: "Rejected",
     PENDING: "Pending",
-    IN_NEGOTIATION: "In negotiation",
-    DEAL_AGREED: "Deal agreed",
     CHANGES_REQUESTED: "Question asked",
-    APPROVED_IN_PRINCIPLE: "Approved in principle",
-    AGREEMENT_MODE_PENDING: "Agreement mode pending",
-    LEGAL_AGREEMENT_PENDING: "Legal agreement pending",
+    // A yes that waits for the final content file the certificate is bound to.
+    APPROVED_IN_PRINCIPLE: "Approved, final file needed",
     DENIED: "Denied",
     CLOSED: "Closed",
     EXPIRED_NO_RESPONSE: "Expired (no response)",
@@ -103,6 +100,73 @@ export function statusLabel(s: string): string {
     HELD: "Held",
   };
   return map[s] ?? titleCase(s);
+}
+
+/** Plain titles for request timeline events (RequestEvent.type). */
+const EVENT_LABELS: Record<string, string> = {
+  submitted: "Sent",
+  routed: "Routed to a team member",
+  auto_approved: "Approved automatically",
+  approved: "Approved",
+  approved_with_conditions: "Approved with conditions",
+  auto_denied: "Declined automatically",
+  denied: "Declined",
+  changes_requested: "Question asked",
+  ask_answered: "Question answered",
+  file_uploaded: "File uploaded",
+  grant_issued: "Certificate issued",
+  grant_revoked: "Consent revoked",
+  withdrawn: "Withdrawn",
+  auto_expired: "Expired unanswered",
+  auto_closed: "Closed after no action",
+  closed: "Closed",
+  closed_by_consent: "Closed by Consent",
+  admin_force_expired: "Expired by Consent",
+  admin_note: "Note from Consent",
+  consent_fee_refunded: "Consent request fee refunded",
+  consent_price_refunded: "Consent request fee refunded",
+  report_filed: "Report filed",
+  report_response: "Report answered",
+  takedown_raised: "Takedown requested",
+  takedown_marked_down: "Marked taken down",
+  takedown_declined: "Takedown declined",
+  takedown_confirmed: "Takedown confirmed",
+  takedown_claim_rejected: "Takedown claim rejected",
+  takedown_ignored: "Takedown ignored",
+};
+
+/**
+ * Event types left by features that no longer exist (fees set between the two
+ * sides, paperwork, sharing contact details, meetings). Old timelines skip them.
+ */
+export const RETIRED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "offer_made",
+  "marked_paid",
+  "deal_agreed",
+  "agreement_mode_chosen",
+  "legal_agreement_proposed",
+  "legal_agreement_accepted",
+  "legal_agreement_declined",
+  "agreement_drafted",
+  "agreement_signed",
+  "agreement_uploaded",
+  "agreement_upload_confirmed",
+  "agreement_upload_rejected",
+  "agreement_redraft_requested",
+  "contacts_shared",
+  "meeting_scheduled",
+  "meeting_moved",
+  "meeting_cancelled",
+]);
+
+/** Whether a timeline event is still shown (retired kinds are skipped). */
+export function shownEvent(e: { type: string }): boolean {
+  return !RETIRED_EVENT_TYPES.has(e.type);
+}
+
+/** A timeline event's title. */
+export function eventLabel(type: string): string {
+  return EVENT_LABELS[type] ?? titleCase(type);
 }
 
 export function scoreBand(score: number): string {

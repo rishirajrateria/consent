@@ -1,123 +1,160 @@
+import Link from "next/link";
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, KV, StatusBadge, SectionTitle, Alert, Field, Input, ButtonLink } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, SectionTitle, ButtonLink, EmptyState } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
-import { payRenewalAction } from "@/app/(app)/onboarding/actions";
-import { requesterActive, priceFor } from "@/lib/payments";
-import { fmtDate, fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
+import { payMembershipAction } from "@/app/(app)/onboarding/actions";
+import { membershipPriceFor } from "@/lib/payments";
+import { fmtPrice } from "@/lib/currencies";
+import { getSettings } from "@/lib/settings";
+import { membershipOk, verified } from "@/lib/membership";
+import { PLATFORM_PCT } from "@/lib/platform-fee";
+import { fmtDate, fmtDateTime, fmtMoney } from "@/lib/utils";
 import { splitConsentFee } from "@/lib/escrow";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "@/app/(app)/c-panel/requests/fee-split";
+import { PAYMENT_LABEL, paymentParts } from "@/app/(app)/pay/lines";
 import type { Payment } from "@prisma/client";
+import { ReceiptText } from "lucide-react";
 
-export const metadata = { title: "Billing" };
+export const metadata = { title: "Payments & membership" };
 
 export default async function BillingPage({ searchParams }: PageProps<"/r-panel/billing">) {
   const sp = await searchParams;
   const { requester, member } = await requireRequester();
-  const [payments, price] = await Promise.all([
+  const [payments, price, settings] = await Promise.all([
     db.payment.findMany({
-      where: { requesterId: requester.id },
+      // Unpaid lines are checkouts that were left; only real payments show.
+      where: { requesterId: requester.id, status: { not: "PENDING" } },
       orderBy: { createdAt: "desc" },
-      take: 50,
+      take: 100,
+      include: { request: { select: { id: true, number: true, consenter: { select: { displayName: true } } } } },
     }),
-    priceFor(requester.country),
+    membershipPriceFor(requester.country),
+    getSettings(),
   ]);
-  const active = requesterActive(requester);
+  const feeOn = settings.membershipFeeOn;
+  const yearly = fmtPrice(price.fee, price.currency);
+  const taxNote =
+    price.taxRate && Number(price.taxRate.toString()) > 0 ? ` + ${price.taxLabel ?? "tax"} ${Number(price.taxRate.toString())}%` : "";
+  const paidUp = membershipOk(requester, true);
 
   return (
     <div className="space-y-6">
-      <PageHeader kicker={requester.displayName} title="Billing & subscription" />
+      <PageHeader kicker={requester.displayName} title="Payments & membership" />
       <ErrorNote error={sp.error as string | undefined} />
-      {sp.renewed && <SuccessNote msg="Subscription renewed. Thank you!" />}
+      {sp.renewed && <SuccessNote msg="Membership paid. Thank you!" />}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="space-y-2">
-          <SectionTitle title="Subscription" />
-          <KV k="Status" v={<StatusBadge status={active ? "ACTIVE" : "EXPIRED"} />} />
-          <KV k="Onboarding fee" v={requester.onboardingFeePaidAt ? `Paid ${fmtDate(requester.onboardingFeePaidAt)}` : "Unpaid"} />
-          <KV k="Subscription ends" v={fmtDate(requester.subscriptionEndsAt)} />
-          {!active && requester.onboardingFeePaidAt && (
-            <Alert tone="warn">
-              Your subscription has lapsed. You keep read access to past grants and certificates, but
-              cannot send new requests until you renew.
-            </Alert>
-          )}
-          {/* Renewal only extends an active account; until then the onboarding payment covers the first year. */}
-          {requester.status !== "APPROVED" ? (
-            <div className="space-y-2 pt-2">
-              <p className="text-sm text-ink-soft">You can pay once your application is approved.</p>
-              <ButtonLink href="/onboarding/requester" variant="secondary">See application status</ButtonLink>
-            </div>
-          ) : member.role === "VIEWER" ? (
-            // Viewer seats are read-only, so they never see a pay button.
-            <p className="pt-2 text-sm text-ink-soft">
-              {requester.onboardingFeePaidAt
-                ? "Viewers can't renew. Ask the account owner."
-                : "Viewers can't pay. Ask the account owner to activate the account."}
-            </p>
-          ) : !requester.onboardingFeePaidAt ? (
-            <div className="space-y-2 pt-2">
-              <p className="text-sm text-ink-soft">
-                You&apos;re approved. Pay the onboarding fee to start sending requests; it includes your first year.
+        <Card className="space-y-3">
+          <SectionTitle title="Membership" />
+          {!feeOn ? (
+            <>
+              <p className="text-lg font-semibold">
+                {yearly} a year · Free for now
               </p>
-              <ButtonLink href="/onboarding/requester">Activate your account</ButtonLink>
-            </div>
+              <p className="text-sm text-ink-soft">
+                Every verified profile can send requests without paying while membership is free. People
+                can always ask you, with or without it.
+              </p>
+            </>
           ) : (
-            <form action={payRenewalAction} className="flex flex-wrap items-end gap-2 pt-2">
-              <div className="w-40">
-                <Field label="Coupon code" hint="Optional.">
-                  <Input name="coupon" placeholder="CODE" className="uppercase" />
-                </Field>
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-lg font-semibold">{yearly} a year</p>
+                <StatusBadge
+                  status={paidUp ? "ACTIVE" : "EXPIRED"}
+                  label={
+                    paidUp
+                      ? `Active until ${fmtDate(requester.membershipEndsAt)}`
+                      : requester.membershipEndsAt
+                        ? `Ended ${fmtDate(requester.membershipEndsAt)}`
+                        : "Not active"
+                  }
+                />
               </div>
-              <SubmitButton variant="secondary">
-                Renew for one year — {fmtMoney(price.yearlyFee.toString(), price.currency)}
-                {price.taxRate && Number(price.taxRate) > 0 ? ` + ${price.taxLabel ?? "tax"} ${price.taxRate}%` : ""}
-              </SubmitButton>
-            </form>
+              <p className="text-sm text-ink-soft">
+                Sending requests needs a membership. People can always ask you, with or without it.
+              </p>
+              {!verified(requester) ? (
+                <div className="space-y-2">
+                  <p className="text-sm text-ink-soft">You can pay once your ID check is approved.</p>
+                  <ButtonLink href="/onboarding" variant="secondary">See your ID check</ButtonLink>
+                </div>
+              ) : member.role === "VIEWER" ? (
+                <p className="text-sm text-ink-soft">Viewers can&apos;t pay. Ask the profile owner.</p>
+              ) : (
+                <form action={payMembershipAction}>
+                  <SubmitButton>
+                    {paidUp ? `Renew for one year · ${yearly}` : `Pay ${yearly} for one year`}
+                    {taxNote}
+                  </SubmitButton>
+                </form>
+              )}
+            </>
           )}
         </Card>
 
         <Card className="space-y-2">
           <SectionTitle
-            title="Payment history"
-            desc="Platform fees and owners' consent request fees. A consent request fee is held until the owner answers. If they say yes, 80% goes to them; if not, 80% is refunded to you. Consent keeps 20%. The platform fee isn't refunded. Consent never handles fees agreed between you and owners."
+            title="Payments"
+            desc={`What you paid to send requests${feeOn ? ", and your membership" : ""}. A consent request fee is held until they answer. If they say yes, ${OWNER_PCT} goes to them. If not, ${REFUND_PCT} comes back to you. Consent keeps ${CONSENT_PCT}. The platform fee (${PLATFORM_PCT} of the consent request fee) isn't refunded.`}
           />
-          {payments.length === 0 && <p className="text-sm text-ink-faint">No payments yet.</p>}
-          {payments.map((p) => (
-            <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 border-t hairline py-2 text-sm first:border-t-0">
-              <div>
-                <div className="font-medium">
-                  {PURPOSE_LABEL[p.purpose] ?? titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}
+          {payments.length === 0 && (
+            <EmptyState icon={ReceiptText} title="No payments yet" desc="Asking someone whose consent request fee is free costs nothing." />
+          )}
+          {payments.map((p) => {
+            const parts = paymentParts(p);
+            return (
+              <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 border-t hairline py-2 text-sm first:border-t-0">
+                <div className="min-w-0">
+                  <div className="font-medium">
+                    {PAYMENT_LABEL[p.purpose]} · {fmtMoney(p.amount.toString(), p.currency)}
+                  </div>
+                  <div className="text-xs text-ink-faint">
+                    {fmtDateTime(p.paidAt ?? p.createdAt)}
+                    {p.request && (
+                      <>
+                        {" · "}
+                        <Link href={`/r-panel/requests/${p.request.id}`} className="underline underline-offset-4">
+                          Request #{p.request.number} to {p.request.consenter.displayName}
+                        </Link>
+                      </>
+                    )}
+                    {parts.tax ? ` · incl. ${parts.taxLabel} ${fmtMoney(parts.tax, p.currency)}` : ""}
+                    {parts.discount ? ` · coupon −${fmtMoney(parts.discount, p.currency)}` : ""}
+                    {p.refundedAt ? ` · ${refundText(p)} on ${fmtDateTime(p.refundedAt)}` : ""}
+                  </div>
                 </div>
-                <div className="text-xs text-ink-faint">
-                  {fmtDateTime(p.createdAt)}
-                  {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ""}
-                  {p.taxLabel && p.tax ? ` · incl. ${p.taxLabel} ${fmtMoney(p.tax.toString(), p.currency)}` : ""}
-                  {p.refundedAt ? ` · ${refundText(p)} on ${fmtDateTime(p.refundedAt)}` : ""}
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={p.status} label={statusLabel(p)} />
+                  {p.invoiceNumber && (
+                    <a className="text-xs underline underline-offset-4" href={`/api/invoices/${p.id}`} target="_blank" rel="noopener">
+                      Invoice PDF
+                    </a>
+                  )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <StatusBadge status={p.status} label={p.status === "REFUNDED" && p.purpose === "CONSENT_PRICE" ? `${Math.round((Number((p.refundedAmount ?? p.amount).toString()) / Number(p.amount.toString())) * 100)}% refunded` : undefined} />
-                {p.invoiceNumber && (
-                  <a className="text-xs underline underline-offset-4" href={`/api/invoices/${p.id}`} target="_blank">
-                    Invoice PDF
-                  </a>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </Card>
       </div>
     </div>
   );
 }
 
-const PURPOSE_LABEL: Partial<Record<Payment["purpose"], string>> = {
-  PER_REQUEST: "Platform fee",
-  CONSENT_PRICE: "Consent request fee",
-};
+/** "Paid", "80% refunded", or "Not refunded" for a platform fee kept when a request expired. */
+function statusLabel(p: Pick<Payment, "status" | "purpose" | "amount" | "refundedAmount">) {
+  if (p.status === "REFUNDED" && p.purpose === "CONSENT_PRICE") {
+    const paid = Number(p.amount.toString());
+    const back = Number((p.refundedAmount ?? p.amount).toString());
+    return paid > 0 ? `${Math.round((back / paid) * 100)}% refunded` : undefined;
+  }
+  if (p.status === "FORFEITED") return "Not refunded";
+  return undefined;
+}
 
-/** "refunded $8.00 (80%)": what actually came back, and its share of the fee paid. */
+/** "refunded ₹80.00 (80%)": what actually came back, and its share of the fee paid. */
 function refundText(p: Pick<Payment, "amount" | "currency" | "refundedAmount">) {
   const paid = Number(p.amount.toString());
   const back = p.refundedAmount != null ? Number(p.refundedAmount.toString()) : splitConsentFee(paid).refund;

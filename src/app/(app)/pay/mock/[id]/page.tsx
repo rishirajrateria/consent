@@ -1,19 +1,26 @@
 import { notFound, redirect } from "next/navigation";
-import { requireUser } from "@/lib/auth";
+import { requireUser, safeNext } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { Card, KV, PageHeader, Alert, Divider, ButtonLink } from "@/components/ui";
+import { Card, PageHeader, Alert, Divider, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
-import { settlePayment, pendingPaymentsForRequest, consentPriceFor, couponOpen } from "@/lib/payments";
+import { settleCheckout, checkoutLines, checkoutIsStale, couponOpen, payerRole } from "@/lib/payments";
 import { audit } from "@/lib/audit";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import type { Selection } from "@/lib/rules";
 import type { Payment } from "@prisma/client";
-import { fmtMoney, titleCase } from "@/lib/utils";
+import { fmtDate, fmtMoney } from "@/lib/utils";
 import { splitConsentFee } from "@/lib/escrow";
 import { requestCapacity } from "@/lib/capacity";
+import { getSettings } from "@/lib/settings";
+import { canSend } from "@/lib/membership";
+import { isSelfAsk } from "@/lib/profiles";
+import { checkoutRows, checkoutTotal } from "../../lines";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "@/app/(app)/c-panel/requests/fee-split";
 import { CreditCard } from "lucide-react";
 
 export const metadata = { title: "Checkout" };
+
+const MEMBERSHIP_FREE = "Membership is free for now. There's nothing to pay.";
 
 export default async function MockCheckout({
   params,
@@ -27,56 +34,61 @@ export default async function MockCheckout({
     include: { requester: true, request: { include: { consenter: true } } },
   });
   if (!payment) notFound();
-  const member = await db.requesterMember.findUnique({
-    where: { requesterId_userId: { requesterId: payment.requesterId, userId: session.userId } },
-  });
-  if (!member) notFound();
-  const returnTo = typeof sp.return === "string" ? sp.return : "/r-panel";
+  const role = await payerRole(payment.requester, session.userId);
+  if (!role) notFound();
+  const [backHref, backLabel] = backLink(payment);
+  const returnTo = safeNext(sp.return) ?? backHref;
 
   if (payment.status === "PAID") redirect(returnTo);
+  if (role === "VIEWER") redirect(`${backHref}?error=${encodeURIComponent("Viewers can't pay. Ask the profile owner.")}`);
+  if (payment.purpose === "MEMBERSHIP" && !(await getSettings()).membershipFeeOn)
+    redirect(`/r-panel/billing?error=${encodeURIComponent(MEMBERSHIP_FREE)}`);
   const staleHref = await staleRequestHref(payment.requestId);
   if (staleHref) redirect(staleHref);
 
-  // A submission checkout covers every pending payment on the request:
-  // the platform fee plus the consenter's consent request fee, if set.
-  const lines = payment.requestId ? await pendingPaymentsForRequest(payment.requestId) : [payment];
+  // One checkout: for a request, its consent request fee and platform fee together.
+  const lines = await checkoutLines(payment);
+  if (lines.length === 0) redirect(returnTo);
+  // Never show a discount that can no longer be paid at.
+  if (await spentCoupon(lines)) redirect(`${backHref}?error=${encodeURIComponent(COUPON_GONE)}`);
+  const rows = checkoutRows(lines);
   const consentLine = lines.find((l) => l.purpose === "CONSENT_PRICE");
-  const owner = payment.request?.consenter.displayName ?? "The owner";
+  const owner = payment.request?.consenter.displayName ?? "The person you asked";
   // What comes back without a yes: 80% of the consent request fee (Consent keeps 20%).
   const consentRefund = consentLine
     ? fmtMoney(splitConsentFee(Number(consentLine.amount.toString())).refund, consentLine.currency)
     : null;
-  // A way back that doesn't pay. Unpaid lines are reused when the request is
-  // submitted again, so leaving never adds a second charge.
-  const [backHref, backLabel] = backLink(payment);
-  // Never show a discount that can no longer be paid at.
-  if (await spentCoupon(lines)) redirect(`${backHref}?error=${encodeURIComponent(COUPON_GONE)}`);
+  const membershipUntil =
+    payment.purpose === "MEMBERSHIP" ? nextYear(payment.requester.membershipEndsAt) : null;
 
-  async function confirmAction() {
+  async function confirmAction(formData: FormData) {
     "use server";
     const s = await requireUser();
-    const p = await db.payment.findUniqueOrThrow({ where: { id } });
-    const m = await db.requesterMember.findUnique({
-      where: { requesterId_userId: { requesterId: p.requesterId, userId: s.userId } },
-    });
-    if (!m) redirect("/dashboard");
+    const p = await db.payment.findUniqueOrThrow({ where: { id }, include: { requester: true } });
+    const r = await payerRole(p.requester, s.userId);
+    if (!r) redirect("/c-panel");
+    const [back] = backLink(p);
     if (p.status === "PAID") redirect(returnTo);
+    if (r === "VIEWER") redirect(`${back}?error=${encodeURIComponent("Viewers can't pay. Ask the profile owner.")}`);
+    if (p.purpose === "MEMBERSHIP" && !(await getSettings()).membershipFeeOn)
+      redirect(`/r-panel/billing?error=${encodeURIComponent(MEMBERSHIP_FREE)}`);
     const stale = await staleRequestHref(p.requestId);
     if (stale) redirect(stale);
-    const toSettle = p.requestId
-      ? await db.payment.findMany({ where: { requestId: p.requestId, status: "PENDING" } })
-      : [p];
+    // Charge only what this page showed: an old checkout page (browser back)
+    // can still be open after the lines were rewritten for a new total.
+    if (checkoutTotal(await checkoutLines(p)) !== String(formData.get("total") ?? ""))
+      redirect(`/pay/mock/${id}?return=${encodeURIComponent(returnTo)}&changed=1`);
     // The coupon may have run out, expired or been switched off since checkout
     // opened: drop the discounted line so it can't be paid, and start again.
-    const spent = await spentCoupon(toSettle);
+    const spent = await spentCoupon(await checkoutLines(p));
     if (spent) {
       await db.payment.deleteMany({ where: { id: spent.id, status: "PENDING" } });
-      redirect(`${backLink(p)[0]}?error=${encodeURIComponent(COUPON_GONE)}`);
+      redirect(`${back}?error=${encodeURIComponent(COUPON_GONE)}`);
     }
-    // Settle the consent request fee first so the earning exists when the
-    // platform-fee settlement flips the request to Submitted.
-    for (const row of toSettle.sort((a) => (a.purpose === "CONSENT_PRICE" ? -1 : 1))) {
-      await settlePayment(row.id);
+    // Settles the consent request fee first, so the held earning exists when
+    // the platform fee's settlement sends the request.
+    const settled = await settleCheckout(p.id);
+    for (const row of settled) {
       await audit({
         actorId: s.userId,
         actorName: s.user.name,
@@ -92,6 +104,7 @@ export default async function MockCheckout({
   return (
     <div className="mx-auto max-w-md space-y-6">
       <PageHeader kicker="Mock checkout" title="Complete payment" />
+      {sp.changed === "1" && <Alert tone="warn">The amount changed. Check it and pay again.</Alert>}
       <Alert>
         This is the <strong>mock payment provider</strong>. In production this screen is Stripe or
         Razorpay checkout, selected by your country.
@@ -105,43 +118,43 @@ export default async function MockCheckout({
             Request #{payment.request.number} to {payment.request.consenter.displayName}
           </p>
         )}
-        {/* Like KV, but a long owner name wraps instead of pushing the amount off screen. */}
-        {lines.map((l) => (
-          <div key={l.id} className="flex items-start justify-between gap-4 py-2">
-            <span className="min-w-0 text-xs font-medium uppercase tracking-wider text-ink-faint">
-              {l.purpose === "CONSENT_PRICE"
-                ? `${owner}'s consent request fee`
-                : l.purpose === "PER_REQUEST"
-                  ? "Platform fee"
-                  : titleCase(l.purpose)}
+        {/* Like KV, but a long label wraps instead of pushing the amount off screen. */}
+        {rows.map((r) => (
+          <div key={r.key} className="flex items-start justify-between gap-4 py-2">
+            <span className="min-w-0 text-xs font-medium uppercase tracking-wider text-ink-faint">{r.label}</span>
+            <span className="shrink-0 text-right text-sm tabular-nums text-ink">
+              {r.minus ? "−" : ""}
+              {fmtMoney(r.amount, r.currency)}
             </span>
-            <span className="shrink-0 text-right text-sm text-ink">{fmtMoney(l.amount.toString(), l.currency)}</span>
           </div>
         ))}
-        {payment.tax && <KV k={payment.taxLabel ?? "Tax"} v={`included: ${fmtMoney(payment.tax.toString(), payment.currency)}`} />}
-        {payment.discount && <KV k="Coupon discount" v={`−${fmtMoney(payment.discount.toString(), payment.currency)}`} />}
+        <Divider />
+        <div className="flex items-start justify-between gap-4 py-1">
+          <span className="text-sm font-semibold">Total</span>
+          <span className="shrink-0 text-right text-sm font-semibold tabular-nums">{checkoutTotal(lines)}</span>
+        </div>
         {consentLine && (
-          <>
-            <Divider />
-            <p className="text-xs text-ink-faint">
-              {owner}&apos;s consent request fee is held until they answer. If they say yes, 80% goes
-              to them; if not, 80% ({consentRefund}) is refunded to you. Consent keeps 20%. The platform
-              fee isn&apos;t refunded. Any usage fee agreed after approval is settled directly between
-              you, never through Consent.
-            </p>
-          </>
+          <p className="text-xs text-ink-faint">
+            {owner}&apos;s consent request fee is held until they answer. If they say yes, {OWNER_PCT} goes
+            to them. If not, {REFUND_PCT} ({consentRefund}) comes back to you. Consent keeps {CONSENT_PCT}.
+            The platform fee isn&apos;t refunded.
+          </p>
         )}
-        <form action={confirmAction} className="pt-3">
-          <SubmitButton className="w-full">
-            Pay{" "}
-            {lines
-              .map((l) => fmtMoney(l.amount.toString(), l.currency))
-              .join(" + ")}
-          </SubmitButton>
-        </form>
-        <ButtonLink href={backHref} variant="ghost" className="min-h-10 w-full">
-          {backLabel}
-        </ButtonLink>
+        {membershipUntil && (
+          <p className="text-xs text-ink-faint">
+            One year of membership. You can send requests until {fmtDate(membershipUntil)}. People can
+            always ask you, with or without it.
+          </p>
+        )}
+        <div className="flex flex-col gap-2 pt-3">
+          <ButtonLink href={backHref} variant="ghost" className="min-h-10 w-full">
+            {backLabel}
+          </ButtonLink>
+          <form action={confirmAction}>
+            <input type="hidden" name="total" value={checkoutTotal(lines)} />
+            <SubmitButton className="w-full">Pay {checkoutTotal(lines)}</SubmitButton>
+          </form>
+        </div>
       </Card>
     </div>
   );
@@ -149,13 +162,19 @@ export default async function MockCheckout({
 
 const COUPON_GONE = "This coupon can no longer be used. Start again to pay the full price.";
 
-/** Where "Back" goes: the draft being paid for, or the page that opened this checkout. */
-function backLink(p: Pick<Payment, "requestId" | "purpose">): [string, string] {
+/** Where "Back" goes: the draft being paid for, or the payments page. */
+function backLink(p: Pick<Payment, "requestId">): [string, string] {
   return p.requestId
     ? [`/r-panel/requests/${p.requestId}/edit`, "Back to request"]
-    : p.purpose === "ONBOARDING"
-      ? ["/onboarding/requester", "Back"]
-      : ["/r-panel/billing", "Back to billing"];
+    : ["/r-panel/billing", "Back to payments"];
+}
+
+/** A year on from today, or from the current end of the membership if it is still ahead. */
+function nextYear(endsAt: Date | null) {
+  const now = new Date();
+  const next = new Date(endsAt && endsAt > now ? endsAt : now);
+  next.setFullYear(next.getFullYear() + 1);
+  return next;
 }
 
 /** The first line whose coupon can no longer be redeemed, if any. */
@@ -170,21 +189,38 @@ async function spentCoupon(rows: Pick<Payment, "id" | "couponCode">[]) {
 
 /**
  * An old checkout link can be reopened after the draft was changed. Never take
- * money for anything but what the draft now says: send the requester back when
- * the owner's public matrix would deny it once paid, or when the consent request
- * fee line no longer matches the price for its intent (or the owner's price moved).
- * Pressing "Pay & submit" again rebuilds the lines. Also sends them back while
- * the owner's request limits pause new requests, so nothing is charged; the
- * draft is kept.
+ * money for anything but what the draft now says. A request that is no longer
+ * a draft (sent, or discarded) is never charged: its unpaid lines are dropped.
+ * Sending is checked again as on Send (ID check, membership, the person asked
+ * still taking requests, not their own profile). Send the asker back when the
+ * public terms of the person asked would decline it once paid, or when the
+ * unpaid lines no longer match what sending it costs (the intent, the fee, its
+ * currency or the tax changed, or asking became free). Sending it again
+ * rebuilds the lines. Also sends them back while the request limits of the
+ * person asked pause new requests, so nothing is charged; the draft is kept.
  */
 async function staleRequestHref(requestId: string | null) {
   if (!requestId) return null;
   const request = await db.consentRequest.findUnique({
     where: { id: requestId },
-    include: { requester: true, consenter: { include: { priceTiers: true } } },
+    include: { requester: true, consenter: true },
   });
-  if (!request || request.status !== "DRAFT") return null;
+  if (!request) return null;
+  if (request.status !== "DRAFT") {
+    await db.payment.deleteMany({ where: { requestId: request.id, status: "PENDING" } });
+    return `/r-panel/requests/${request.id}`;
+  }
   const edit = `/r-panel/requests/${request.id}/edit`;
+  const back = (error: string) => `${edit}?error=${encodeURIComponent(error)}`;
+  // The same checks and words as Send: any of these may have changed since checkout opened.
+  if (!canSend(request.requester, (await getSettings()).membershipFeeOn))
+    return back(
+      request.requester.status !== "APPROVED"
+        ? "You can send requests once your ID check is approved."
+        : "Sending requests needs a membership. Get one in Payments & membership.",
+    );
+  if (isSelfAsk(request.consenterId, request.requester)) return back("This is your profile. You can't ask yourself.");
+  if (request.consenter.status !== "APPROVED") return back(`${request.consenter.displayName} isn't taking requests right now.`);
   const blocked = await blockedCombinations({
     consenterId: request.consenterId,
     requester: request.requester,
@@ -195,15 +231,5 @@ async function staleRequestHref(requestId: string | null) {
   const capacity = await requestCapacity(request.consenterId);
   // Step 4 says why and when they open again, in the viewer's own time zone.
   if (capacity.paused) return `${edit}?paused=1#review`;
-
-  const ask = consentPriceFor(request.consenter, request.intentCategoryId);
-  const asks = await db.payment.findMany({
-    where: { requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
-  });
-  const stale = ask
-    ? asks.length !== 1 ||
-      !asks[0].amount.eq(ask) ||
-      asks[0].currency !== request.consenter.consentPriceCurrency
-    : asks.length > 0;
-  return stale ? `${edit}?changed=1#review` : null;
+  return (await checkoutIsStale(requestId)) ? `${edit}?changed=1#review` : null;
 }

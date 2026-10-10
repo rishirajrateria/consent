@@ -1,9 +1,10 @@
-/* The owner's consent request fee is held from the moment a request is paid
-   for. When the owner says yes (approval, an automatic yes from their terms,
-   or an agreed fee), 80% of it becomes theirs and goes out in the next weekly
-   payout. Any other ending (declined, no answer in time, withdrawn, ended by
-   either side) refunds 80% to the requester. Consent keeps 20% either way.
-   The platform fee is Consent's and is never refunded. */
+/* The consent request fee is held from the moment a request is paid for.
+   When the person asked says yes (their approval, or an automatic yes from
+   their terms), 80% of it becomes theirs and goes out in the next weekly
+   payout. Any other ending (declined, no answer in time, withdrawn, closed)
+   refunds 80% to the person who asked. Consent keeps 20% either way. The
+   platform fee is Consent's and is never refunded. A free request has no fee
+   and nothing to hold. */
 
 import type { RequestStatus } from "@prisma/client";
 import { db } from "./db";
@@ -25,14 +26,11 @@ export function splitConsentFee(gross: number) {
   return { gross: cents(gross), owner, refund, consentOnYes: cents(gross - owner), consentOnNo: cents(gross - refund) };
 }
 
-/** The owner has said yes: their share of the held fee is released to them. */
-export const YES_STATUSES: RequestStatus[] = [
-  "DEAL_AGREED",
-  "APPROVED_IN_PRINCIPLE",
-  "AGREEMENT_MODE_PENDING",
-  "LEGAL_AGREEMENT_PENDING",
-  "APPROVED",
-];
+/**
+ * The owner has said yes: their share of the held fee is released to them.
+ * APPROVED_IN_PRINCIPLE is a yes still waiting for the final file.
+ */
+export const YES_STATUSES: RequestStatus[] = ["APPROVED_IN_PRINCIPLE", "APPROVED"];
 /** The request ended without a yes: the requester's share of the held fee is refunded. */
 export const NO_STATUSES: RequestStatus[] = ["DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"];
 
@@ -46,7 +44,7 @@ export function escrowOutcome(status: RequestStatus): EscrowOutcome {
 
 const ENDING: Partial<Record<RequestStatus, string>> = {
   DENIED: "was declined",
-  CLOSED: "ended without a deal",
+  CLOSED: "was closed",
   EXPIRED_NO_RESPONSE: "wasn't answered in time",
   WITHDRAWN: "was withdrawn",
 };

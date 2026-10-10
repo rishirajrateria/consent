@@ -1,15 +1,17 @@
-/* How an owner sees a consent request fee: the full fee the requester paid,
-   the owner's share on a yes, and what went back to the requester otherwise.
-   Every number comes from the stored rows; the percentages from escrow. */
+/* How a profile sees a consent request fee: the full fee the asker paid,
+   the profile's share on a yes, and what went back to the asker otherwise.
+   Every number comes from the stored rows; the percentages from escrow and
+   the platform fee. */
 
 import { OWNER_SHARE, REFUND_SHARE, splitConsentFee } from "@/lib/escrow";
+export { PLATFORM_PCT } from "@/lib/platform-fee";
 
 type Num = { toString(): string };
 
 const pct = (share: number) => `${Math.round(share * 100)}%`;
 /** "80%": the owner's share on a yes. */
 export const OWNER_PCT = pct(OWNER_SHARE);
-/** "80%": the share refunded to the requester without a yes. */
+/** "80%": the share refunded to the asker without a yes. */
 export const REFUND_PCT = pct(REFUND_SHARE);
 /** "20%": what Consent keeps either way. */
 export const CONSENT_PCT = pct(1 - OWNER_SHARE);
@@ -26,7 +28,7 @@ export function grossOf(entry: { amount: Num; grossAmount: Num | null; payment?:
   return Number(entry.amount.toString()) / OWNER_SHARE;
 }
 
-/** What actually went back to the requester for a refunded fee. */
+/** What actually went back to the asker for a refunded fee. */
 export function refundedOf(entry: { amount: Num; grossAmount: Num | null; payment: { amount: Num; refundedAmount: Num | null } }) {
   const r = entry.payment.refundedAmount;
   return r != null ? Number(r.toString()) : splitConsentFee(grossOf(entry)).refund;

@@ -12,13 +12,13 @@ function panelPath(side: "consenter" | "requester", id: string) {
 
 export async function fileReportAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side, requesterMember } = await resolveSide(id);
+  const { session, request, side, consenterMember, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
-  await assertCanAct(side, requesterMember, path);
+  await assertCanAct(side === "consenter" ? consenterMember : requesterMember, path);
   const reason = String(formData.get("reason") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!reason || description.length < 20)
-    redirect(`${path}?error=${encodeURIComponent("Pick a reason and describe the breach (min 20 characters)")}`);
+    redirect(`${path}?error=${encodeURIComponent("Pick a category and describe the breach (at least 20 characters)")}`);
 
   const links = String(formData.get("links") ?? "")
     .split("\n")
@@ -45,7 +45,7 @@ export async function fileReportAction(formData: FormData) {
   const notify = side === "consenter" ? notifyRequesterTeam : notifyConsenterTeam;
   await notify(side === "consenter" ? request.requesterId : request.consenterId, {
     title: `A report was filed on request #${request.number}`,
-    body: `Category: ${reason}. You can submit a response; the Consent team will review.`,
+    body: `Category: ${reason}. You can answer it on the request page. The Consent team reviews it.`,
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
     critical: true,
   });
@@ -56,9 +56,9 @@ export async function respondReportAction(formData: FormData) {
   const reportId = String(formData.get("reportId"));
   const report = await db.report.findUnique({ where: { id: reportId }, include: { request: true } });
   if (!report) redirect("/dashboard");
-  const { session, side, requesterMember } = await resolveSide(report.requestId);
+  const { session, side, consenterMember, requesterMember } = await resolveSide(report.requestId);
   const path = panelPath(side, report.requestId);
-  await assertCanAct(side, requesterMember, path);
+  await assertCanAct(side === "consenter" ? consenterMember : requesterMember, path);
   if (report.bySide === side) redirect(`${path}?error=${encodeURIComponent("You filed this report")}`);
   const response = String(formData.get("response") ?? "").trim();
   if (!response) redirect(`${path}?error=${encodeURIComponent("Write a response")}`);

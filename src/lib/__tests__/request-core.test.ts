@@ -1,17 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("../db", () => ({ db: {} }));
 vi.mock("../notify", () => ({ notifyConsenterTeam: vi.fn(), notifyRequesterTeam: vi.fn(), notifyUser: vi.fn(), notifySide: vi.fn() }));
-vi.mock("../providers", () => ({ calendar: {}, email: {}, sms: {}, paymentProviderFor: vi.fn() }));
+vi.mock("../providers", () => ({ email: {}, sms: {}, paymentProviderFor: vi.fn() }));
 import { windowStep, REMIND_BEFORE_MS } from "../jobs";
-import {
-  contactCard,
-  defaultContactFields,
-  sharedFields,
-  pausedNotice,
-  meetingTitle,
-  meetingDescription,
-  fmtUtc,
-} from "../requests";
+import { pausedNotice, fmtUtc, sentences } from "../requests";
 import { evaluateCapacity } from "../capacity";
 
 const now = new Date("2026-10-10T12:00:00Z");
@@ -34,9 +26,10 @@ describe("the request window sweep", () => {
       kind: "remind",
       waiting: "requester",
     });
-    expect(windowStep({ ...base, status: "LEGAL_AGREEMENT_PENDING", expiresAt: at(hours(10)) }, now)).toEqual({
+    // A yes waiting for the final file: the asker's move.
+    expect(windowStep({ ...base, status: "APPROVED_IN_PRINCIPLE", expiresAt: at(hours(10)) }, now)).toEqual({
       kind: "remind",
-      waiting: "either",
+      waiting: "requester",
     });
   });
 
@@ -50,53 +43,24 @@ describe("the request window sweep", () => {
 
   it("expires unanswered when it was the owner's move", () => {
     expect(windowStep({ ...base, status: "PENDING", expiresAt: at(-1) }, now)).toEqual({ kind: "expire" });
-    expect(
-      windowStep({ ...base, status: "IN_NEGOTIATION", latestOpenOfferBy: "requester", expiresAt: at(-1) }, now),
-    ).toEqual({ kind: "expire" });
+    expect(windowStep({ ...base, status: "SUBMITTED", expiresAt: at(0) }, now)).toEqual({ kind: "expire" });
   });
 
-  it("closes when it was anyone else's move", () => {
+  it("closes when it was the asker's move", () => {
     expect(windowStep({ ...base, status: "CHANGES_REQUESTED", expiresAt: at(-1) }, now)).toEqual({
       kind: "close",
       waiting: "requester",
     });
-    expect(
-      windowStep({ ...base, status: "IN_NEGOTIATION", latestOpenOfferBy: "consenter", expiresAt: at(-1) }, now),
-    ).toEqual({ kind: "close", waiting: "requester" });
-    expect(windowStep({ ...base, status: "IN_NEGOTIATION", expiresAt: at(0) }, now)).toEqual({
+    expect(windowStep({ ...base, status: "APPROVED_IN_PRINCIPLE", expiresAt: at(0) }, now)).toEqual({
       kind: "close",
-      waiting: "either",
+      waiting: "requester",
     });
   });
-});
 
-describe("contact choices", () => {
-  const profile = {
-    displayName: "Jane Carter",
-    contactEmail: "mgmt@janecarter.example",
-    contactPhone: "  ",
-    contactAddress: "12 Hill Road\nMumbai",
-    managerContact: null,
-    shareEmail: true,
-    sharePhone: true,
-    shareAddress: false,
-    shareManager: true,
-  };
-
-  it("defaults to the profile's share switches", () => {
-    expect(defaultContactFields(profile)).toEqual(["email", "phone", "manager"]);
-    const card = contactCard(profile);
-    // Phone is switched on but blank, and there's no manager: neither is shared.
-    expect(card).toEqual({ name: "Jane Carter", email: "mgmt@janecarter.example", phone: null, address: null, manager: null });
-    expect(sharedFields(card)).toEqual(["email"]);
-  });
-
-  it("shares only the ticked details that have a value", () => {
-    const card = contactCard(profile, ["address", "manager"]);
-    expect(card.email).toBeNull();
-    expect(card.address).toBe("12 Hill Road\nMumbai");
-    expect(sharedFields(card)).toEqual(["address"]);
-    expect(sharedFields(contactCard(profile, []))).toEqual([]);
+  it("leaves requests nobody has a move on alone", () => {
+    for (const status of ["DRAFT", "APPROVED", "DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"] as const) {
+      expect(windowStep({ ...base, status, expiresAt: at(-hours(100)) }, now)).toEqual({ kind: "none" });
+    }
   });
 });
 
@@ -118,27 +82,16 @@ describe("the paused notice", () => {
   });
 });
 
-describe("meeting calendar text", () => {
-  const request = { number: 7, consenter: { displayName: "Jane Carter" }, requester: { displayName: "Acme Clips" } };
-
-  it("titles the event the same everywhere", () => {
-    expect(meetingTitle(request)).toBe("Consent: Jane Carter × Acme Clips (request #7)");
-  });
-
-  it("describes how to join and links each side to its own page", () => {
-    const m = { requestId: "r1", mode: "VIDEO" as const, link: "https://meet.example/abc", location: null, note: "Intro" };
-    const d = meetingDescription(m, "requester");
-    expect(d).toContain("Video call: https://meet.example/abc");
-    expect(d).toContain("Intro");
-    expect(d).toMatch(/\/r-panel\/requests\/r1$/);
-    expect(meetingDescription({ ...m, mode: "IN_PERSON", link: null, location: "Studio 4", note: null }, "consenter")).toMatch(
-      /^In person at Studio 4\n\nRequest on Consent: .*\/c-panel\/requests\/r1$/,
-    );
-  });
-
+describe("notification text", () => {
   it("writes times for notifications in UTC, labelled", () => {
     // Punctuation varies a little between ICU versions; the parts don't.
     expect(fmtUtc(new Date("2026-10-17T12:00:00Z"))).toMatch(/^Sat,? 17 Oct 2026,? 12:00 UTC$/);
+  });
+
+  it("joins sentences and skips the empty ones (a free request has no refund line)", () => {
+    expect(sentences("Jane did not respond.", "", null, false, " You can send a new request. ")).toBe(
+      "Jane did not respond. You can send a new request.",
+    );
   });
 });
 

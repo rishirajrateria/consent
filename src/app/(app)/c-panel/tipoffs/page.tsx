@@ -30,7 +30,7 @@ export default async function TipOffsPage() {
       <PageHeader
         kicker={consenter.displayName}
         title="Public tip-offs"
-        desc="Reports from the public about possible unauthorized use of your likeness. Cross-check against your grants; for a confirmed breach on a granted request, file a report or raise a takedown there."
+        desc="Reports from the public about your likeness being used without your consent. Check them against your certificates. If a breach is on a request you approved, report it or ask for a takedown from that request."
       />
       {tips.length === 0 ? (
         <EmptyState icon={Megaphone} title="No tip-offs" desc="Anyone can report misuse from your public profile — no account needed." />

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("../db", () => ({ db: {} }));
-import { waitingOn, windowEnd } from "../request-window";
+import { OPEN_STATUSES, waitingOn, windowEnd } from "../request-window";
 import { evaluateCapacity, pausedMessage } from "../capacity";
 
 const none = { maxOpenRequests: null, dailyRequestLimit: null, weeklyRequestLimit: null, monthlyRequestLimit: null };
@@ -12,12 +12,21 @@ describe("request window", () => {
     expect(windowEnd(new Date("2026-10-10T12:00:00Z"), 7).toISOString()).toBe("2026-10-17T12:00:00.000Z");
   });
   it("knows whose move it is", () => {
+    // Waiting for the answer: the person asked.
+    expect(waitingOn("SUBMITTED")).toBe("consenter");
     expect(waitingOn("PENDING")).toBe("consenter");
+    // Waiting for a reply to a question, or for the final file after a yes: the asker.
     expect(waitingOn("CHANGES_REQUESTED")).toBe("requester");
-    expect(waitingOn("IN_NEGOTIATION", "consenter")).toBe("requester");
-    expect(waitingOn("IN_NEGOTIATION", "requester")).toBe("consenter");
-    expect(waitingOn("AGREEMENT_MODE_PENDING")).toBe("requester");
-    expect(waitingOn("LEGAL_AGREEMENT_PENDING")).toBe("either");
+    expect(waitingOn("APPROVED_IN_PRINCIPLE")).toBe("requester");
+  });
+  it("gives nobody a move on a draft or an ended request", () => {
+    for (const s of ["DRAFT", "APPROVED", "DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"] as const) {
+      expect(waitingOn(s)).toBeNull();
+    }
+  });
+  it("keeps exactly the statuses someone can still act on open", () => {
+    expect([...OPEN_STATUSES].sort()).toEqual(["APPROVED_IN_PRINCIPLE", "CHANGES_REQUESTED", "PENDING", "SUBMITTED"]);
+    for (const s of OPEN_STATUSES) expect(waitingOn(s)).not.toBeNull();
   });
 });
 

@@ -47,12 +47,13 @@ async function decideReportAction(formData: FormData) {
     reason: notes || null,
   });
   if (decision === "UPHELD" || decision === "DISMISSED") {
-    // Upheld reports hit the reported party's score
+    // An upheld report hits the reported profile's score: the asking part when
+    // the person asked filed it, the answering part when the person who asked did.
     if (report.bySide === "consenter") await recalcRequesterScore(report.request.requesterId, `Report ${decision.toLowerCase()}`);
     else await recalcConsenterScore(report.request.consenterId, `Report ${decision.toLowerCase()}`);
     const msg = {
       title: `Report on request #${report.request.number}: ${decision.toLowerCase()}`,
-      // A reason saved earlier (with "Under review") still reaches both sides.
+      // A reason saved earlier (with "Under review") still reaches both of them.
       body: notes || report.adminNotes || "The Consent review team has decided.",
     };
     await notifyConsenterTeam(report.request.consenterId, { ...msg, href: `/c-panel/requests/${report.requestId}` });
@@ -116,12 +117,13 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
                 <Flag className="size-4" aria-hidden />
                 <span className="font-medium">{r.reason}</span>
                 <span className="text-xs text-ink-faint">
-                  request #{r.request.number} · {r.request.consenter.displayName} ↔ {r.request.requester.displayName} · filed by {r.bySide} · {fmtDateTime(r.createdAt)}
+                  request #{r.request.number} · {r.request.requester.displayName} asked {r.request.consenter.displayName} · filed by{" "}
+                  {r.bySide === "consenter" ? r.request.consenter.displayName : r.request.requester.displayName} · {fmtDateTime(r.createdAt)}
                 </span>
                 <StatusBadge status={r.status} className="ml-auto" />
               </div>
               <p className="text-sm text-ink-soft">{r.description}</p>
-              {/* Everything the decision depends on comes first: evidence, what was approved, the other side's answer. */}
+              {/* Everything the decision depends on comes first: evidence, what was approved, the other one's answer. */}
               {r.evidenceFileIds.map((fid) => {
                 const f = evidenceFiles.get(fid);
                 if (!f) return null;
@@ -165,12 +167,12 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
                 <p className="text-xs text-ink-faint">No consent was granted on this request.</p>
               )}
               {r.response ? (
-                <p className="text-sm text-ink-soft"><strong>Other party&apos;s response:</strong> {r.response}</p>
+                <p className="text-sm text-ink-soft"><strong>Their response:</strong> {r.response}</p>
               ) : (
                 <p className="text-sm text-ink-faint">
                   {r.status === "OPEN" || r.status === "UNDER_REVIEW"
-                    ? "The other side hasn't responded yet."
-                    : "The other side didn't respond."}
+                    ? "The other one hasn't responded yet."
+                    : "The other one didn't respond."}
                 </p>
               )}
               {r.adminNotes && <p className="text-xs text-ink-faint">Admin notes: {r.adminNotes}</p>}
@@ -178,13 +180,13 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
                 (canDecide ? (
                   <form action={decideReportAction} className="space-y-2 border-t hairline pt-3">
                     <input type="hidden" name="id" value={r.id} />
-                    <Field label="Reason" hint="Sent to both sides when you Uphold or Dismiss.">
+                    <Field label="Reason" hint="Sent to both of them when you Uphold or Dismiss.">
                       <Textarea name="notes" className="min-h-14" placeholder="Why you decided this…" />
                     </Field>
                     <div className="flex flex-wrap gap-2">
                       <SubmitButton name="decision" value="UNDER_REVIEW" variant="secondary">Under review</SubmitButton>
                       <ConfirmSubmit
-                        confirm="Dismiss this report? Both sides are told."
+                        confirm="Dismiss this report? Both of them are told."
                         name="decision"
                         value="DISMISSED"
                         variant="secondary"
@@ -192,7 +194,7 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
                         Dismiss
                       </ConfirmSubmit>
                       <ConfirmSubmit
-                        confirm="Uphold this report? It lowers their public Consent Score and both sides are told."
+                        confirm="Uphold this report? It lowers their public Consent Score and both of them are told."
                         name="decision"
                         value="UPHELD"
                         variant="primary"

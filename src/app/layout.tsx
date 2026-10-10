@@ -14,11 +14,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Consent — Permission Infrastructure for Identity",
+    default: "Consent — Ask anyone for consent. Decide who can use yours.",
     template: "%s · Consent",
   },
   description:
-    "Consent is where people set the terms for their name, image, voice and likeness — and every approved use is signed, documented and verifiable forever.",
+    "One verified account to ask anyone for consent to use their name, image, voice or work, and to decide who can use yours. Every yes is a certificate anyone can check.",
 };
 
 export const viewport: Viewport = {

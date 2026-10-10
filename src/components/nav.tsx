@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Home, Inbox, Bell, Menu, Plus, Award, Compass, LayoutGrid, Settings, Shield, Search,
+  Home, Inbox, Bell, Menu, Plus, Award, Compass, LayoutGrid, Settings, Shield, Search, UserRound,
   type LucideIcon,
 } from "lucide-react";
 
@@ -20,6 +20,7 @@ const ICONS: Record<string, LucideIcon> = {
   settings: Settings,
   shield: Shield,
   search: Search,
+  user: UserRound,
 };
 
 export type NavItem = {
@@ -28,14 +29,19 @@ export type NavItem = {
   icon: keyof typeof ICONS;
   badge?: number;
   prominent?: boolean;
+  /** More paths that belong to this item (it is also current on pages under them). */
+  match?: string[];
 };
 
-// Panel homes match only themselves, so "Home" isn't marked current on every page inside the panel.
-const HOMES = ["/dashboard", "/c-panel", "/r-panel", "/admin"];
+// Homes match only themselves, so "Home" isn't marked current on every page under it.
+const HOMES = ["/dashboard", "/c-panel", "/admin"];
 
-function isActive(pathname: string, href: string) {
-  if (HOMES.includes(href)) return pathname === href;
-  return pathname === href || pathname.startsWith(href + "/");
+const under = (pathname: string, path: string) => pathname === path || pathname.startsWith(path + "/");
+
+function isActive(pathname: string, item: NavItem) {
+  if (item.match?.some((path) => under(pathname, path))) return true;
+  if (HOMES.includes(item.href)) return pathname === item.href;
+  return under(pathname, item.href);
 }
 
 /** Bottom navigation — fixed, thumb-reachable, mobile only. */
@@ -49,7 +55,7 @@ export function BottomNav({ items }: { items: NavItem[] }) {
       <ul className="flex items-stretch justify-around">
         {items.map((item) => {
           const Icon = ICONS[item.icon];
-          const active = isActive(pathname, item.href);
+          const active = isActive(pathname, item);
           return (
             <li key={item.href} className="flex-1">
               <Link
@@ -94,7 +100,7 @@ export function TopNavLinks({ items }: { items: NavItem[] }) {
     <div className="hidden items-center gap-1 md:flex">
       {items.map((item) => {
         const Icon = ICONS[item.icon];
-        const active = isActive(pathname, item.href);
+        const active = isActive(pathname, item);
         return (
           <Link
             key={item.href}

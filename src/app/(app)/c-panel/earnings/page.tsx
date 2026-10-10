@@ -42,7 +42,7 @@ export default async function EarningsPage() {
       <PageHeader
         kicker={consenter.displayName}
         title="Earnings & payouts"
-        desc={`The consent request fee is held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}. Fees you agree after approval are paid to you directly and never show here.`}
+        desc={`The consent request fee is held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}.`}
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -66,7 +66,7 @@ export default async function EarningsPage() {
           </div>
           <div className="mt-0.5 text-xs text-ink-soft">
             Your consent request fee ·{" "}
-            <Link href="/c-panel/settings" className="underline underline-offset-4">change</Link>
+            <Link href="/c-panel/settings#fee" className="underline underline-offset-4">change</Link>
           </div>
         </Card>
       </div>
@@ -75,17 +75,19 @@ export default async function EarningsPage() {
         (member.role === "OWNER" ? (
           <Alert tone="warn">
             Add your payout details in{" "}
-            <Link href="/c-panel/settings" className="underline underline-offset-4">settings</Link> so
-            your weekly payouts know where to go.
+            <Link href="/c-panel/settings#payout" className="underline underline-offset-4">Profile, fee &amp; limits</Link>{" "}
+            so your weekly payouts know where to go.
           </Alert>
         ) : (
           <Alert tone="warn">No payout details yet. Ask the profile owner to add them.</Alert>
         ))}
 
       <Card className="space-y-2">
-        <SectionTitle title="Every ask" desc="One line per paid ask: the consent request fee they paid and where it stands." />
+        <SectionTitle title="Every paid request" desc="One line per paid request: the consent request fee they paid and where it stands." />
         {earnings.length === 0 && (
-          <p className="text-sm text-ink-faint">No paid asks yet. Set a consent request fee in settings and people pay it when they ask you.</p>
+          <p className="text-sm text-ink-faint">
+            No paid requests yet. When someone pays your consent request fee to ask you, it shows here.
+          </p>
         )}
         {earnings.map((e) => {
           const gross = grossOf(e);
@@ -144,7 +146,7 @@ export default async function EarningsPage() {
           <EmptyState
             icon={Wallet}
             title="No payouts yet"
-            desc={`Once you say yes to a paid ask, your ${OWNER_PCT} of its consent request fee goes out in the next Friday payout.`}
+            desc={`Once you say yes to a paid request, your ${OWNER_PCT} of its consent request fee goes out in the next Friday payout.`}
           />
         )}
         {settlements.map((s) => (

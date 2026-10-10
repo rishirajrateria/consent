@@ -13,8 +13,11 @@ import {
   submitRequestAction,
   discardDraftAction,
 } from "../../actions";
-import { priceFor, consentPriceFor, withTax } from "@/lib/payments";
+import { consentPriceFor, requestChargesFor } from "@/lib/payments";
 import { splitConsentFee } from "@/lib/escrow";
+import { PLATFORM_PCT } from "@/lib/platform-fee";
+import { MoneyRows, MoneyRow } from "@/components/request-view";
+import { openAsRightProfile, pathWithQuery } from "@/app/(app)/requests/open-as";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import { getSettings } from "@/lib/settings";
 import { requestCapacity } from "@/lib/capacity";
@@ -32,21 +35,29 @@ const fileInputCls =
 export default async function EditRequestPage({ params, searchParams }: PageProps<"/r-panel/requests/[id]/edit">) {
   const { id } = await params;
   const sp = await searchParams;
-  const { requester } = await requireRequester();
+  const { requester, session } = await requireRequester();
   const request = await db.consentRequest.findUnique({
     where: { id },
-    include: { consenter: { include: { priceTiers: true } }, files: true },
+    include: {
+      consenter: { include: { priceTiers: true } },
+      files: true,
+      requester: { select: { id: true, consenterId: true } },
+    },
   });
-  if (!request || request.requesterId !== requester.id) notFound();
+  if (!request) notFound();
+  // A draft of another profile this person is on: switch to it first.
+  if (request.requesterId !== requester.id)
+    await openAsRightProfile(session.userId, request, "sent", pathWithQuery(`/r-panel/requests/${id}/edit`, sp));
   if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
 
-  const [platforms, assetTypes, intents, price, settings, capacity] = await Promise.all([
+  const [platforms, assetTypes, intents, charges, settings, capacity] = await Promise.all([
     db.platform.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, include: { formats: { where: { active: true } } } }),
     db.assetType.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.intentCategory.findMany({ where: { active: true } }),
-    priceFor(requester.country),
+    // What sending it costs, worked out exactly as checkout will charge it.
+    requestChargesFor(request.id),
     getSettings(),
-    // The owner's request limits: while paused, the draft is kept but can't be paid for and sent.
+    // The owner's request limits: while paused, the draft is kept but can't be sent.
     requestCapacity(request.consenterId),
   ]);
 
@@ -68,21 +79,18 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
     selections,
     assetTypeIds: request.assetTypeIds,
   });
-  // Consent request fee resolved by intent tier (falls back to the base price).
-  const askPrice = consentPriceFor(request.consenter, request.intentCategoryId);
+  // The consent request fee for the chosen intent (a tier, or the profile's fee); null when free.
   const askCurrency = request.consenter.consentPriceCurrency;
-  const askText = askPrice ? fmtMoney(askPrice.toString(), askCurrency) : null;
-  // What comes back if the owner doesn't say yes (80%; Consent keeps 20%).
-  const askRefund = askPrice ? fmtMoney(splitConsentFee(Number(askPrice.toString())).refund, askCurrency) : null;
   const intentPrices = new Map(intents.map((i) => [i.id, consentPriceFor(request.consenter, i.id)]));
   const showIntentPrices = [...intentPrices.values()].some(Boolean);
-  // Platform fee with tax added, the same total checkout charges.
-  const feeText = fmtMoney(withTax(Number(price.perRequestFee), price.taxRate).total.toFixed(2), price.currency);
-  const taxNote = Number(price.taxRate ?? 0) > 0 ? ` incl. ${price.taxLabel ?? "tax"}` : "";
+  const money = (n: number) => fmtMoney(n, charges.currency);
+  // What comes back if they don't say yes (80%; Consent keeps 20%).
+  const refundText = money(splitConsentFee(charges.consentFee).refund);
+  const totalText = money(charges.total);
   const payReason = blocked.length
     ? blockedPayNote(name)
     : !scopeDone || !detailsDone || !uploadsDone
-      ? "Complete all sections above to submit."
+      ? "Complete every section above to send it."
       : capacity.paused
         ? `Your draft is kept. Send it once ${name} opens new requests again.`
         : null;
@@ -94,7 +102,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
     ["Scope", scopeDone && blocked.length === 0],
     ["Uploads", scopeDone && uploadsDone],
     ["Details", detailsDone],
-    ["Submit", false],
+    ["Send", false],
   ] as const;
 
   return (
@@ -103,6 +111,15 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
         kicker={`Request to ${request.consenter.displayName}`}
         title="Compose your request"
         desc="Fill every section. Approval will be bound to the exact files you upload."
+        action={
+          // Up here, away from Send: the last control on the page is the one that sends it.
+          <form action={discardDraftAction}>
+            <input type="hidden" name="id" value={request.id} />
+            <ConfirmSubmit confirm="Discard this draft? Its text and files will be deleted." variant="ghost" size="sm">
+              Discard draft
+            </ConfirmSubmit>
+          </form>
+        }
       />
       <ErrorNote error={sp.error as string | undefined} />
       {sp.saved && <SuccessNote msg="Saved." />}
@@ -122,7 +139,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
         <TrackedForm section="scope" label="section 1" action={saveScopeAction}>
           <input type="hidden" name="id" value={request.id} />
           <Card className="space-y-5" id="scope">
-            <SectionTitle title="1 · Platforms, formats & assets" desc="Where will it be published, and what of the consenter will you use?" />
+            <SectionTitle title="1 · Platforms, formats & assets" desc={`Where will it be published, and what of ${name} will you use?`} />
             <div className="space-y-4">
               {platforms.map((p) => (
                 <fieldset key={p.id}>
@@ -171,7 +188,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
             </fieldset>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="thumbnailUsed" defaultChecked={request.thumbnailUsed} className="size-4 accent-black" />
-              A thumbnail uses the consenter (uploaded separately)
+              A thumbnail shows {name} (uploaded separately)
             </label>
             {blocked.length > 0 && (
               <Alert tone="warn">
@@ -194,11 +211,11 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
 
         {/* Step 2: Uploads */}
         <Card className="space-y-5" id="uploads">
-          <SectionTitle title="2 · Uploads" desc="The exact files, hashed with SHA-256 on upload. For video/audio: the raw final file exactly as it will be published." />
+          <SectionTitle title="2 · Uploads" desc="The exact files, fingerprinted (SHA-256) on upload. For video or audio: the final file exactly as it will be published." />
           {([
-            ["ASSET", "Assets of the consenter", onlyName ? "Optional (only the Name is used)." : "Required — the exact images/clips you will use.", request.files.filter((f) => f.kind === "ASSET")],
-            ["RAW_CONTENT", "Raw final content file", "The full video/post/audio/article draft. You can submit without it, but a certificate is only issued once it's uploaded and approved.", request.files.filter((f) => f.kind === "RAW_CONTENT")],
-            ["THUMBNAIL", "Thumbnail", request.thumbnailUsed ? "Required — you indicated the thumbnail uses the consenter." : "Only if the thumbnail uses the consenter.", request.files.filter((f) => f.kind === "THUMBNAIL")],
+            ["ASSET", `Assets of ${name}`, onlyName ? "Optional (only their name is used)." : "Required: the exact images or clips you will use.", request.files.filter((f) => f.kind === "ASSET")],
+            ["RAW_CONTENT", "Final content file", "The full video, post, audio or article. You can send without it; the certificate is issued once it's uploaded after a yes.", request.files.filter((f) => f.kind === "RAW_CONTENT")],
+            ["THUMBNAIL", "Thumbnail", request.thumbnailUsed ? `Required: you said the thumbnail shows ${name}.` : `Only if the thumbnail shows ${name}.`, request.files.filter((f) => f.kind === "THUMBNAIL")],
           ] as const).map(([kind, label, hint, files]) => (
             <div key={kind} className="space-y-2">
               <div className="text-sm font-medium">{label}</div>
@@ -231,7 +248,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           <input type="hidden" name="id" value={request.id} />
           <Card className="space-y-4" id="details">
             <SectionTitle title="3 · Context, intent & validity" />
-            <Field label="Context" required hint="What is the content about, and where does the consenter appear in it?">
+            <Field label="Context" required hint={`What is the content about, and where does ${name} appear in it?`}>
               <Textarea name="context" required minLength={20} defaultValue={request.context} />
             </Field>
             <Field label="Creative plan & intent" required hint={`Min ${settings.minCreativePlanChars} characters — the creative idea and why you're using them (news, commentary, parody, promotion, tribute…).`}>
@@ -247,7 +264,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
                       <option key={i.id} value={i.id}>
                         {i.name}
                         {showIntentPrices
-                          ? ` — ${p ? `${fmtMoney(p.toString(), askCurrency)} consent request fee` : "no consent request fee"}`
+                          ? ` — ${p ? `${fmtMoney(p.toString(), askCurrency)} consent request fee` : "free to ask"}`
                           : ""}
                       </option>
                     );
@@ -262,7 +279,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
               <Select name="validityKind" defaultValue={request.validityKind}>
                 <option value="SINGLE_PUBLICATION">Single publication</option>
                 <option value="DATE_RANGE">Time window</option>
-                <option value="PERPETUAL">Perpetual (consenter may refuse)</option>
+                <option value="PERPETUAL">Perpetual (they may refuse)</option>
               </Select>
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -280,17 +297,38 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           </Card>
         </TrackedForm>
 
-        {/* Step 4: Review & submit */}
+        {/* Step 4: Review & send */}
         <Card strong className="space-y-4" id="review">
           <SectionTitle
-            title="4 · Review & submit"
-            desc={`Platform fee: ${feeText}${taxNote}${askText ? ` + ${name}'s consent request fee: ${askText}` : ""}.`}
+            title="4 · Review & send"
+            desc={
+              charges.free
+                ? `Asking ${name} is free. Nothing is charged, and the request is sent straight away.`
+                : `Paid once, when you send it. ${name}'s consent request fee is held until they answer.`
+            }
           />
-          <p className="text-sm text-ink-soft">
-            {askText
-              ? `${name}'s consent request fee is held until they answer. If they say yes, 80% goes to them; if not, 80% (${askRefund}) is refunded to you. Consent keeps 20%. The platform fee isn't refunded.`
-              : "The platform fee isn't refunded in any outcome."}
-          </p>
+          {!charges.free && (
+            <MoneyRows>
+              <MoneyRow
+                label="Consent request fee"
+                amount={money(charges.consentFee)}
+                note={`If ${name} says yes, 80% goes to them. If not, 80% (${refundText}) comes back to you. Consent keeps 20%.`}
+              />
+              <MoneyRow
+                label={`Platform fee (${PLATFORM_PCT})`}
+                amount={money(charges.platformFee)}
+                note={`${PLATFORM_PCT} of the consent request fee. Never refunded.`}
+              />
+              {charges.tax > 0 && (
+                <MoneyRow
+                  label={charges.taxLabel ?? "Tax"}
+                  amount={money(charges.tax)}
+                  note="On the platform fee only."
+                />
+              )}
+              <MoneyRow label="Total" amount={totalText} strong />
+            </MoneyRows>
+          )}
           {capacity.paused && (
             <Alert tone="warn">
               <PausedSentence name={name} capacity={capacity} />
@@ -299,7 +337,7 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           {/* Sent back from an old checkout whose consent request fee no longer matched. */}
           {sp.changed && (
             <Alert tone="warn">
-              Your request changed after checkout opened. Check the total and press Pay &amp; submit again.
+              Your request changed after checkout opened. Check the total and press Pay &amp; send again.
             </Alert>
           )}
           <p className="text-sm font-medium text-ink">This is exactly what {name} will see.</p>
@@ -364,8 +402,8 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
           </div>
           {!hasRaw && (
             <Alert tone="warn">
-              No raw final content uploaded. You can still submit — if approved, it will be “approved in
-              principle” and the certificate is issued only after the final file is uploaded and approved.
+              No final content file yet. You can still send it. If {name} says yes, upload the final file
+              then to get your certificate.
             </Alert>
           )}
           <form action={submitRequestAction} className="space-y-4">
@@ -373,23 +411,14 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
             <label className="flex items-start gap-3 text-sm">
               <input type="checkbox" name="acceptTerms" required className="mt-0.5 size-4 accent-black" />
               <span>
-                I accept the terms, including the <strong>mandatory consent-link rule</strong>: the
-                verification link or badge must appear in the published content&apos;s
-                description/caption/notes. I understand Consent never processes fees agreed between the
-                parties and the platform fee isn&apos;t refunded.
-                {askText ? ` If ${name} doesn't say yes, 80% of their consent request fee is refunded to me; Consent keeps 20%.` : ""}
+                I accept the terms, including the <strong>consent-link rule</strong>: the verification link or
+                badge must appear in the published content&apos;s description, caption or notes.
+                {charges.free
+                  ? ""
+                  : ` The platform fee isn't refunded. If ${name} doesn't say yes, 80% of their consent request fee is refunded to me; Consent keeps 20%.`}
               </span>
             </label>
-            <PayButton reason={payReason}>
-              Pay {feeText}
-              {askText ? ` + ${askText}` : ""} & submit
-            </PayButton>
-          </form>
-          <form action={discardDraftAction} data-skip-unsaved-check>
-            <input type="hidden" name="id" value={request.id} />
-            <ConfirmSubmit confirm="Discard this draft? Its text and files will be deleted." variant="ghost" size="sm">
-              Discard draft
-            </ConfirmSubmit>
+            <PayButton reason={payReason}>{charges.free ? "Send request" : `Pay ${totalText} & send`}</PayButton>
           </form>
         </Card>
       </UnsavedGuard>
