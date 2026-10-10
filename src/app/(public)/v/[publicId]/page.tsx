@@ -128,7 +128,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
           : grant.validityKind === "PERPETUAL" ? "Perpetual"
           : `${fmtDateTime(grant.validFrom)} → ${fmtDateTime(grant.validUntil)}`
         } />
-        <KV k="Fee" v={payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note} />
+        <KV k="Usage fee" v={payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note} />
         <KV k="Agreement mode" v={payload.agreementMode.mode} />
         <KV k="Decided by" v={payload.decidedBy} />
         <KV k="Issued" v={`${fmtDateTime(grant.issuedAt)} (local) · ${grant.issuedAt.toISOString()} (UTC)`} />

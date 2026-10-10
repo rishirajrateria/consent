@@ -97,7 +97,7 @@ export default async function BillingPage({ searchParams }: PageProps<"/r-panel/
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <StatusBadge status={p.status} />
+                <StatusBadge status={p.status} label={p.status === "REFUNDED" && p.purpose === "CONSENT_PRICE" ? `${Math.round((Number((p.refundedAmount ?? p.amount).toString()) / Number(p.amount.toString())) * 100)}% refunded` : undefined} />
                 {p.invoiceNumber && (
                   <a className="text-xs underline underline-offset-4" href={`/api/invoices/${p.id}`} target="_blank">
                     Invoice PDF

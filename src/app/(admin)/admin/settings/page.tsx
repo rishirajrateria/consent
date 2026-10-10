@@ -18,8 +18,9 @@ async function saveAction(formData: FormData) {
     const v = parseInt(String(formData.get(k) ?? ""), 10);
     return isNaN(v) || v < 1 ? fallback : v;
   };
+  // One request window covers every open request, negotiation included, so
+  // the old separate negotiation-idle setting is no longer read or edited.
   s.slaDays = num("slaDays", s.slaDays);
-  s.negotiationIdleDays = num("negotiationIdleDays", s.negotiationIdleDays);
   s.takedownResponseDays = num("takedownResponseDays", s.takedownResponseDays);
   s.maxUploadMb = num("maxUploadMb", s.maxUploadMb);
   s.minCreativePlanChars = num("minCreativePlanChars", s.minCreativePlanChars);
@@ -53,13 +54,13 @@ export default async function AdminSettings() {
       <form action={saveAction}>
         <fieldset disabled={!canEdit} className="min-w-0">
           <Card className="space-y-3">
-            <SectionTitle title="SLA & limits" />
+            <SectionTitle title="Request window & limits" />
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Request SLA (days)" hint="Unanswered requests auto-expire: platform fee kept, 80% of the consent request fee refunded, consenter penalised.">
-                <Input name="slaDays" type="number" min={1} defaultValue={s.slaDays} />
-              </Field>
-              <Field label="Negotiation idle timeout (days)">
-                <Input name="negotiationIdleDays" type="number" min={1} defaultValue={s.negotiationIdleDays} />
+              <Field
+                label="Request window (days)"
+                hint="Open requests expire this many days after the last action from either side. If it was waiting on the owner, it counts against their score; otherwise it closes. If it ends before a yes, 80% of the consent request fee is refunded. The platform fee is never refunded. One reminder goes out when under 48 hours remain."
+              >
+                <Input name="slaDays" type="number" min={1} step={1} defaultValue={s.slaDays} />
               </Field>
               <Field label="Takedown response window (days)">
                 <Input name="takedownResponseDays" type="number" min={1} defaultValue={s.takedownResponseDays} />
@@ -87,7 +88,7 @@ export default async function AdminSettings() {
       </form>
 
       <Card className="space-y-3">
-        <SectionTitle title="Background jobs" desc="SLA expiry, grant expiry, takedown windows, renewal reminders. Run by the worker / cron; trigger manually here." />
+        <SectionTitle title="Background jobs" desc="Request window expiry and reminders, grant expiry, takedown windows, renewal reminders. Run by the worker / cron; trigger manually here." />
         <form action={runJobsAction}>
           <fieldset disabled={!canEdit} className="min-w-0">
             <SubmitButton variant="secondary">Run all sweeps now</SubmitButton>

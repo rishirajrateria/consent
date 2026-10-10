@@ -224,7 +224,7 @@ export async function AgreementPanel({
                           </Field>
                           <p className="text-xs text-ink-faint">
                             The agreement goes back to drafting and any signature on it is removed.
-                            Your note is added to the messages.
+                            The other side gets your note, and it stays on the timeline.
                           </p>
                           <SubmitButton>Ask for a new draft</SubmitButton>
                         </form>

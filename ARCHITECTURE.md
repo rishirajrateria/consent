@@ -19,7 +19,7 @@ endpoint, or admin button.
 
 ## Key flows
 
-**Request lifecycle** — `Draft → (pay per-request fee) → Submitted → [standing rules → matrix] →
+**Request lifecycle** — `Draft → (pay platform fee + any consent request fee) → Submitted → [standing rules → matrix] →
 Auto-decided | Pending → … → Approved (grant issued)`. The fee settlement callback
 (`settlePayment → onRequestPaid`) runs rule evaluation (`src/lib/rules.ts`). Approval binds to
 SHA-256 hashes computed server-side at upload; a new file version never inherits a grant.
@@ -68,7 +68,7 @@ erDiagram
     Grant ||--o{ TakedownRequest : takedowns
     ConsentRequest ||--o{ Report : reports
     RequesterProfile ||--o{ Payment : "platform fees"
-    Payment }o--o| ConsentRequest : "per-request fee"
+    Payment }o--o| ConsentRequest : "platform fee / consent request fee"
     ConsenterProfile ||--o{ ScoreLog : history
     RequesterProfile ||--o{ ScoreLog : history
     User ||--o{ Notification : receives

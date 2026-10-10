@@ -77,7 +77,7 @@ export function statusLabel(s: string): string {
     PENDING: "Pending",
     IN_NEGOTIATION: "In negotiation",
     DEAL_AGREED: "Deal agreed",
-    CHANGES_REQUESTED: "Changes requested",
+    CHANGES_REQUESTED: "Question asked",
     APPROVED_IN_PRINCIPLE: "Approved in principle",
     AGREEMENT_MODE_PENDING: "Agreement mode pending",
     LEGAL_AGREEMENT_PENDING: "Legal agreement pending",

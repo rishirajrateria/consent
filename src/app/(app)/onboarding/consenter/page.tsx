@@ -220,9 +220,9 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
         <Card className="space-y-4">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Contact details you share</h2>
           <p className="text-xs text-ink-faint">
-            Nothing is shared automatically. When you approve a request — free or paid — you choose
-            whether to share your contact details. If you do, these are the ones the requester sees.
-            Any fee is settled directly between you; Consent never processes it.
+            Nothing is shared automatically. When you approve a request, or any time after, you tick
+            which of these the requester sees. The ones you tick here start ticked. Any usage fee is
+            settled directly between you; Consent never processes it.
           </p>
           <div className="space-y-2">
             <label className="flex items-center gap-3 text-sm">
@@ -230,6 +230,9 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
             </label>
             <label className="flex items-center gap-3 text-sm">
               <input type="checkbox" name="sharePhone" className="size-4 accent-black" /> Share phone
+            </label>
+            <label className="flex items-center gap-3 text-sm">
+              <input type="checkbox" name="shareAddress" className="size-4 accent-black" /> Share address
             </label>
             <label className="flex items-center gap-3 text-sm">
               <input type="checkbox" name="shareManager" className="size-4 accent-black" /> Share manager contact
@@ -243,6 +246,9 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
               <Input name="contactPhone" type="tel" placeholder="+1 555 010 2030" />
             </Field>
           </div>
+          <Field label="Contact address" hint="Optional. A postal or office address, e.g. for in-person meetings or paperwork.">
+            <Input name="contactAddress" maxLength={300} autoComplete="street-address" placeholder="Street, city, postcode, country" />
+          </Field>
           <Field label="Manager / agency contact">
             <Input name="managerContact" placeholder="Alex Rivers — alex@agency.com" />
           </Field>

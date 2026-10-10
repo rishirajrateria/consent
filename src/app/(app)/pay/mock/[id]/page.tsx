@@ -10,6 +10,7 @@ import type { Selection } from "@/lib/rules";
 import type { Payment } from "@prisma/client";
 import { fmtMoney, titleCase } from "@/lib/utils";
 import { splitConsentFee } from "@/lib/escrow";
+import { requestCapacity } from "@/lib/capacity";
 import { CreditCard } from "lucide-react";
 
 export const metadata = { title: "Checkout" };
@@ -172,7 +173,9 @@ async function spentCoupon(rows: Pick<Payment, "id" | "couponCode">[]) {
  * money for anything but what the draft now says: send the requester back when
  * the owner's public matrix would deny it once paid, or when the consent request
  * fee line no longer matches the price for its intent (or the owner's price moved).
- * Pressing "Pay & submit" again rebuilds the lines.
+ * Pressing "Pay & submit" again rebuilds the lines. Also sends them back while
+ * the owner's request limits pause new requests, so nothing is charged; the
+ * draft is kept.
  */
 async function staleRequestHref(requestId: string | null) {
   if (!requestId) return null;
@@ -189,6 +192,9 @@ async function staleRequestHref(requestId: string | null) {
     assetTypeIds: request.assetTypeIds,
   });
   if (blocked.length) return `${edit}?error=${encodeURIComponent(blockedPayNote(request.consenter.displayName))}#scope`;
+  const capacity = await requestCapacity(request.consenterId);
+  // Step 4 says why and when they open again, in the viewer's own time zone.
+  if (capacity.paused) return `${edit}?paused=1#review`;
 
   const ask = consentPriceFor(request.consenter, request.intentCategoryId);
   const asks = await db.payment.findMany({

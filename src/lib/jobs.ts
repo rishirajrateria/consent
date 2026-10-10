@@ -1,9 +1,11 @@
+import type { RequestStatus } from "@prisma/client";
 import { db } from "./db";
 import { getSettings } from "./settings";
-import { notifyConsenterTeam, notifyRequesterTeam } from "./notify";
+import { notifyConsenterTeam, notifyRequesterTeam, notifySide } from "./notify";
 import { recalcConsenterScore, recalcRequesterScore } from "./score";
-import { syncConsentPrice, escrowSweep } from "./escrow";
-import { noYesRefundNote } from "./requests";
+import { syncConsentPrice, escrowSweep, YES_STATUSES } from "./escrow";
+import { fmtUtc, noYesRefundNote } from "./requests";
+import { OPEN_STATUSES, requestWindows, waitingOn, type Side } from "./request-window";
 
 /**
  * Background sweeps (DB-backed scheduler). Run periodically by:
@@ -14,9 +16,10 @@ import { noYesRefundNote } from "./requests";
  */
 export async function runSweeps(): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
-  out.slaReminders = await slaReminders();
-  out.slaExpired = await slaExpire();
-  out.negotiationIdle = await negotiationIdleClose();
+  const windows = await requestWindowSweep();
+  out.windowReminders = windows.reminded;
+  out.expiredUnanswered = windows.expired;
+  out.closedInactive = windows.closed;
   out.grantExpiryNotices = await grantExpiryNotices();
   out.grantsExpired = await grantExpire();
   out.takedownsIgnored = await takedownIgnored();
@@ -86,98 +89,216 @@ async function settlementSweep(): Promise<number> {
   return created;
 }
 
-async function slaReminders(): Promise<number> {
-  const settings = await getSettings();
-  const windowMs = settings.slaDays * 86400_000;
-  const pending = await db.consentRequest.findMany({
-    where: { status: "PENDING", slaExpiresAt: { not: null } },
-    include: { requester: true },
+// ── The request window ────────────────────────────────────────
+// Every open request expires a fixed number of days (Admin → settings) after
+// its last action from either side. If it was the owner's move, it expires
+// unanswered and counts against their Consent Score; otherwise it closes.
+// One "about to expire" reminder per window goes to whoever's move it is.
+
+/** The reminder goes out once per window, when less than this is left. */
+export const REMIND_BEFORE_MS = 48 * 3600_000;
+
+export type WindowStep =
+  /** The owner's move and the window ran out: expired unanswered. */
+  | { kind: "expire" }
+  /** Anyone else's move and the window ran out: closed for inactivity. */
+  | { kind: "close"; waiting: Side | "either" }
+  /** Under 48 hours left and no reminder yet in this window. */
+  | { kind: "remind"; waiting: Side | "either" }
+  | { kind: "none" };
+
+/** Pure: what the sweep does with one open request right now. */
+export function windowStep(
+  r: {
+    status: RequestStatus;
+    latestOpenOfferBy?: string | null;
+    lastActivityAt: Date;
+    expiresAt: Date;
+    remindedAt: Date | null;
+  },
+  now = new Date(),
+): WindowStep {
+  const waiting = waitingOn(r.status, r.latestOpenOfferBy);
+  if (now.getTime() >= r.expiresAt.getTime()) return waiting === "consenter" ? { kind: "expire" } : { kind: "close", waiting };
+  const remindedThisWindow = !!r.remindedAt && r.remindedAt.getTime() >= r.lastActivityAt.getTime();
+  if (r.expiresAt.getTime() - now.getTime() <= REMIND_BEFORE_MS && !remindedThisWindow) return { kind: "remind", waiting };
+  return { kind: "none" };
+}
+
+/** Who gets told: one side, or both when either can move. */
+const sidesFor = (w: Side | "either"): Side[] => (w === "either" ? ["consenter", "requester"] : [w]);
+
+type OpenRequest = Awaited<ReturnType<typeof openRequests>>[number];
+
+/**
+ * A meeting still ahead on a request that just ended stays in both calendars:
+ * say so, so no one turns up to it without knowing. Empty when there's none.
+ */
+async function upcomingMeetingNote(requestId: string): Promise<string> {
+  const m = await db.requestMeeting.findFirst({
+    where: { requestId, status: "SCHEDULED", endsAt: { gt: new Date() } },
+    orderBy: { startsAt: "asc" },
+    select: { startsAt: true },
   });
-  let n = 0;
-  for (const r of pending) {
-    const elapsed = Date.now() - (r.slaExpiresAt!.getTime() - windowMs);
-    const frac = elapsed / windowMs;
-    if (frac >= 0.9 && !r.reminder90Sent) {
-      await db.consentRequest.update({ where: { id: r.id }, data: { reminder90Sent: true, reminder50Sent: true } });
-      await notifyConsenterTeam(r.consenterId, {
-        title: `Request #${r.number} about to expire`,
-        body: `The request from ${r.requester.displayName} expires very soon. Unanswered requests lower your Consent Score.`,
-        href: `/c-panel/requests/${r.id}`,
-        critical: true,
-      });
-      n++;
-    } else if (frac >= 0.5 && !r.reminder50Sent) {
-      await db.consentRequest.update({ where: { id: r.id }, data: { reminder50Sent: true } });
-      await notifyConsenterTeam(r.consenterId, {
-        title: `Request #${r.number} awaiting your response`,
-        body: `Half of the response window for the request from ${r.requester.displayName} has passed.`,
-        href: `/c-panel/requests/${r.id}`,
-      });
-      n++;
+  return m
+    ? ` Your meeting on ${fmtUtc(m.startsAt)} is still in your calendar. Cancel it from the request page if you no longer need it.`
+    : "";
+}
+
+/** Open requests in id order, a page at a time (requests this sweep ends drop out of the filter). */
+function openRequests(take: number, after?: string) {
+  return db.consentRequest.findMany({
+    where: { status: { in: OPEN_STATUSES }, ...(after ? { id: { gt: after } } : {}) },
+    orderBy: { id: "asc" },
+    take,
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      submittedAt: true,
+      createdAt: true,
+      consenterId: true,
+      requesterId: true,
+      slaExpiresAt: true,
+      remindedAt: true,
+      consenter: { select: { displayName: true } },
+      requester: { select: { displayName: true } },
+      offers: { where: { status: "OPEN" }, orderBy: { version: "desc" }, take: 1, select: { bySide: true } },
+    },
+  });
+}
+
+async function requestWindowSweep() {
+  const { slaDays } = await getSettings();
+  const now = new Date();
+  const done = { reminded: 0, expired: 0, closed: 0 };
+  let cursor: string | undefined;
+  for (;;) {
+    const batch = await openRequests(500, cursor);
+    if (batch.length === 0) break;
+    cursor = batch[batch.length - 1].id;
+    const windows = await requestWindows(batch, slaDays);
+    for (const r of batch) {
+      const w = windows.get(r.id);
+      if (!w) continue;
+      // Keep the stored expiry current so lists can show and sort by it.
+      if (r.slaExpiresAt?.getTime() !== w.expiresAt.getTime()) {
+        await db.consentRequest.update({ where: { id: r.id }, data: { slaExpiresAt: w.expiresAt } });
+      }
+      const step = windowStep(
+        { status: r.status, latestOpenOfferBy: r.offers[0]?.bySide, ...w, remindedAt: r.remindedAt },
+        now,
+      );
+      if (step.kind === "remind") {
+        await remindExpiring(r, w.expiresAt, step.waiting, now);
+        done.reminded++;
+      } else if (step.kind === "expire" || step.kind === "close") {
+        // Someone may have acted since this batch was read: check the window once more.
+        const fresh = (await requestWindows([r], slaDays)).get(r.id);
+        if (!fresh || fresh.expiresAt.getTime() > Date.now()) continue;
+        if (step.kind === "expire" ? await expireUnanswered(r, slaDays) : await closeInactive(r, slaDays, step.waiting)) {
+          done[step.kind === "expire" ? "expired" : "closed"]++;
+        }
+      }
     }
   }
-  return n;
+  return done;
 }
 
-async function slaExpire(): Promise<number> {
-  const expired = await db.consentRequest.findMany({
-    where: { status: "PENDING", slaExpiresAt: { lt: new Date() } },
-    include: { requester: true, consenter: true },
-  });
-  for (const r of expired) {
-    await db.$transaction([
-      db.consentRequest.update({
-        where: { id: r.id },
-        data: { status: "EXPIRED_NO_RESPONSE" },
-      }),
-      db.requestEvent.create({
-        data: {
-          requestId: r.id,
-          type: "auto_expired",
-          actorSide: "system",
-          detail: { feeForfeited: true },
-        },
-      }),
-      // The platform fee is forfeited — no refund, no credit.
-      db.payment.updateMany({
-        where: { requestId: r.id, status: "PAID", purpose: "PER_REQUEST" },
-        data: { status: "FORFEITED" },
-      }),
-    ]);
-    // No reward for silence: 80% of the held consent request fee goes back to the requester.
-    await syncConsentPrice(r.id);
-    await notifyRequesterTeam(r.requesterId, {
-      title: `Request #${r.number} expired unanswered`,
-      body: `${r.consenter.displayName} did not respond within the window. ${await noYesRefundNote(r.id, r.consenter.displayName)} You can raise a new request any time.`,
-      href: `/r-panel/requests/${r.id}`,
+async function remindExpiring(r: OpenRequest, expiresAt: Date, waiting: Side | "either", now: Date) {
+  await db.consentRequest.update({ where: { id: r.id }, data: { remindedAt: now } });
+  const when = fmtUtc(expiresAt);
+  for (const side of sidesFor(waiting)) {
+    await notifySide(side, r, {
+      title: `Request #${r.number} expires soon`,
+      body:
+        side === "requester"
+          ? `Your request to ${r.consenter.displayName} expires ${when} unless someone acts. Take your next step to keep it open.`
+          : `The request from ${r.requester.displayName} expires ${when} unless someone acts. ${
+              waiting === "consenter"
+                ? "Answer it to keep it open. Unanswered requests lower your Consent Score."
+                : "Take your next step to keep it open."
+            }`,
+      critical: true,
     });
-    await recalcConsenterScore(r.consenterId, `Request #${r.number} auto-expired unanswered`);
   }
-  return expired.length;
 }
 
-async function negotiationIdleClose(): Promise<number> {
-  const settings = await getSettings();
-  const cutoff = new Date(Date.now() - settings.negotiationIdleDays * 86400_000);
-  const idle = await db.consentRequest.findMany({
-    where: { status: "IN_NEGOTIATION", lastOfferAt: { lt: cutoff } },
-    include: { offers: { orderBy: { version: "desc" }, take: 1 } },
+/** The owner's move ran out: expired unanswered. The platform fee is forfeited; 80% of a consent request fee goes back. */
+async function expireUnanswered(r: OpenRequest, days: number): Promise<boolean> {
+  const moved = await db.$transaction(async (tx) => {
+    const res = await tx.consentRequest.updateMany({
+      where: { id: r.id, status: r.status },
+      data: { status: "EXPIRED_NO_RESPONSE" },
+    });
+    if (res.count === 0) return false;
+    await tx.requestEvent.create({
+      data: { requestId: r.id, type: "auto_expired", actorSide: "system", detail: { feeForfeited: true, days } },
+    });
+    // The platform fee is forfeited — no refund, no credit.
+    await tx.payment.updateMany({
+      where: { requestId: r.id, status: "PAID", purpose: "PER_REQUEST" },
+      data: { status: "FORFEITED" },
+    });
+    return true;
   });
-  for (const r of idle) {
-    const lastSide = r.offers[0]?.bySide ?? "consenter";
-    const idleSide = lastSide === "consenter" ? "requester" : "consenter";
-    await db.$transaction([
-      db.consentRequest.update({
-        where: { id: r.id },
-        data: { status: "CLOSED", closedReason: `Negotiation idle; ${idleSide} failed to respond` },
-      }),
-      db.requestEvent.create({
-        data: { requestId: r.id, type: "negotiation_auto_closed", actorSide: "system", detail: { idleSide } },
-      }),
-    ]);
-    await syncConsentPrice(r.id);
-  }
-  return idle.length;
+  if (!moved) return false;
+  // No reward for silence: 80% of the held consent request fee goes back to the requester.
+  await syncConsentPrice(r.id);
+  const meeting = await upcomingMeetingNote(r.id);
+  await notifyRequesterTeam(r.requesterId, {
+    title: `Request #${r.number} expired unanswered`,
+    body: `${r.consenter.displayName} did not respond within the window. ${await noYesRefundNote(r.id, r.consenter.displayName)} You can raise a new request any time.${meeting}`,
+    href: `/r-panel/requests/${r.id}`,
+  });
+  await notifyConsenterTeam(r.consenterId, {
+    title: `Request #${r.number} expired unanswered`,
+    body: `Nobody answered the request from ${r.requester.displayName} for ${days} days, so it expired. Unanswered requests lower your Consent Score.${meeting}`,
+    href: `/c-panel/requests/${r.id}`,
+  });
+  await recalcConsenterScore(r.consenterId, `Request #${r.number} auto-expired unanswered`);
+  return true;
+}
+
+/** Anyone else's move ran out: the request closes. */
+async function closeInactive(r: OpenRequest, days: number, waiting: Side | "either"): Promise<boolean> {
+  const reason = `No action for ${days} days`;
+  const moved = await db.$transaction(async (tx) => {
+    const res = await tx.consentRequest.updateMany({
+      where: { id: r.id, status: r.status },
+      data: { status: "CLOSED", closedReason: reason },
+    });
+    if (res.count === 0) return false;
+    await tx.requestEvent.create({
+      data: { requestId: r.id, type: "auto_closed", actorSide: "system", detail: { reason, days, waitingOn: waiting } },
+    });
+    return true;
+  });
+  if (!moved) return false;
+  // Closed before a yes: 80% of the held consent request fee is refunded (a released share stays with the owner).
+  await syncConsentPrice(r.id);
+  const saidYes = YES_STATUSES.includes(r.status);
+  const owner = r.consenter.displayName;
+  const meeting = await upcomingMeetingNote(r.id);
+  await notifyRequesterTeam(r.requesterId, {
+    title: `Request #${r.number} closed`,
+    body: `No one acted for ${days} days, so the request closed. ${
+      saidYes
+        ? `${owner} had already said yes, so neither a consent request fee nor the platform fee is refunded.`
+        : await noYesRefundNote(r.id, owner)
+    } You can raise a new request any time.${meeting}`,
+    href: `/r-panel/requests/${r.id}`,
+  });
+  await notifyConsenterTeam(r.consenterId, {
+    title: `Request #${r.number} closed`,
+    body: `No one acted on the request from ${r.requester.displayName} for ${days} days, so it closed. ${
+      saidYes
+        ? "You had already said yes, so your 80% of any consent request fee stays yours."
+        : "80% of any consent request fee they paid goes back to them; Consent keeps 20%."
+    }${meeting}`,
+    href: `/c-panel/requests/${r.id}`,
+  });
+  return true;
 }
 
 async function grantExpiryNotices(): Promise<number> {

@@ -17,6 +17,8 @@ import { priceFor, consentPriceFor, withTax } from "@/lib/payments";
 import { splitConsentFee } from "@/lib/escrow";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import { getSettings } from "@/lib/settings";
+import { requestCapacity } from "@/lib/capacity";
+import { PausedSentence } from "../../../paused-sentence";
 import { fmtMoney, fmtBytes, fmtDate } from "@/lib/utils";
 import type { Selection } from "@/lib/rules";
 import { Trash2, Check } from "lucide-react";
@@ -38,12 +40,14 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
   if (!request || request.requesterId !== requester.id) notFound();
   if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
 
-  const [platforms, assetTypes, intents, price, settings] = await Promise.all([
+  const [platforms, assetTypes, intents, price, settings, capacity] = await Promise.all([
     db.platform.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, include: { formats: { where: { active: true } } } }),
     db.assetType.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.intentCategory.findMany({ where: { active: true } }),
     priceFor(requester.country),
     getSettings(),
+    // The owner's request limits: while paused, the draft is kept but can't be paid for and sent.
+    requestCapacity(request.consenterId),
   ]);
 
   const selections = (request.selections as Selection[]) ?? [];
@@ -79,7 +83,9 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
     ? blockedPayNote(name)
     : !scopeDone || !detailsDone || !uploadsDone
       ? "Complete all sections above to submit."
-      : null;
+      : capacity.paused
+        ? `Your draft is kept. Send it once ${name} opens new requests again.`
+        : null;
   const reviewFiles = (["ASSET", "RAW_CONTENT", "THUMBNAIL"] as const).flatMap((kind) =>
     request.files.filter((f) => f.kind === kind).sort((a, b) => b.version - a.version)
   );
@@ -285,6 +291,11 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
               ? `${name}'s consent request fee is held until they answer. If they say yes, 80% goes to them; if not, 80% (${askRefund}) is refunded to you. Consent keeps 20%. The platform fee isn't refunded.`
               : "The platform fee isn't refunded in any outcome."}
           </p>
+          {capacity.paused && (
+            <Alert tone="warn">
+              <PausedSentence name={name} capacity={capacity} />
+            </Alert>
+          )}
           {/* Sent back from an old checkout whose consent request fee no longer matched. */}
           {sp.changed && (
             <Alert tone="warn">
@@ -364,8 +375,8 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
               <span>
                 I accept the terms, including the <strong>mandatory consent-link rule</strong>: the
                 verification link or badge must appear in the published content&apos;s
-                description/caption/notes. I understand Consent never processes fees between parties and
-                the platform fee is non-refundable.
+                description/caption/notes. I understand Consent never processes fees agreed between the
+                parties and the platform fee isn&apos;t refunded.
                 {askText ? ` If ${name} doesn't say yes, 80% of their consent request fee is refunded to me; Consent keeps 20%.` : ""}
               </span>
             </label>

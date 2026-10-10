@@ -2,27 +2,35 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, StatusBadge, SectionTitle, Alert, ScoreRing } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, SectionTitle, Alert, ScoreRing, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { ErrorNote } from "@/components/error-note";
 import {
-  ScopeCard, FilesCard, NegotiationCard, ContactsCard, MessagesCard, TimelineCard, GrantCard,
+  ScopeCard, FilesCard, NegotiationCard, ContactsCard, TimelineCard, GrantCard,
   type FullRequest,
 } from "@/components/request-view";
+import { LocalTime } from "@/components/local-time";
+import { MeetingCard } from "@/components/meeting-card";
 import { consenterProceedAppRecordAction, shareContactsAction } from "../actions";
 import { DecisionPanel } from "./decision-panel";
+import { ContactChoices } from "./contact-choices";
+import { contactChoices } from "../contact-fields";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
-import { fmtDate, fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
+import { fmtDate, fmtMoney, titleCase } from "@/lib/utils";
 import { ChannelLinks } from "@/components/channel-links";
 import { canSendOffer } from "@/lib/negotiation";
+import { getSettings } from "@/lib/settings";
+import { OPEN_STATUSES, requestWindows } from "@/lib/request-window";
 import type { Selection } from "@/lib/rules";
 import type { Prisma } from "@prisma/client";
 import { Timer } from "lucide-react";
 import {
   OWNER_PCT, REFUND_PCT, CONSENT_PCT, grossOf, refundedOf, shareOf, nextPayoutDay, fmtPayoutDay,
 } from "../fee-split";
+
+const SHAREABLE = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"];
 
 export const metadata = { title: "Review request" };
 
@@ -36,7 +44,6 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       consenter: true,
       requester: true,
       files: true,
-      messages: { include: { sender: true } },
       offers: { include: { byUser: true }, orderBy: { version: "desc" } },
       events: true,
       grant: { include: { takedowns: true } },
@@ -50,6 +57,8 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
 
   const canDecide = member.role === "OWNER" || member.canApprove;
   const canNegotiate = member.role === "OWNER" || member.canNegotiate;
+  // Sharing contact details and arranging a meeting: anyone who can answer or negotiate.
+  const canReach = canDecide || canNegotiate;
   // A new fee counts as a counter-offer once there are offers; each side has 3.
   const canSetFee = canNegotiate && canSendOffer(request.offers, "consenter");
   // Offers are ordered newest first; only the latest one can still be open.
@@ -65,14 +74,27 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       : null;
   const decidable = ["PENDING", "IN_NEGOTIATION", "CHANGES_REQUESTED"].includes(request.status);
   const selections = request.selections as Selection[];
-  const [denialReasons, earning] = await Promise.all([
+  const isOpen = OPEN_STATUSES.includes(request.status);
+  const [denialReasons, earning, settings] = await Promise.all([
     db.denialReason.findMany({ where: { active: true } }),
     db.earningEntry.findUnique({ where: { requestId: request.id }, include: { payment: true, settlement: true } }),
+    getSettings(),
   ]);
-  const lastPayout =
+  const [lastPayout, windows, liveMeeting] = await Promise.all([
     earning?.status === "PENDING"
-      ? await db.settlement.findFirst({ where: { consenterId: consenter.id }, orderBy: { createdAt: "desc" } })
-      : null;
+      ? db.settlement.findFirst({ where: { consenterId: consenter.id }, orderBy: { createdAt: "desc" } })
+      : null,
+    // An open request expires a set number of days after its last action from either side.
+    isOpen ? requestWindows([request], settings.slaDays) : null,
+    // One meeting per request: with one set, approving can't add another.
+    db.requestMeeting.findFirst({ where: { requestId: id, status: "SCHEDULED" }, select: { id: true } }),
+  ]);
+  const expiresAt = windows?.get(request.id)?.expiresAt ?? null;
+  const ask = latestAsk(request.events);
+  const choices = contactChoices(request.consenter);
+  // The same rule DecisionPanel uses: the owner's own open fee waits for the
+  // requester, and accepting the requester's fee needs the negotiate permission.
+  const approveOffered = !(openOffer && !openOffer.fromRequester) && (!openOffer?.fromRequester || canNegotiate);
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -85,9 +107,12 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
             <span className="flex items-center gap-1.5">
               Requester score <strong>{request.requester.score}</strong>
             </span>
-            {request.status === "PENDING" && request.slaExpiresAt && (
+            {expiresAt && (
               <span className="flex items-center gap-1 text-ink-soft">
-                <Timer className="size-3.5" aria-hidden /> auto-expires {fmtDateTime(request.slaExpiresAt)}
+                <Timer className="size-3.5 shrink-0" aria-hidden />
+                <span>
+                  Expires <LocalTime iso={expiresAt.toISOString()} /> unless someone acts
+                </span>
               </span>
             )}
           </span>
@@ -120,8 +145,9 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       </Card>
       <ScopeCard request={request} />
       <FilesCard request={request} watermark />
-      <MessagesCard request={request} side="consenter" />
       <ContactsCard request={request} />
+      {/* A meeting either side set up is part of what the owner reviews before deciding. */}
+      <MeetingCard request={request} side="consenter" canAct={canReach} />
       {earning && (
         <ConsentFeeCard
           earning={earning}
@@ -129,7 +155,7 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
           payoutDay={fmtPayoutDay(nextPayoutDay(lastPayout?.createdAt))}
         />
       )}
-      <TimelineCard request={request} />
+      <TimelineCard request={request} expiresAt={expiresAt} />
       <ReportPanel request={request} side="consenter" />
 
       {/* ── Decisions and actions ── */}
@@ -157,6 +183,16 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
         <AgreementPanel request={request} side="consenter" canAct={canDecide} />
       )}
 
+      {/* What the owner asked and what came back, right above the decision. */}
+      {decidable && ask && (
+        <AskSummary
+          ask={ask}
+          requesterName={request.requester.displayName}
+          canDecide={canDecide}
+          approveOffered={approveOffered}
+        />
+      )}
+
       {decidable && canDecide && (
         <DecisionPanel
           requestId={request.id}
@@ -168,6 +204,9 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
           openOffer={openOffer}
           canNegotiate={canNegotiate}
           canSetFee={canSetFee}
+          canAsk={request.status !== "CHANGES_REQUESTED"}
+          contactChoices={choices}
+          hasMeeting={!!liveMeeting}
           proposeLegalByDefault={request.isPaid && consenter.defaultRequireLegalAgreementForPaid}
           denialReasons={denialReasons.map((d) => ({ id: d.id, label: d.label }))}
         />
@@ -177,27 +216,31 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
         <Alert>You can view this request, but approving/denying requires the approve permission.</Alert>
       )}
 
-      {!request.contactsRevealed &&
-        ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"].includes(request.status) &&
-        (member.role === "OWNER" || member.canApprove || member.canNegotiate) && (
-          <Card className="space-y-3">
-            <SectionTitle
-              title="Contact details not shared"
-              desc={
-                request.isPaid
-                  ? `You approved without sharing your contact details. ${request.requester.displayName} needs a way to pay the agreed fee — share your details, or arrange it in messages.`
-                  : `You approved without sharing your contact details. Share them if you'd like ${request.requester.displayName} to be able to reach you directly.`
-              }
-            />
-            <p className="text-xs text-ink-faint">
-              Which details are shared (email, phone, manager) is set in your profile settings.
-            </p>
-            <form action={shareContactsAction}>
+      {!request.contactsRevealed && SHAREABLE.includes(request.status) && canReach && (
+        <Card className="space-y-3">
+          <SectionTitle
+            title="Contact details not shared"
+            desc={
+              request.isPaid
+                ? `You approved without sharing your contact details. Share them so ${request.requester.displayName} can pay the agreed fee.`
+                : `You approved without sharing your contact details. Share them so ${request.requester.displayName} can reach you directly.`
+            }
+          />
+          {choices.some((c) => c.value) ? (
+            <form action={shareContactsAction} className="space-y-3">
               <input type="hidden" name="id" value={request.id} />
+              <ContactChoices choices={choices} />
+              <p className="text-xs text-ink-faint">Only the details you tick are shared.</p>
               <SubmitButton variant="secondary">Share my contact details</SubmitButton>
             </form>
-          </Card>
-        )}
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-ink-soft">You haven&apos;t added any contact details yet.</p>
+              <ButtonLink href="/c-panel/settings" variant="secondary">Add them in settings</ButtonLink>
+            </div>
+          )}
+        </Card>
+      )}
 
       {request.grant && <RevokePanel request={request} canDecide={canDecide} />}
     </div>
@@ -243,6 +286,77 @@ function ConsentFeeCard({
           <dd className="shrink-0 font-semibold tabular-nums">{fmtMoney(amount, e.currency)}</dd>
         </div>
       </dl>
+    </Card>
+  );
+}
+
+type Ask = {
+  question: string;
+  askedAt: Date;
+  askedBy: string | null;
+  answer: { text: string; at: Date; by: string | null } | null;
+};
+
+/** The owner's latest Ask and the requester's written answer to it, if any. */
+function latestAsk(events: FullRequest["events"]): Ask | null {
+  const newest = [...events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const asked = newest.find((e) => e.type === "changes_requested");
+  if (!asked) return null;
+  const answered = newest.find((e) => e.type === "ask_answered" && e.createdAt >= asked.createdAt);
+  const text = (d: Prisma.JsonValue, key: string) => {
+    const v = d && typeof d === "object" && !Array.isArray(d) ? d[key] : null;
+    return typeof v === "string" ? v : "";
+  };
+  return {
+    question: text(asked.detail, "note"),
+    askedAt: asked.createdAt,
+    askedBy: asked.actorName,
+    answer: answered ? { text: text(answered.detail, "answer"), at: answered.createdAt, by: answered.actorName } : null,
+  };
+}
+
+/** "You asked … / They answered …", shown right above the owner's decision. */
+function AskSummary({
+  ask,
+  requesterName,
+  canDecide,
+  approveOffered,
+}: {
+  ask: Ask;
+  requesterName: string;
+  canDecide: boolean;
+  /** Whether Approve is one of the answers below. */
+  approveOffered: boolean;
+}) {
+  return (
+    <Card className="space-y-4" id="ask">
+      <div className="space-y-1">
+        <p className="text-sm">
+          <span className="font-semibold">You asked:</span>{" "}
+          <span className="whitespace-pre-wrap">{ask.question}</span>
+        </p>
+        <p className="text-xs text-ink-faint">
+          {ask.askedBy ? `${ask.askedBy} · ` : ""}
+          <LocalTime iso={ask.askedAt.toISOString()} />
+        </p>
+      </div>
+      {ask.answer ? (
+        <div className="space-y-1 border-t hairline pt-4">
+          <p className="text-sm">
+            <span className="font-semibold">They answered:</span>{" "}
+            <span className="whitespace-pre-wrap">{ask.answer.text}</span>
+          </p>
+          <p className="text-xs text-ink-faint">
+            {ask.answer.by ? `${ask.answer.by} · ` : ""}
+            <LocalTime iso={ask.answer.at.toISOString()} />
+          </p>
+        </div>
+      ) : (
+        <p className="border-t hairline pt-4 text-sm text-ink-soft">
+          Waiting for {requesterName} to answer.
+          {canDecide ? (approveOffered ? " You can still approve or decline below." : " You can still answer below.") : ""}
+        </p>
+      )}
     </Card>
   );
 }

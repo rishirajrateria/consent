@@ -82,7 +82,7 @@ export default async function AdminPayments() {
               {p.invoiceNumber && (
                 <a href={`/api/invoices/${p.id}`} target="_blank" className="text-xs underline underline-offset-4">invoice</a>
               )}
-              <StatusBadge status={p.status} />
+              <StatusBadge status={p.status} label={p.status === "REFUNDED" && p.purpose === "CONSENT_PRICE" ? `${Math.round((Number((p.refundedAmount ?? p.amount).toString()) / Number(p.amount.toString())) * 100)}% refunded` : undefined} />
             </span>
           </div>
         ))}

@@ -3,8 +3,8 @@ vi.mock("../db", () => ({ db: {} }));
 vi.mock("../notify", () => ({ notifyConsenterTeam: vi.fn(), notifyRequesterTeam: vi.fn() }));
 import { escrowOutcome, splitConsentFee } from "../escrow";
 
-describe("ask price escrow", () => {
-  it("releases the ask price to the owner on any yes", () => {
+describe("consent request fee escrow", () => {
+  it("releases the owner's share of the consent request fee on any yes", () => {
     for (const s of ["DEAL_AGREED", "APPROVED_IN_PRINCIPLE", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED"] as const) {
       expect(escrowOutcome(s)).toBe("release");
     }

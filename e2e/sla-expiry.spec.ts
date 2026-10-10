@@ -4,8 +4,9 @@ import { pageFor, runJobs, submitBasicRequest, visit } from "./helpers";
 
 /**
  * Flow 4 — SLA expiry: Daily Lens News asks Volt Energy (no consent price →
- * single checkout line). The request's slaExpiresAt is backdated via Prisma,
- * the jobs tick runs, and we assert: status Expired (no response), the
+ * single checkout line). Every action on the request (submission, timeline
+ * events, uploads) is backdated past the 7-day window via Prisma, the jobs
+ * tick runs, and we assert: status Expired (no response), the
  * PER_REQUEST payment FORFEITED, and Volt's consenter score decreased.
  *
  * The score is recomputed from scratch on expiry, so a throw-away expired
@@ -50,11 +51,12 @@ test("unanswered request expires, forfeits the fee and dents the score", async (
   await runJobs(request);
   const before = (await consenterBySlug("volt-energy")).score;
 
-  // ── Force the real request past its SLA and run the sweeps ──
-  await db.consentRequest.update({
-    where: { id: requestId },
-    data: { slaExpiresAt: new Date(Date.now() - 60_000) },
-  });
+  // ── No action for 8 days: backdate everything the window counts as an action ──
+  const eightDaysAgo = new Date(Date.now() - 8 * 86400_000);
+  await db.consentRequest.update({ where: { id: requestId }, data: { submittedAt: eightDaysAgo } });
+  await db.requestEvent.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
+  await db.storedFile.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
+  await db.negotiationOffer.updateMany({ where: { requestId }, data: { createdAt: eightDaysAgo } });
   await runJobs(request);
 
   const expired = await db.consentRequest.findUnique({ where: { id: requestId } });

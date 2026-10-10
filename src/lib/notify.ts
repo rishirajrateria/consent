@@ -45,3 +45,16 @@ export async function notifyRequesterTeam(
   const members = await db.requesterMember.findMany({ where: { requesterId } });
   await Promise.all(members.map((m) => notifyUser({ userId: m.userId, ...n })));
 }
+
+type Notice = { title: string; body: string; href?: string; critical?: boolean };
+
+/** Notify one side's whole team on a request; each side gets its own link to the request. */
+export async function notifySide(
+  side: "consenter" | "requester",
+  request: { id: string; consenterId: string; requesterId: string },
+  n: Omit<Notice, "href">,
+) {
+  return side === "consenter"
+    ? notifyConsenterTeam(request.consenterId, { ...n, href: `/c-panel/requests/${request.id}` })
+    : notifyRequesterTeam(request.requesterId, { ...n, href: `/r-panel/requests/${request.id}` });
+}

@@ -6,7 +6,7 @@ import { requesterActive } from "@/lib/payments";
 import { SuccessNote } from "@/components/error-note";
 import { fmtDateTime } from "@/lib/utils";
 import type { RequestStatus } from "@prisma/client";
-import { Plus, Users, CreditCard } from "lucide-react";
+import { Plus, Users, CreditCard, AtSign } from "lucide-react";
 
 export const metadata = { title: "Requester panel" };
 
@@ -119,6 +119,9 @@ export default async function RequesterHome({ searchParams }: PageProps<"/r-pane
         </ButtonLink>
         <ButtonLink href="/r-panel/billing" variant="ghost" className="min-h-10">
           <CreditCard className="size-4" aria-hidden /> Billing
+        </ButtonLink>
+        <ButtonLink href="/r-panel/contact" variant="ghost" className="min-h-10">
+          <AtSign className="size-4" aria-hidden /> Contact details
         </ButtonLink>
       </div>
 

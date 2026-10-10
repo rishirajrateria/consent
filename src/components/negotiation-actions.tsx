@@ -146,7 +146,7 @@ export function NegotiationActions({
           <p className="text-sm text-ink-soft">
             {side === "requester"
               ? "This closes the request without a deal. If the owner hasn't said yes, 80% of any consent request fee you paid is refunded to you; Consent keeps 20%. The platform fee isn't refunded. You can raise a new request any time."
-              : `This closes the request without a deal. ${otherName} can raise a new request if they want to try again.`}
+              : `This closes the request without a deal. 80% of any consent request fee ${otherName} paid goes back to them; Consent keeps 20%. They can raise a new request if they want to try again.`}
           </p>
           <ConfirmSubmit confirm="End this request without a deal?" variant="danger" className="w-full sm:w-auto">
             End this request

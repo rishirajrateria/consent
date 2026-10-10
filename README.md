@@ -15,6 +15,14 @@ fee on each request). An owner can also set a **consent request fee**: it is hel
 then 80% goes to the owner on a yes (paid out weekly on Fridays) or 80% is refunded to the requester
 otherwise; Consent keeps 20%. The platform fee is never refunded. See `DECISIONS.md` #25h.
 
+Requests move on a **7-day window**: every open request expires 7 days (admin setting) after the
+last action from either side, and any action starts a fresh window. Owners can set **request
+limits** (how many may wait for their answer, and per day / week / month); while one is reached,
+new requests pause. There is no chat: an owner **asks** a question or for a change and the
+requester answers in writing. When approving, the owner picks which **contact details** to share,
+and either side can **schedule a meeting** that goes into both people's calendars. See
+`DECISIONS.md` #25i–#25l.
+
 ## Stack
 
 Next.js (App Router, Server Actions) · TypeScript strict · Tailwind CSS v4 · PostgreSQL + Prisma ·
@@ -36,7 +44,7 @@ npm run db:seed
 
 # 4. Run (two terminals)
 npm run dev     # app on http://localhost:3000
-npm run jobs    # background worker: SLA expiry, grant expiry, takedowns, renewals
+npm run jobs    # background worker: request-window expiry + reminders, grant expiry, takedowns, renewals
 ```
 
 The seed enables the `pg_trgm` extension via migration; if your Postgres user cannot create
@@ -54,9 +62,9 @@ extensions, run `CREATE EXTENSION pg_trgm;` as a superuser once.
 | `news@demo.consent` | Requester — news channel (active) |
 | `pod@demo.consent` | Requester — application pending in the admin queue |
 
-Seeded demo data includes requests in every state (pending with SLA, in negotiation with offers,
-changes requested, deal agreed with revealed contacts, denied, auto-expired with the platform fee
-kept, withdrawn) plus one **issued certificate** with a live verification page, an open breach
+Seeded demo data includes requests in every state (pending with an expiry window, in negotiation
+with offers, an open Ask, deal agreed with revealed contacts, denied, auto-expired with the platform
+fee kept, withdrawn) plus one **issued certificate** with a live verification page, an open breach
 report and a raised takedown.
 
 **2FA note:** admin access and consenter panels require TOTP 2FA (per spec). On first access you'll

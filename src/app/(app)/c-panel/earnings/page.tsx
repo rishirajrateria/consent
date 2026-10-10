@@ -95,12 +95,12 @@ export default async function EarningsPage() {
             e.status === "HELD"
               ? { s: "HELD", label: "Held until you answer", line: `You'd get (${shareOf(share, gross)}) if you say yes`, amount: share }
               : e.status === "PENDING"
-                ? { s: "OPEN", label: `Yours · paid out ${nextPayout}`, line: `Your share (${shareOf(share, gross)})`, amount: share }
+                ? { s: "OPEN", label: `Yours · paid out ${nextPayout}`, line: `Yours (${shareOf(share, gross)})`, amount: share }
                 : e.status === "SETTLED"
                   ? {
                       s: "PAID",
                       label: `Paid out ${e.settlement ? fmtDate(e.settlement.createdAt) : ""}`.trim(),
-                      line: `Your share (${shareOf(share, gross)})`,
+                      line: `Paid out to you (${shareOf(share, gross)})`,
                       amount: share,
                     }
                   : e.status === "REFUNDED"

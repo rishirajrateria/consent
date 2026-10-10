@@ -13,6 +13,8 @@ import { Prisma } from "@prisma/client";
 import { canSendOffer, FEE_CHANGED } from "@/lib/negotiation";
 import { fmtMoney } from "@/lib/utils";
 import { syncConsentPrice } from "@/lib/escrow";
+import { MeetingError, meetingProblem, readMeetingInput, scheduleMeeting } from "@/lib/meetings";
+import { pickedContactFields } from "./contact-fields";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
@@ -54,7 +56,7 @@ export async function approveRequestAction(formData: FormData) {
         ? `Waiting for ${requester} to answer your fee of ${fee}`
         : canSendOffer(request.offers, "consenter")
           ? `Your fee of ${fee} hasn't been answered. Send it again with Set a fee so ${requester} can answer it`
-          : `You've used all your counter-offers. Ask for changes or decline, or ${requester} can raise a new request.`
+          : `You've used all your counter-offers. Ask a question or decline, or ${requester} can raise a new request.`
     );
   }
   if (openOffer && member.role !== "OWNER" && !member.canNegotiate)
@@ -102,6 +104,23 @@ export async function approveRequestAction(formData: FormData) {
   // The tick is pre-set from the owner's settings; what they submit is final.
   const requireLegal = formData.get("proposeLegal") === "on";
 
+  // Sharing contact details shares only the details the owner ticked.
+  const shareContacts = formData.get("shareContacts") === "on";
+  const shareFields = shareContacts ? pickedContactFields(formData, consenter) : [];
+  if (shareContacts && shareFields.length === 0)
+    fail(path, "Tick at least one contact detail to share, or untick Share my contact details");
+  // Check the meeting before anything is committed, so a mistake in it can't
+  // leave the request approved without the meeting the owner asked for.
+  const wantsMeeting = formData.get("scheduleMeeting") === "on";
+  const meetingInput = wantsMeeting ? readMeetingInput(formData, "meeting_") : null;
+  if (meetingInput) {
+    // One meeting per request: scheduling here would move one the requester set up.
+    const live = await db.requestMeeting.findFirst({ where: { requestId: id, status: "SCHEDULED" }, select: { id: true } });
+    if (live) fail(path, "A meeting is already scheduled. Move it from the Meeting card.");
+    const meetingIssue = meetingProblem(meetingInput);
+    if (meetingIssue) fail(path, meetingIssue);
+  }
+
   await db.$transaction([
     ...(openOffer
       ? [db.negotiationOffer.update({ where: { id: openOffer.id }, data: { status: "ACCEPTED" } })]
@@ -142,11 +161,8 @@ export async function approveRequestAction(formData: FormData) {
     targetId: id,
   });
 
-  const shareContacts = formData.get("shareContacts") === "on";
-  if (shareContacts) await revealContacts(id, session.user.name);
-  const contactLine = shareContacts
-    ? ` ${consenter.displayName} also shared their contact details.`
-    : "";
+  const shared = shareContacts ? await revealContacts(id, session.user.name, shareFields) : null;
+  const contactLine = shared ? ` ${consenter.displayName} also shared their contact details.` : "";
   const feeLine = openOffer
     ? ` Agreed fee: ${fmtMoney(openOffer.amount.toString(), openOffer.currency)}, paid directly between you, never through Consent.`
     : "";
@@ -175,17 +191,43 @@ export async function approveRequestAction(formData: FormData) {
   await recalcConsenterScore(consenter.id, `Responded to request #${request.number}`);
   // A yes releases the owner's 80% of the held consent request fee.
   await syncConsentPrice(id);
+
+  // The meeting was checked above, so only sending it can fail here. The
+  // approval stands; the owner can schedule it again from the Meeting card.
+  let meetingError: string | null = null;
+  if (meetingInput) {
+    try {
+      await scheduleMeeting({
+        requestId: id,
+        userId: session.userId,
+        userName: session.user.name,
+        side: "consenter",
+        input: meetingInput,
+      });
+    } catch (e) {
+      if (!(e instanceof MeetingError)) console.error("Scheduling a meeting while approving failed", e);
+      meetingError = e instanceof MeetingError ? e.message : "The calendar invites couldn't be sent. Try again.";
+    }
+  }
+  if (meetingError) fail(path, `Approved. The meeting wasn't scheduled: ${meetingError}`);
   redirect(path);
 }
 
+/**
+ * Ask: the owner asks a question or asks for a change. The requester answers in
+ * writing (and may update their plan or upload a new file), which sends the
+ * request back to the owner.
+ */
 export async function requestChangesAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request } = await decidableRequest(id);
+  const { session, consenter, request } = await decidableRequest(id);
   const path = `/c-panel/requests/${id}`;
+  if (request.status === "CHANGES_REQUESTED")
+    fail(path, `You already asked. Wait for ${request.requester.displayName} to answer`);
   if (!["PENDING", "IN_NEGOTIATION"].includes(request.status))
-    fail(path, "Changes can only be requested on open requests");
+    fail(path, "You can ask only while the request is waiting for your answer");
   const note = String(formData.get("note") ?? "").trim();
-  if (!note) fail(path, "Explain what should change");
+  if (!note) fail(path, "Write what you want to ask or change");
   await db.$transaction([
     db.consentRequest.update({ where: { id }, data: { status: "CHANGES_REQUESTED" } }),
     db.requestEvent.create({
@@ -199,8 +241,8 @@ export async function requestChangesAction(formData: FormData) {
     }),
   ]);
   await notifyRequesterTeam(request.requesterId, {
-    title: `Changes requested on request #${request.number}`,
-    body: note,
+    title: `${consenter.displayName} asked about request #${request.number}`,
+    body: `"${note}" Answer it on the request page. You can also update your plan or upload a new file.`,
     href: `/r-panel/requests/${id}`,
     critical: true,
   });
@@ -310,6 +352,16 @@ export async function consenterProceedAppRecordAction(formData: FormData) {
   const { session, request } = await decidableRequest(id);
   if (request.status !== "AGREEMENT_MODE_PENDING") redirect(`/c-panel/requests/${id}`);
   await db.consentRequest.update({ where: { id }, data: { agreementMode: "APP_RECORD" } });
+  // An agreement step, so it resets the request's window like any other action.
+  await db.requestEvent.create({
+    data: {
+      requestId: id,
+      type: "agreement_mode_chosen",
+      actorName: session.user.name,
+      actorSide: "consenter",
+      detail: { mode: "Consent-app record only" },
+    },
+  });
   const hasRaw = request.files.some((f) => f.kind === "RAW_CONTENT");
   if (hasRaw) {
     await issueGrant(id, session.user.name);
@@ -319,7 +371,7 @@ export async function consenterProceedAppRecordAction(formData: FormData) {
   redirect(`/c-panel/requests/${id}`);
 }
 
-/** Consenter shares contact details after approving (free or paid). */
+/** Consenter shares the contact details they tick, after approving (free or paid). */
 export async function shareContactsAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, member, consenter } = await requireConsenter();
@@ -328,9 +380,12 @@ export async function shareContactsAction(formData: FormData) {
     fail(path, "You don't have permission to share contact details");
   const request = await db.consentRequest.findUnique({ where: { id } });
   if (!request || request.consenterId !== consenter.id) redirect("/c-panel/requests");
+  if (request.contactsRevealed) redirect(path);
   const shareable = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"];
   if (!shareable.includes(request.status)) fail(path, "Contact details can be shared once the request is approved");
-  await revealContacts(id, session.user.name);
+  const fields = pickedContactFields(formData, consenter);
+  if (fields.length === 0) fail(path, "Tick at least one contact detail to share");
+  if (!(await revealContacts(id, session.user.name, fields))) fail(path, "Tick at least one contact detail to share");
   await notifyRequesterTeam(request.requesterId, {
     title: `${consenter.displayName} shared their contact details`,
     body: `You can now reach them directly about request #${request.number}.`,

@@ -108,7 +108,7 @@ This agreement is made between {{consenterLegalName}} ("Consenter") and {{reques
 
 1. GRANT. The Consenter grants the Requester permission to use the following assets: {{assetTypes}} within the following scope: {{scope}}.
 2. VALIDITY. {{validity}}.
-3. FEE. {{fee}}. Any fee is handled directly between the parties; Consent is not a payment intermediary.
+3. FEE. {{fee}}. Any usage fee is handled directly between the parties; Consent is not a payment intermediary for it.
 4. FILES. This grant is bound to the exact files with SHA-256 hashes: {{fileHashes}}.
 5. CONDITIONS. {{conditions}}.
 6. ATTRIBUTION. The Requester must include the Consent verification link or badge in the published content.
@@ -128,7 +128,7 @@ This agreement is made between {{consenterLegalName}} ("Consenter") and {{reques
   console.log("Seeding CMS pages…");
   const pages: [string, string, string][] = [
     ["pricing-note", "Pricing notes", "Consenters never pay anything. Requesters pay a one-time onboarding fee, a yearly subscription and a platform fee on each request. The platform fee is never refunded, whatever the outcome. An owner can also set a consent request fee. It's held until they answer: if they say yes, 80% goes to them, paid out on Fridays; if not, 80% is refunded to the requester. Consent keeps 20%. Usage fees agreed between the parties settle directly and never move through Consent."],
-    ["faq", "FAQ", "### Why does this matter now?\nA voice can be cloned and a likeness generated in an afternoon, and for decades whoever hit publish set the terms. Consent reverses it: the owner writes the terms — platform by platform, use by use — and every approved use is signed, on the record, and verifiable by anyone.\n\n### Is Consent a payment platform?\nNo. Usage fees never move through Consent: if an owner asks for a fee, you agree on the amount in the app, then settle it directly between yourselves. The only money Consent handles is its platform fee and an owner's consent request fee, which is held until they answer: 80% goes to them on a yes, otherwise 80% is refunded to you. Consent keeps 20%.\n\n### What do I get after approval?\nA tamper-proof consent certificate, locked to the exact files that were approved, with a public verification link anyone can check, forever.\n\n### What if someone breaks the rules?\nEither side can file a report. Upheld reports lower the offender's public Consent Score. Legal action stays between the parties — export the Consent History Dossier as evidence. Consent gives no legal advice."],
+    ["faq", "FAQ", "### Why does this matter now?\nA voice can be cloned and a likeness generated in an afternoon, and for decades whoever hit publish set the terms. Consent reverses it: the owner writes the terms — platform by platform, use by use — and every approved use is signed, on the record, and verifiable by anyone.\n\n### Is Consent a payment platform?\nNo. Usage fees never move through Consent: if an owner asks for a fee, you agree on the amount in the app, then settle it directly between yourselves. The only money Consent handles is what requesters pay it (onboarding, a yearly subscription and the platform fee) and an owner's consent request fee, which is held until they answer: 80% goes to them on a yes, otherwise 80% is refunded to you. Consent keeps 20%. The platform fee is never refunded.\n\n### What do I get after approval?\nA tamper-proof consent certificate, locked to the exact files that were approved, with a public verification link anyone can check, forever.\n\n### What if someone breaks the rules?\nEither side can file a report. Upheld reports lower the offender's public Consent Score. Legal action stays between the parties — export the Consent History Dossier as evidence. Consent gives no legal advice."],
     ["terms", "Terms of Service", "By using Consent you agree to: (1) only upload content you have rights to; (2) include the consent verification link in published content that received a grant; (3) the platform fee is never refunded, whatever the outcome; (4) an owner's consent request fee is held until they answer: 80% goes to the owner on a yes, otherwise 80% is refunded to the requester, and Consent keeps 20% either way; (5) usage fees agreed between consenters and requesters are settled directly between them and never processed by Consent."],
     ["privacy", "Privacy Policy", "We keep permanent, timestamped records, store document numbers only as scrambled identifiers, and keep files in private, access-controlled storage with expiring links. You may export your data or request deletion; certificates and audit logs are retained as legally required. GDPR and India DPDP aware."],
     ["contact", "Contact", "Email support@consent.app — we answer within 2 business days."],
@@ -229,6 +229,11 @@ async function seedDemo() {
       verifiedAt: new Date(),
       contactEmail: "mgmt@janecarter.example",
       shareEmail: true,
+      // Demo: an address to tick when sharing contact details (off by default).
+      contactAddress: "Carter Management, 9200 Sunset Blvd, Los Angeles, CA 90069 (demo)",
+      shareAddress: false,
+      // Demo request limit: new requests pause while 20 wait for Jane's answer.
+      maxOpenRequests: 20,
       consentPrice: 25,
       consentPriceCurrency: "USD",
       payoutDetails: "Chase •• 1182 (demo)",
@@ -628,8 +633,8 @@ async function seedDemo() {
       agreedCurrency: "USD",
       contactsRevealed: true,
       contactsSnapshot: {
-        consenter: { name: "Jane Carter", email: "mgmt@janecarter.example", phone: null, manager: null },
-        requester: { name: "Daily Lens News", email: "desk@dailylens.example", phone: null, manager: null },
+        consenter: { name: "Jane Carter", email: "mgmt@janecarter.example", phone: null, address: null, manager: null },
+        requester: { name: "Daily Lens News", email: "desk@dailylens.example", phone: null, address: null, manager: null },
         revealedAt: new Date().toISOString(),
       },
       selections: [sel(yt, "Long video", 120)],

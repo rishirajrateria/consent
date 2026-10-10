@@ -3,7 +3,6 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { storeUpload } from "@/lib/storage";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 import { Prisma } from "@prisma/client";
 import { canSendOffer, COUNTERS_USED_UP, FEE_CHANGED } from "@/lib/negotiation";
@@ -38,38 +37,6 @@ export async function assertCanAct(side: "consenter" | "requester", rm: { role: 
 
 function panelPath(side: "consenter" | "requester", id: string) {
   return side === "consenter" ? `/c-panel/requests/${id}` : `/r-panel/requests/${id}`;
-}
-
-export async function sendMessageAction(formData: FormData) {
-  const id = String(formData.get("id"));
-  const { session, request, side, requesterMember } = await resolveSide(id);
-  await assertCanAct(side, requesterMember, panelPath(side, id));
-  const body = String(formData.get("body") ?? "").trim();
-  const path = panelPath(side, id);
-  if (!body && !(formData.get("attachment") as File | null)?.size)
-    redirect(`${path}?error=${encodeURIComponent("Write a message")}`);
-
-  let attachmentFileId: string | undefined;
-  const attachment = formData.get("attachment") as File | null;
-  if (attachment && attachment.size > 0) {
-    const stored = await storeUpload({
-      file: attachment,
-      kind: "ATTACHMENT",
-      uploadedById: session.userId,
-      requestId: id,
-    });
-    attachmentFileId = stored.id;
-  }
-  await db.requestMessage.create({
-    data: { requestId: id, senderId: session.userId, senderSide: side, body, attachmentFileId },
-  });
-  const notify = side === "consenter" ? notifyRequesterTeam : notifyConsenterTeam;
-  await notify(side === "consenter" ? request.requesterId : request.consenterId, {
-    title: `New message on request #${request.number}`,
-    body: body.slice(0, 140) || "(attachment)",
-    href: panelPath(side === "consenter" ? "requester" : "consenter", id),
-  });
-  redirect(`${path}`);
 }
 
 // ── Negotiation (no money moves through Consent) ──────────────
@@ -211,7 +178,7 @@ export async function acceptOfferAction(formData: FormData) {
     body: `${fee}. ${
       request.contactsRevealed
         ? `Settle the fee directly with ${owner} using their shared contact details.`
-        : `${owner} hasn't shared contact details — use the messages on this request to arrange payment.`
+        : `${owner} hasn't shared contact details yet. They can share them from the request page so you can settle the fee.`
     } Consent does not process this payment. ${
       legal
         ? `Next: accept or decline the legally binding agreement ${owner} asks for.`
@@ -224,7 +191,7 @@ export async function acceptOfferAction(formData: FormData) {
     title,
     body: request.contactsRevealed
       ? `${fee}. Your contact details are shared so the fee can be settled directly.`
-      : `${fee}. You haven't shared contact details. The requester needs a way to pay you — share them from the request page, or arrange it in messages.`,
+      : `${fee}. You haven't shared contact details yet. Share them from the request page so ${request.requester.displayName} can pay you.`,
     href: `/c-panel/requests/${id}`,
     critical: true,
   });

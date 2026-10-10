@@ -2,7 +2,10 @@ import Link from "next/link";
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState } from "@/components/ui";
+import { LocalTime } from "@/components/local-time";
 import { fmtDateTime, cn } from "@/lib/utils";
+import { getSettings } from "@/lib/settings";
+import { OPEN_STATUSES, requestWindows } from "@/lib/request-window";
 import type { Prisma } from "@prisma/client";
 import { Inbox, Timer } from "lucide-react";
 
@@ -24,23 +27,31 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
   const { consenter } = await requireConsenter();
   const wanted = typeof sp.tab === "string" ? sp.tab.trim().toLowerCase() : "";
   const [tab, tabWhere] = TABS.find(([t]) => t.toLowerCase() === wanted) ?? TABS[0];
-  const rows = await db.consentRequest.findMany({
-    where: {
-      consenterId: consenter.id,
-      submittedAt: { not: null },
-      ...tabWhere,
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 100,
-    include: { requester: true },
-  });
+  const [rows, settings] = await Promise.all([
+    db.consentRequest.findMany({
+      where: {
+        consenterId: consenter.id,
+        submittedAt: { not: null },
+        ...tabWhere,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      include: { requester: true },
+    }),
+    getSettings(),
+  ]);
+  // Each open request expires a set number of days after its last action from either side.
+  const windows = await requestWindows(
+    rows.filter((r) => OPEN_STATUSES.includes(r.status)),
+    settings.slaDays,
+  );
 
   return (
     <div className="space-y-6">
       <PageHeader
         kicker={consenter.displayName}
         title="Incoming requests"
-        desc="Unanswered requests auto-expire and lower your Consent Score — respond in time."
+        desc={`Each open request expires ${settings.slaDays} days after its last action from either side. If it expires waiting for your answer, your Consent Score drops.`}
       />
       <div className="flex gap-1 overflow-x-auto">
         {TABS.map(([t]) => (
@@ -70,10 +81,12 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
                     {r.assetTypeNames.slice(0, 3).join(", ")} · {fmtDateTime(r.updatedAt)}
                   </div>
                 </div>
-                {r.status === "PENDING" && r.slaExpiresAt && (
+                {windows.has(r.id) && (
                   <span className="flex items-center gap-1 text-xs text-ink-soft">
-                    <Timer className="size-3.5" aria-hidden />
-                    expires {fmtDateTime(r.slaExpiresAt)}
+                    <Timer className="size-3.5 shrink-0" aria-hidden />
+                    <span>
+                      Expires <LocalTime iso={windows.get(r.id)!.expiresAt.toISOString()} />
+                    </span>
                   </span>
                 )}
                 <StatusBadge status={r.status} />

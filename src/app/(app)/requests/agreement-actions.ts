@@ -119,7 +119,7 @@ function renderTemplate(body: string, request: {
   // The caller refuses a paid request without an agreed fee, so this never prints 0.
   const fee = request.isPaid
     ? `${fmtMoney(String(request.agreedAmount), request.agreedCurrency ?? "USD")} agreed between the parties, settled directly (not through Consent)`
-    : "Free of charge";
+    : "No usage fee";
   // Exactly the files the certificate binds: the consenter's assets plus the one
   // approved version of the content and thumbnail, never every uploaded version.
   const bound = boundFiles(request.files, ownerYesAt(request));
@@ -319,10 +319,6 @@ export async function requestRedraftAction(formData: FormData) {
   await db.$transaction([
     db.agreement.update({ where: { requestId: id }, data: { status: "DRAFTING", kind: null } }),
     db.agreementSignature.deleteMany({ where: { agreementId: agreement.id } }),
-    // The reason goes in the messages so both sides can talk it through.
-    db.requestMessage.create({
-      data: { requestId: id, senderId: session.userId, senderSide: side, body: `I asked for a new draft of the agreement: ${reason}` },
-    }),
     db.requestEvent.create({
       data: { requestId: id, type: "agreement_redraft_requested", actorName: session.user.name, actorSide: side, detail: { reason } },
     }),
@@ -354,7 +350,7 @@ export async function rejectUploadedAgreementAction(formData: FormData) {
   await db.requestEvent.create({
     data: { requestId: id, type: "agreement_upload_rejected", actorName: session.user.name, actorSide: side },
   });
-  await notifyOther(side, request, `Uploaded agreement not accepted on request #${request.number}`, "The other side says it isn't the right, fully signed document. Upload the correct file, or talk it through in messages.");
+  await notifyOther(side, request, `Uploaded agreement not accepted on request #${request.number}`, "The other side says it isn't the right, fully signed document. Upload the correct file. To talk it through, schedule a meeting on the request.");
   redirect(path);
 }
 

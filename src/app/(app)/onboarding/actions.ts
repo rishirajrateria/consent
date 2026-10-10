@@ -235,6 +235,7 @@ const consenterSchema = z.object({
   documentNumber: z.string().min(3).max(100),
   contactEmail: z.string().email().optional().or(z.literal("")),
   contactPhone: z.string().max(20).optional().or(z.literal("")),
+  contactAddress: z.string().max(300).optional(),
   managerContact: z.string().max(200).optional(),
 });
 
@@ -291,9 +292,11 @@ export async function submitConsenterApplicationAction(formData: FormData) {
       status: "SUBMITTED",
       shareEmail: formData.get("shareEmail") === "on",
       sharePhone: formData.get("sharePhone") === "on",
+      shareAddress: formData.get("shareAddress") === "on",
       shareManager: formData.get("shareManager") === "on",
       contactEmail: d.contactEmail || session.user.email,
       contactPhone: d.contactPhone || session.user.phone,
+      contactAddress: d.contactAddress?.trim() || null,
       managerContact: d.managerContact || null,
       members: {
         create: {

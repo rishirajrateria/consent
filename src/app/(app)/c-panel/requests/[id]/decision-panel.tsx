@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Card, SectionTitle, Field, Input, Textarea, Select } from "@/components/ui";
 import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { cn } from "@/lib/utils";
 import type { Selection } from "@/lib/rules";
+import { MeetingFields } from "@/components/meeting-form";
 import { approveRequestAction, requestChangesAction, markPaidAction, denyRequestAction } from "../actions";
+import type { ContactChoice } from "../contact-fields";
+import { ContactChoices } from "./contact-choices";
 
-type Mode = "approve" | "fee" | "changes" | "deny";
+type Mode = "approve" | "fee" | "ask" | "deny";
 
 /**
  * The owner's answer, placed at the end of the request page after everything
@@ -24,6 +28,9 @@ export function DecisionPanel({
   openOffer,
   canNegotiate,
   canSetFee,
+  canAsk,
+  contactChoices,
+  hasMeeting,
   proposeLegalByDefault,
   denialReasons,
 }: {
@@ -38,6 +45,12 @@ export function DecisionPanel({
   canNegotiate: boolean;
   /** Can negotiate and still has a counter-offer left, so a new fee can be sent. */
   canSetFee: boolean;
+  /** False while an earlier question is still waiting for their answer. */
+  canAsk: boolean;
+  /** The owner's contact details, for "Share my contact details". */
+  contactChoices: ContactChoice[];
+  /** A meeting is already scheduled, so approving can't add another. */
+  hasMeeting: boolean;
   proposeLegalByDefault: boolean;
   denialReasons: { id: string; label: string }[];
 }) {
@@ -51,12 +64,19 @@ export function DecisionPanel({
     ...(canApprove ? ([["approve", approveLabel]] as [Mode, string][]) : []),
     // While a fee is being discussed, counter-offers live in the fee card above.
     ...(inNegotiation || !canSetFee ? [] : ([["fee", "Set a fee"]] as [Mode, string][])),
-    ["changes", "Ask for changes"],
+    ...(canAsk ? ([["ask", "Ask"]] as [Mode, string][]) : []),
     ["deny", "Decline"],
   ];
   const [picked, setMode] = useState<Mode>(options[0][0]);
   // The choices change when the fee does; fall back to the first one.
   const mode = options.some(([m]) => m === picked) ? picked : options[0][0];
+  // A paid deal needs a way to settle the fee, so sharing starts ticked when
+  // the profile shares at least one detail it has.
+  const canShare = contactChoices.some((c) => c.value);
+  const [share, setShare] = useState(isPaid && contactChoices.some((c) => c.defaultOn));
+  const [meet, setMeet] = useState(false);
+  const [noneTicked, setNoneTicked] = useState(false);
+  const [meetingIssue, setMeetingIssue] = useState<string | null>(null);
 
   return (
     <Card strong className="space-y-5" id="decide">
@@ -71,7 +91,7 @@ export function DecisionPanel({
             : canSetFee
               ? `Your fee of ${myFee.label} hasn't been answered yet. Send it again with Set a fee so ${requesterName} can answer it.`
               : canNegotiate
-                ? `You've used all your counter-offers. Ask for changes or decline, or ${requesterName} can raise a new request.`
+                ? `You've used all your counter-offers. ${canAsk ? "Ask a question or decline" : "Decline"}, or ${requesterName} can raise a new request.`
                 : `Your fee of ${myFee.label} hasn't been answered yet.`}
         </p>
       )}
@@ -102,7 +122,25 @@ export function DecisionPanel({
       </div>
 
       {mode === "approve" && (
-        <form action={approveRequestAction} className="space-y-3">
+        <form
+          action={approveRequestAction}
+          className="space-y-3"
+          onSubmit={(e) => {
+            // Sharing with nothing ticked would share nothing; say so before anything is sent.
+            const ticked = e.currentTarget.querySelector('input[name="shareField"]:checked');
+            if (share && canShare && !ticked) {
+              e.preventDefault();
+              setNoneTicked(true);
+            }
+            // A meeting time that has passed would be refused after approving; catch it
+            // here so nothing typed is lost. The browser reads it in the owner's zone.
+            if (meet && !hasMeeting) {
+              const issue = meetingTimeIssue(e.currentTarget);
+              setMeetingIssue(issue);
+              if (issue) e.preventDefault();
+            }
+          }}
+        >
           <input type="hidden" name="id" value={requestId} />
           {/* The fee on the button; approving fails if it changed meanwhile. */}
           <input type="hidden" name="offerId" value={openOffer?.id ?? ""} />
@@ -149,13 +187,84 @@ export function DecisionPanel({
               </Field>
             </div>
           </details>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" name="shareContacts" defaultChecked={isPaid} className="size-4 accent-black" />
-            Also share my contact details with {requesterName}
-          </label>
-          <p className="text-xs text-ink-faint">
-            Leave it unticked to just approve. You can share your details later from this page.
-          </p>
+          <div className="space-y-2">
+            <label className={cn("flex items-center gap-2 text-sm", !canShare && "text-ink-faint")}>
+              <input
+                type="checkbox"
+                name="shareContacts"
+                checked={share && canShare}
+                disabled={!canShare}
+                onChange={(e) => {
+                  setShare(e.target.checked);
+                  setNoneTicked(false);
+                }}
+                className="size-4 accent-black"
+              />
+              Share my contact details with {requesterName}
+            </label>
+            {share && canShare ? (
+              <div className="space-y-1.5 border-l-2 border-ink/10 pl-4">
+                <div onChange={() => setNoneTicked(false)}>
+                  <ContactChoices choices={contactChoices} />
+                </div>
+                <p className={cn("text-xs", noneTicked ? "font-medium text-ink" : "text-ink-faint")} role={noneTicked ? "alert" : undefined}>
+                  {noneTicked
+                    ? "Tick at least one detail, or untick Share my contact details."
+                    : "Only the details you tick are shared."}
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-ink-faint">
+                {canShare ? (
+                  "Leave it unticked to just approve. You can share your details later from this page."
+                ) : (
+                  <>
+                    You haven&apos;t added any contact details yet.{" "}
+                    <Link
+                      href="/c-panel/settings"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-4 hover:text-ink"
+                    >
+                      Add them in settings<span className="sr-only"> (opens in a new tab)</span>
+                    </Link>{" "}
+                    to share them.
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+          {hasMeeting ? (
+            // One meeting per request; scheduling here would move the one already set.
+            <p className="text-sm text-ink-soft">A meeting is already scheduled. You can move it in Meeting above.</p>
+          ) : (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="scheduleMeeting"
+                  checked={meet}
+                  onChange={(e) => {
+                    setMeet(e.target.checked);
+                    setMeetingIssue(null);
+                  }}
+                  className="size-4 accent-black"
+                />
+                Also schedule a meeting
+              </label>
+              {meet && (
+                <div className="space-y-2 border-l-2 border-ink/10 pl-4" onChange={() => setMeetingIssue(null)}>
+                  <MeetingFields prefix="meeting_" />
+                  <p
+                    className={cn("text-xs", meetingIssue ? "font-medium text-ink" : "text-ink-faint")}
+                    role={meetingIssue ? "alert" : undefined}
+                  >
+                    {meetingIssue ?? "You both get a calendar invite."}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="proposeLegal" defaultChecked={proposeLegalByDefault} className="size-4 accent-black" />
             Also propose a legally binding agreement ({requesterName} must accept)
@@ -196,13 +305,22 @@ export function DecisionPanel({
         </form>
       )}
 
-      {mode === "changes" && (
+      {mode === "ask" && (
         <form action={requestChangesAction} className="space-y-3">
           <input type="hidden" name="id" value={requestId} />
-          <Field label="What should they change?" hint="They'll upload a revised file and send it back to you.">
-            <Textarea name="note" required placeholder="e.g. Trim the clip to 15 seconds and remove the last scene." className="min-h-20" />
+          <Field
+            label="What do you want to ask or change?"
+            required
+            hint={`${requesterName} answers in writing and can update their plan or upload a new file. Then it comes back to you.`}
+          >
+            <Textarea
+              name="note"
+              required
+              placeholder="e.g. Where will this run? Or: trim the clip to 15 seconds."
+              className="min-h-20"
+            />
           </Field>
-          <SubmitButton className="w-full sm:w-auto">Ask for changes</SubmitButton>
+          <SubmitButton className="w-full sm:w-auto">Send</SubmitButton>
         </form>
       )}
 
@@ -230,4 +348,17 @@ export function DecisionPanel({
       )}
     </Card>
   );
+}
+
+/** The same time limits the server checks, read from the meeting's date and time inputs. */
+function meetingTimeIssue(form: HTMLFormElement): string | null {
+  const value = (name: string) => (form.elements.namedItem(name) as HTMLInputElement | null)?.value ?? "";
+  const date = value("meeting_date");
+  const time = value("meeting_time");
+  if (!date || !time) return null;
+  const start = new Date(`${date}T${time}`).getTime();
+  if (Number.isNaN(start)) return null;
+  if (start < Date.now() + 10 * 60_000) return "Pick a time at least 10 minutes from now.";
+  if (start > Date.now() + 365 * 86_400_000) return "Pick a time within the next year.";
+  return null;
 }

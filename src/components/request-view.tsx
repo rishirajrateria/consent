@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { Card, SectionTitle, StatusBadge, KV, Divider, Alert } from "@/components/ui";
-import { SubmitButton } from "@/components/form";
-import { Textarea } from "@/components/ui";
 import { storage } from "@/lib/storage";
 import { fmtDateTime, fmtBytes, titleCase, fmtMoney, statusLabel } from "@/lib/utils";
-import { sendMessageAction } from "@/app/(app)/requests/shared-actions";
 import type { Selection } from "@/lib/rules";
-import type { Prisma } from "@prisma/client";
+import type { ContactField, SharedContact } from "@/lib/requests";
+import type { CallMode, Prisma } from "@prisma/client";
 import type { ReactNode } from "react";
-import { FileText, Paperclip, Download, Award } from "lucide-react";
+import { FileText, Download, Award, Timer } from "lucide-react";
 import { NegotiationActions } from "./negotiation-actions";
+import { LocalTime } from "./local-time";
 import { countersLeft, MAX_COUNTER_OFFERS } from "@/lib/negotiation";
 
 export type FullRequest = Prisma.ConsentRequestGetPayload<{
@@ -17,7 +16,6 @@ export type FullRequest = Prisma.ConsentRequestGetPayload<{
     consenter: true;
     requester: true;
     files: true;
-    messages: { include: { sender: true } };
     offers: { include: { byUser: true } };
     events: true;
     grant: true;
@@ -188,11 +186,19 @@ export function NegotiationCard({
   );
 }
 
+const CONTACT_ROWS: [ContactField, string][] = [
+  ["email", "Email"],
+  ["phone", "Phone"],
+  ["address", "Address"],
+  ["manager", "Manager/agency"],
+];
+
 export function ContactsCard({ request }: { request: FullRequest }) {
   if (!request.contactsRevealed || !request.contactsSnapshot) return null;
-  const snap = request.contactsSnapshot as {
-    consenter: { name: string; email: string | null; phone: string | null; manager: string | null };
-    requester: { name: string; email: string | null; phone: string | null; manager: string | null };
+  // Snapshots from before addresses could be shared have no address key.
+  const snap = request.contactsSnapshot as unknown as {
+    consenter: Partial<SharedContact> & { name: string };
+    requester: Partial<SharedContact> & { name: string };
     revealedAt: string;
   };
   return (
@@ -206,14 +212,26 @@ export function ContactsCard({ request }: { request: FullRequest }) {
         }
       />
       <div className="grid gap-3 sm:grid-cols-2">
-        {([["Consenter", snap.consenter], ["Requester", snap.requester]] as const).map(([label, c]) => (
-          <div key={label} className="glass-subtle space-y-1 px-4 py-3 text-sm">
-            <div className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{label} — {c.name}</div>
-            <div>{c.email ?? <span className="text-ink-faint">email not shared</span>}</div>
-            <div>{c.phone ?? <span className="text-ink-faint">phone not shared</span>}</div>
-            <div>{c.manager ?? <span className="text-ink-faint">manager not shared</span>}</div>
-          </div>
-        ))}
+        {([["Consenter", snap.consenter], ["Requester", snap.requester]] as const).map(([label, c]) => {
+          const rows = CONTACT_ROWS.filter(([f]) => c[f]);
+          return (
+            <div key={label} className="glass-subtle space-y-2 px-4 py-3 text-sm">
+              <div className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{label} — {c.name}</div>
+              {rows.length === 0 ? (
+                <p className="text-ink-faint">No details shared.</p>
+              ) : (
+                <dl className="space-y-1.5">
+                  {rows.map(([f, name]) => (
+                    <div key={f}>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">{name}</dt>
+                      <dd className="whitespace-pre-line break-words">{c[f]}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          );
+        })}
       </div>
       {request.agreedAmount && (
         <Alert>
@@ -224,78 +242,88 @@ export function ContactsCard({ request }: { request: FullRequest }) {
   );
 }
 
-export function MessagesCard({
-  request,
-  side,
-  canAct = true,
-}: {
-  request: FullRequest;
-  side: "consenter" | "requester";
-  /** False for read-only seats (requester viewers): history only, no composer. */
-  canAct?: boolean;
-}) {
-  const messages = [...request.messages].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-  const open = !["DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"].includes(request.status);
+const MODE_NAME: Record<CallMode, string> = { VIDEO: "video call", PHONE: "phone call", IN_PERSON: "in person" };
+const FIELD_NAME: Record<ContactField, string> = { email: "email", phone: "phone", address: "address", manager: "manager/agency" };
+
+/** A string from an event's detail, or "". */
+function detailText(detail: Prisma.JsonValue, key: string): string {
+  const v = detail && typeof detail === "object" && !Array.isArray(detail) ? detail[key] : null;
+  return typeof v === "string" ? v : "";
+}
+
+/** "Label: text", with the text kept as written (line breaks and all). */
+function Said({ label, text }: { label: string; text: string }) {
+  if (!text) return <>{label}</>;
   return (
-    <Card className="space-y-4" id="messages">
-      <SectionTitle title="Messages" desc="Clarifications between both teams. Everything is logged." />
-      <div className="space-y-2">
-        {messages.length === 0 && <p className="text-sm text-ink-faint">No messages yet.</p>}
-        {messages.map((m) => {
-          const file = m.attachmentFileId ? request.files.find((f) => f.id === m.attachmentFileId) : null;
-          const mine = m.senderSide === side;
-          return (
-            <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
-              <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${mine ? "glass-ink" : "glass-subtle"}`}>
-                <div className={`text-[10px] font-semibold uppercase tracking-wider ${mine ? "text-white/60" : "text-ink-faint"}`}>
-                  {m.sender.name} · {m.senderSide}
-                </div>
-                {m.body && <p className="mt-0.5 whitespace-pre-wrap">{m.body}</p>}
-                {file && (
-                  <a href={storage.signedUrl(file.storageKey, file.name, 600)} target="_blank" rel="noreferrer" className={`mt-1 flex items-center gap-1.5 text-xs underline underline-offset-4 ${mine ? "text-white" : "text-ink"}`}>
-                    <Paperclip className="size-3" aria-hidden /> {file.name}
-                  </a>
-                )}
-                <div className={`mt-1 text-[10px] ${mine ? "text-white/50" : "text-ink-faint"}`}>{fmtDateTime(m.createdAt)}</div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {open && !canAct && <ViewOnlyNote />}
-      {open && canAct && (
-        <form action={sendMessageAction} className="space-y-2 border-t hairline pt-3">
-          <input type="hidden" name="id" value={request.id} />
-          <Textarea name="body" placeholder="Write a message…" className="min-h-16" />
-          <div className="flex items-center justify-between gap-2">
-            <input type="file" name="attachment" className="text-xs file:mr-2 file:rounded-lg file:border-0 file:bg-ink/10 file:px-2.5 file:py-1 file:text-xs" aria-label="Attachment" />
-            <SubmitButton size="sm">Send</SubmitButton>
-          </div>
-        </form>
-      )}
-    </Card>
+    <>
+      {label}: <span className="whitespace-pre-wrap font-normal text-ink-soft">{text}</span>
+    </>
   );
 }
 
 /** A timeline line; a refunded consent request fee shows the part that went back. */
-function eventTitle(e: { type: string; detail: Prisma.JsonValue }) {
-  // Refunds logged before the 80/20 split returned the whole fee.
-  if (e.type === "consent_price_refunded") {
-    const d = (e.detail ?? {}) as { amount?: string; currency?: string };
-    const n = Number(d.amount);
-    return n > 0 ? `Consent request fee refunded: ${fmtMoney(n, d.currency)} (100%)` : "Consent request fee refunded";
+function eventTitle(e: { type: string; detail: Prisma.JsonValue }): ReactNode {
+  switch (e.type) {
+    case "changes_requested":
+      return <Said label="Asked" text={detailText(e.detail, "note")} />;
+    case "ask_answered":
+      return <Said label="Answered" text={detailText(e.detail, "answer")} />;
+    case "agreement_redraft_requested":
+      return <Said label="Asked for a new agreement draft" text={detailText(e.detail, "reason")} />;
+    case "meeting_scheduled":
+    case "meeting_moved": {
+      const at = detailText(e.detail, "startsAt");
+      const mode = detailText(e.detail, "mode") as CallMode;
+      const label = e.type === "meeting_scheduled" ? "Meeting scheduled" : "Meeting moved";
+      if (!at) return label;
+      return (
+        <>
+          {label} {e.type === "meeting_scheduled" ? "for" : "to"} <LocalTime iso={at} weekday withZone />
+          {MODE_NAME[mode] ? ` · ${MODE_NAME[mode]}` : ""}
+        </>
+      );
+    }
+    case "meeting_cancelled":
+      return "Meeting cancelled";
+    case "contacts_shared": {
+      const d = (e.detail ?? {}) as { fields?: ContactField[] };
+      const names = (d.fields ?? []).map((f) => FIELD_NAME[f]).filter(Boolean);
+      return names.length ? `Contact details shared (${names.join(", ")})` : "Contact details shared";
+    }
+    case "auto_expired":
+      return "Expired unanswered";
+    case "auto_closed": {
+      const reason = detailText(e.detail, "reason");
+      return reason ? `Closed: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : "Closed";
+    }
+    case "consent_price_refunded": {
+      // Refunds logged before the 80/20 split returned the whole fee.
+      const d = (e.detail ?? {}) as { amount?: string; currency?: string };
+      const n = Number(d.amount);
+      return n > 0 ? `Consent request fee refunded: ${fmtMoney(n, d.currency)} (100%)` : "Consent request fee refunded";
+    }
+    case "consent_fee_refunded": {
+      const d = (e.detail ?? {}) as { fee?: string; refunded?: string; currency?: string };
+      const fee = Number(d.fee);
+      const back = Number(d.refunded);
+      if (!(fee > 0) || !(back >= 0)) return "Consent request fee refunded";
+      return `Consent request fee refunded: ${fmtMoney(back, d.currency)} (${Math.round((back / fee) * 100)}%) of ${fmtMoney(fee, d.currency)}`;
+    }
+    default:
+      return titleCase(e.type);
   }
-  if (e.type !== "consent_fee_refunded") return titleCase(e.type);
-  const d = (e.detail ?? {}) as { fee?: string; refunded?: string; currency?: string };
-  const fee = Number(d.fee);
-  const back = Number(d.refunded);
-  if (!(fee > 0) || !(back >= 0)) return "Consent request fee refunded";
-  return `Consent request fee refunded: ${fmtMoney(back, d.currency)} (${Math.round((back / fee) * 100)}%) of ${fmtMoney(fee, d.currency)}`;
 }
 
-export function TimelineCard({ request }: { request: FullRequest }) {
+export function TimelineCard({
+  request,
+  expiresAt,
+}: {
+  request: FullRequest;
+  /** When an open request expires if nobody acts; shown at the top. */
+  expiresAt?: Date | null;
+}) {
   const events = [...request.events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  if (events.length === 0) return null;
+  if (events.length === 0 && !expiresAt) return null;
   return (
     <Card className="space-y-3">
       <SectionTitle
@@ -307,14 +335,23 @@ export function TimelineCard({ request }: { request: FullRequest }) {
           </a>
         }
       />
+      {expiresAt && (
+        <p className="glass-subtle flex items-start gap-2 px-4 py-2.5 text-sm text-ink-soft">
+          <Timer className="mt-0.5 size-4 shrink-0 text-ink" aria-hidden />
+          <span>
+            Expires <LocalTime iso={expiresAt.toISOString()} className="font-medium text-ink" /> unless someone acts.
+            Any action from either side resets it.
+          </span>
+        </p>
+      )}
       <ol className="space-y-0">
         {events.map((e) => (
           <li key={e.id} className="relative border-l border-ink/10 pb-3 pl-4 last:pb-0">
             <span className="absolute -left-[3.5px] top-1.5 size-1.5 rounded-full bg-ink" aria-hidden />
-            <div className="text-sm font-medium">{eventTitle(e)}</div>
+            <div className="text-sm font-medium break-words">{eventTitle(e)}</div>
             <div className="text-xs text-ink-faint">
               {e.actorName ? `${e.actorName} (${e.actorSide}) · ` : e.actorSide ? `${e.actorSide} · ` : ""}
-              {fmtDateTime(e.createdAt)}
+              <LocalTime iso={e.createdAt.toISOString()} />
             </div>
           </li>
         ))}

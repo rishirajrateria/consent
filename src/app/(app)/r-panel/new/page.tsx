@@ -9,6 +9,8 @@ import { db } from "@/lib/db";
 import { InvitePanel } from "@/components/invite-panel";
 import { SuccessNote } from "@/components/error-note";
 import { titleCase, fmtMoney } from "@/lib/utils";
+import { requestCapacity, type Capacity } from "@/lib/capacity";
+import { PausedSentence } from "../paused-sentence";
 import { Search, UserRound } from "lucide-react";
 
 export const metadata = { title: "New request" };
@@ -31,6 +33,27 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
         db.intentCategory.findMany({ where: { active: true }, select: { id: true } }),
       ])
     : [[], []];
+  // Owners whose request limits pause new requests right now. Only profiles
+  // with a limit set can be paused, so only those are checked.
+  const limited = results.length
+    ? await db.consenterProfile.findMany({
+        where: {
+          id: { in: results.map((c) => c.id) },
+          OR: [
+            { maxOpenRequests: { not: null } },
+            { dailyRequestLimit: { not: null } },
+            { weeklyRequestLimit: { not: null } },
+            { monthlyRequestLimit: { not: null } },
+          ],
+        },
+        select: { id: true },
+      })
+    : [];
+  const paused = new Map<string, Capacity>(
+    (await Promise.all(limited.map(async ({ id }) => [id, await requestCapacity(id)] as const))).filter(
+      ([, capacity]) => capacity.paused,
+    ),
+  );
   const asks = new Map(
     results.map((c) => {
       const priceTiers = tiers
@@ -102,9 +125,17 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
                   {asks.get(c.id)?.note}
                 </div>
               </div>
+              {paused.has(c.id) && (
+                <p className="glass-subtle px-3 py-2 text-xs text-ink-soft">
+                  <PausedSentence name={c.displayName} capacity={paused.get(c.id)!} />
+                </p>
+              )}
+              {/* While paused, a draft can still be written now and sent once they open again. */}
               <form action={createDraftAction}>
                 <input type="hidden" name="consenter" value={c.slug} />
-                <SubmitButton variant="secondary" size="sm" disabled={!active}>Start request</SubmitButton>
+                <SubmitButton variant="secondary" size="sm" disabled={!active}>
+                  {paused.has(c.id) ? "Start a draft" : "Start request"}
+                </SubmitButton>
               </form>
             </Card>
           ))}

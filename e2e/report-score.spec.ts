@@ -32,6 +32,12 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
   const approved = await db.consentRequest.findUnique({ where: { id: requestId } });
   expect(approved!.status).toBe("APPROVED");
 
+  // Recalculate Acme's score with the app's own formula now that old e2e
+  // reports are gone, so the baseline doesn't still carry their penalty.
+  // (src/lib/db.ts reuses globalThis.prisma, so point it at the e2e database.)
+  (globalThis as unknown as { prisma: typeof db }).prisma = db;
+  const { recalcRequesterScore } = await import("../src/lib/score");
+  await recalcRequesterScore((await requesterBySlug("acme-clips")).id, "E2E baseline");
   const before = (await requesterBySlug("acme-clips")).score;
 
   // ── Jane files a report on the approved request ──────────────
@@ -63,8 +69,8 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
     .toBe("UPHELD");
 
   // ── Score dropped and the report shows Upheld ────────────────
-  const after = (await requesterBySlug("acme-clips")).score;
-  expect(after).toBeLessThan(before);
+  // The report is marked Upheld first and the score is recalculated right after, so wait for it.
+  await expect.poll(async () => (await requesterBySlug("acme-clips")).score).toBeLessThan(before);
 
   await visit(jane, `/c-panel/requests/${requestId}`);
   await expect(jane.getByText("Upheld", { exact: true })).toBeVisible();

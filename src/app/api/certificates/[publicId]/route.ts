@@ -56,7 +56,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ publicI
         ? "Perpetual"
         : `${grant.validFrom?.toISOString()} → ${grant.validUntil?.toISOString()} (UTC)`
   );
-  kv(doc, "Fee", payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note);
+  kv(doc, "Usage fee", payload.fee.amount ? `${payload.fee.currency} ${payload.fee.amount} — ${payload.fee.note}` : payload.fee.note);
   kv(doc, "Agreement mode", payload.agreementMode.mode + (payload.agreementMode.agreementSha256 ? ` — agreement sha256 ${payload.agreementMode.agreementSha256}` : ""));
   kv(doc, "Decision", payload.decidedBy);
   kv(doc, "Issued", `${grant.issuedAt.toISOString()} (UTC)`);

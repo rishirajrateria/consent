@@ -5,6 +5,8 @@ import { PageHeader, Card, ScoreRing, StatusBadge, VerifiedBadge, Alert, ButtonL
 import { fmtDateTime } from "@/lib/utils";
 import type { RequestStatus } from "@prisma/client";
 import { ArrowRight } from "lucide-react";
+import { requestCapacity } from "@/lib/capacity";
+import { OpensAgain } from "./settings/request-limits";
 
 export const metadata = { title: "Consenter panel" };
 
@@ -16,7 +18,7 @@ export default async function ConsenterHome({ searchParams }: PageProps<"/c-pane
   const { consenter } = await requireConsenter();
   // Only requests actually sent to this profile, matching /c-panel/requests.
   const sent = { consenterId: consenter.id, submittedAt: { not: null } };
-  const [pending, inNegotiation, activeGrants, matrixCount, recent] = await Promise.all([
+  const [pending, inNegotiation, activeGrants, matrixCount, recent, capacity] = await Promise.all([
     db.consentRequest.count({ where: { ...sent, status: { in: NEEDS_ACTION } } }),
     db.consentRequest.count({ where: { ...sent, status: "IN_NEGOTIATION" } }),
     // Same filter as the "Grants" tab on /c-panel/requests.
@@ -28,6 +30,8 @@ export default async function ConsenterHome({ searchParams }: PageProps<"/c-pane
       take: 5,
       include: { requester: true },
     }),
+    // The owner's request limits: are new requests paused right now?
+    requestCapacity(consenter.id),
   ]);
 
   return (
@@ -55,6 +59,31 @@ export default async function ConsenterHome({ searchParams }: PageProps<"/c-pane
           Your profile isn&apos;t verified yet, so it&apos;s not searchable and can&apos;t receive
           requests. Track progress on the{" "}
           <Link href="/onboarding/consenter" className="underline underline-offset-4">onboarding page</Link>.
+        </Alert>
+      )}
+
+      {consenter.status === "APPROVED" && capacity.paused && (
+        <Alert tone="warn">
+          <div className="space-y-1.5">
+            <div className="font-semibold text-ink">New requests are paused</div>
+            <ul className="list-disc space-y-0.5 pl-4">
+              {capacity.reasons.map((r) => (
+                <li key={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</li>
+              ))}
+            </ul>
+            <p>
+              They <OpensAgain capacity={capacity} verb="open" />. Until then, nobody can send you a
+              new request.
+            </p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <Link href="/c-panel/requests" className="font-medium text-ink underline underline-offset-4">
+                See the requests waiting
+              </Link>
+              <Link href="/c-panel/settings#limits" className="underline underline-offset-4">
+                Change your request limits
+              </Link>
+            </div>
+          </div>
         </Alert>
       )}
 

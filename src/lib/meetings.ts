@@ -50,7 +50,8 @@ export function readMeetingInput(formData: FormData, prefix = "meeting_"): Meeti
   return {
     date: get("date"),
     time: get("time"),
-    timeZone: get("tz") || "UTC",
+    // No zone means the browser never filled it in; meetingProblem then asks to reload rather than guess UTC.
+    timeZone: get("tz"),
     durationMin: Number(get("duration")) || 30,
     mode: mode === "PHONE" || mode === "IN_PERSON" ? mode : "VIDEO",
     link: get("link") || null,

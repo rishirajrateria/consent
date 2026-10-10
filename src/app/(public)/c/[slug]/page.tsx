@@ -8,7 +8,29 @@ import { storage } from "@/lib/storage";
 import { TipOffForm } from "@/components/tipoff-form";
 import { Check, X, CircleDashed } from "lucide-react";
 import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../../fee-shares";
+import { requestCapacity, pausedMessage, type Capacity } from "@/lib/capacity";
+import { LocalTime } from "@/components/local-time";
 import type { Metadata } from "next";
+
+/**
+ * The one-sentence "paused" note from the owner's request limits, with its
+ * date shown in the viewer's own time zone.
+ */
+function PausedSentence({ name, capacity }: { name: string; capacity: Capacity }) {
+  const DATE = "\u0000";
+  const [head, tail] = pausedMessage(name, capacity, () => DATE).split(DATE);
+  return (
+    <>
+      {head}
+      {tail !== undefined && capacity.opensAt && (
+        <>
+          <LocalTime iso={capacity.opensAt.toISOString()} withZone />
+          {tail}
+        </>
+      )}
+    </>
+  );
+}
 
 export async function generateMetadata({ params }: PageProps<"/c/[slug]">): Promise<Metadata> {
   const { slug } = await params;
@@ -49,7 +71,7 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
   const askPath = `/r-panel/new?consenter=${c.slug}`;
   const hasConsentFee = Number(c.consentPrice ?? 0) > 0 || c.priceTiers.some((t) => Number(t.amount) > 0);
 
-  const [decided, expired, decidedTimes] = await Promise.all([
+  const [decided, expired, decidedTimes, capacity] = await Promise.all([
     db.consentRequest.count({ where: { consenterId: c.id, decidedAt: { not: null } } }),
     // Only the SLA job's expiries are the owner's silence. Older admin
     // force-expiries reused this status and don't count (as in the score).
@@ -62,6 +84,8 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
       take: 100,
       orderBy: { decidedAt: "desc" },
     }),
+    // The owner's request limits: while any is reached, nobody can send a new request.
+    requestCapacity(c.id),
   ]);
   const total = decided + expired;
   const responseRate = total > 0 ? Math.round((decided / total) * 100) : null;
@@ -221,32 +245,44 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
       </Card>
 
       {/* Decide last: the ask comes after the fees and the allowed / never terms. */}
-      <Card strong className="space-y-3" id="ask">
-        <SectionTitle
-          title="Ready to ask?"
-          desc={
-            hasConsentFee
-              ? `You pay the platform fee and ${c.priceTiers.length > 0 ? `any consent request fee ${c.displayName} charges for your intent` : `${c.displayName}'s consent request fee`} when you submit. The consent request fee is held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to you. Consent keeps ${CONSENT_PCT}. The platform fee isn't refunded. Uses marked never allowed are declined automatically.`
-              : "You pay the platform fee when you submit. It isn't refunded. Uses marked never allowed are declined automatically."
-          }
-        />
-        {!session ? (
+      {capacity.paused ? (
+        <Card strong className="space-y-3" id="ask">
+          <SectionTitle title="New requests are paused" />
           <p className="text-sm text-ink-soft">
-            You&apos;ll sign in first. New here?{" "}
-            <Link href={`/signup?next=${encodeURIComponent(askPath)}`} className="font-medium text-ink underline underline-offset-4">
-              Create an account
-            </Link>
+            <PausedSentence name={c.displayName} capacity={capacity} />
           </p>
-        ) : !isRequester ? (
-          <p className="text-sm text-ink-soft">To send requests you need a requester profile. It&apos;s reviewed before you can ask.</p>
-        ) : null}
-        <ButtonLink
-          href={!session ? `/login?next=${encodeURIComponent(askPath)}` : isRequester ? askPath : "/onboarding/requester"}
-          className="w-full justify-center sm:w-auto"
-        >
-          {session && !isRequester ? "Set up a requester profile to ask" : "Request consent"}
-        </ButtonLink>
-      </Card>
+          <ButtonLink href="/directory" variant="secondary" className="w-full justify-center sm:w-auto">
+            Find someone else
+          </ButtonLink>
+        </Card>
+      ) : (
+        <Card strong className="space-y-3" id="ask">
+          <SectionTitle
+            title="Ready to ask?"
+            desc={
+              hasConsentFee
+                ? `You pay the platform fee and ${c.priceTiers.length > 0 ? `any consent request fee ${c.displayName} charges for your intent` : `${c.displayName}'s consent request fee`} when you submit. The consent request fee is held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to you. Consent keeps ${CONSENT_PCT}. The platform fee isn't refunded. Uses marked never allowed are declined automatically.`
+                : "You pay the platform fee when you submit. It isn't refunded. Uses marked never allowed are declined automatically."
+            }
+          />
+          {!session ? (
+            <p className="text-sm text-ink-soft">
+              You&apos;ll sign in first. New here?{" "}
+              <Link href={`/signup?next=${encodeURIComponent(askPath)}`} className="font-medium text-ink underline underline-offset-4">
+                Create an account
+              </Link>
+            </p>
+          ) : !isRequester ? (
+            <p className="text-sm text-ink-soft">To send requests you need a requester profile. It&apos;s reviewed before you can ask.</p>
+          ) : null}
+          <ButtonLink
+            href={!session ? `/login?next=${encodeURIComponent(askPath)}` : isRequester ? askPath : "/onboarding/requester"}
+            className="w-full justify-center sm:w-auto"
+          >
+            {session && !isRequester ? "Set up a requester profile to ask" : "Request consent"}
+          </ButtonLink>
+        </Card>
+      )}
 
       <TipOffForm
         consenterId={c.id}

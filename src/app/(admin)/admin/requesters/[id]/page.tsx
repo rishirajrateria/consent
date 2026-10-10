@@ -160,7 +160,7 @@ export default async function RequesterDetail({ params, searchParams }: PageProp
                   {PURPOSE[p.purpose]} · {p.currency} {p.amount.toString()} · {fmtDateTime(p.createdAt)}
                   {p.status === "REFUNDED" && <span className="block text-xs text-ink-soft">{refundLine(p)}</span>}
                 </span>
-                <StatusBadge status={p.status} />
+                <StatusBadge status={p.status} label={p.status === "REFUNDED" && p.purpose === "CONSENT_PRICE" ? `${Math.round((Number((p.refundedAmount ?? p.amount).toString()) / Number(p.amount.toString())) * 100)}% refunded` : undefined} />
               </div>
             ))}
           </Card>

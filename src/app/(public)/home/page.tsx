@@ -125,7 +125,7 @@ export default function HomePage() {
       </section>
 
       <p className="text-center text-xs text-ink-faint">
-        Consent is not a payment intermediary and provides no legal advice.{" "}
+        Fees agreed between the parties never move through Consent, and Consent gives no legal advice.{" "}
         <Link href="/how-it-works" className="underline underline-offset-4">Learn how it works</Link>
       </p>
     </div>

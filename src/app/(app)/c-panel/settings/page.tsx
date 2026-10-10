@@ -3,17 +3,27 @@ import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, Field, Input, Textarea, SectionTitle, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
-import { SuccessNote } from "@/components/error-note";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { audit } from "@/lib/audit";
 import { redirect } from "next/navigation";
 import { Grid3x3, Zap, Ban, Users, Wallet, Megaphone } from "lucide-react";
 import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../requests/fee-split";
+import { requestCapacity } from "@/lib/capacity";
+import { getSettings } from "@/lib/settings";
+import { notifyConsenterTeam } from "@/lib/notify";
+import { pausedNotice, fmtUtc } from "@/lib/requests";
+import { LIMIT_FIELDS, LIMITS_ERROR, MAX_LIMIT, readLimits } from "./limits";
+import { CapacityLine } from "./request-limits";
 
 export const metadata = { title: "Profile settings" };
 
 async function saveAction(formData: FormData) {
   "use server";
   const { session, consenter, member } = await requireConsenter("canEditRules");
+  // Check the request limits before saving anything, so a typo saves nothing.
+  const limits = readLimits(formData);
+  if (!limits) redirect(`/c-panel/settings?error=${encodeURIComponent(LIMITS_ERROR)}`);
+  const before = await requestCapacity(consenter.id).catch(() => null);
   // Where the money goes is the owner's call alone, whatever else a team member may edit.
   const isOwner = member.role === "OWNER";
   await db.consenterProfile.update({
@@ -23,10 +33,13 @@ async function saveAction(formData: FormData) {
       category: String(formData.get("category") ?? "").trim() || null,
       shareEmail: formData.get("shareEmail") === "on",
       sharePhone: formData.get("sharePhone") === "on",
+      shareAddress: formData.get("shareAddress") === "on",
       shareManager: formData.get("shareManager") === "on",
       contactEmail: String(formData.get("contactEmail") ?? "").trim() || null,
       contactPhone: String(formData.get("contactPhone") ?? "").trim() || null,
+      contactAddress: String(formData.get("contactAddress") ?? "").trim().slice(0, 300) || null,
       managerContact: String(formData.get("managerContact") ?? "").trim() || null,
+      ...limits,
       defaultRequireLegalAgreementForPaid: formData.get("defaultLegal") === "on",
       consentPrice: (() => {
         const v = parseFloat(String(formData.get("consentPrice") ?? ""));
@@ -60,7 +73,15 @@ async function saveAction(formData: FormData) {
     action: "consenter_settings_saved",
     module: "consent_settings",
     targetId: consenter.id,
+    detail: { limits },
   });
+  // Lowering a limit can pause new requests straight away: tell the whole team once.
+  if (before && !before.paused) {
+    const after = await requestCapacity(consenter.id).catch(() => null);
+    if (after?.paused) {
+      await notifyConsenterTeam(consenter.id, { ...pausedNotice(after, fmtUtc), href: "/c-panel" });
+    }
+  }
   redirect("/c-panel/settings?saved=1");
 }
 
@@ -69,9 +90,11 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
   const { consenter, member } = await requireConsenter();
   const isOwner = member.role === "OWNER";
   const canEdit = isOwner || member.canEditRules;
-  const [intents, tiers] = await Promise.all([
+  const [intents, tiers, capacity, settings] = await Promise.all([
     db.intentCategory.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     db.consentPriceTier.findMany({ where: { consenterId: consenter.id } }),
+    requestCapacity(consenter.id),
+    getSettings(),
   ]);
   const tierFor = new Map(tiers.map((t) => [t.intentCategoryId, t.amount.toString()]));
 
@@ -88,6 +111,7 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
     <div className="space-y-6">
       <PageHeader kicker={consenter.displayName} title="Profile settings" />
       {sp.saved && <SuccessNote msg="Settings saved." />}
+      <ErrorNote error={sp.error} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {shortcuts.map(([href, label, Icon]) => (
@@ -115,7 +139,7 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
           <Card className="space-y-4">
             <SectionTitle
               title="Contact details you share"
-              desc="Nothing is shared automatically. When you approve a request — free or paid — you choose whether to share your contact details. If you do, these are the ones the requester sees."
+              desc="Nothing is shared automatically. When you approve a request, or any time after, you tick which of these the requester sees. The ones you tick here start ticked."
             />
             <div className="space-y-2">
               <label className="flex items-center gap-3 text-sm">
@@ -123,6 +147,9 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
               </label>
               <label className="flex items-center gap-3 text-sm">
                 <input type="checkbox" name="sharePhone" defaultChecked={consenter.sharePhone} className="size-4 accent-black" /> Share phone
+              </label>
+              <label className="flex items-center gap-3 text-sm">
+                <input type="checkbox" name="shareAddress" defaultChecked={consenter.shareAddress} className="size-4 accent-black" /> Share address
               </label>
               <label className="flex items-center gap-3 text-sm">
                 <input type="checkbox" name="shareManager" defaultChecked={consenter.shareManager} className="size-4 accent-black" /> Share manager contact
@@ -136,6 +163,15 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
                 <Input name="contactPhone" type="tel" defaultValue={consenter.contactPhone ?? ""} />
               </Field>
             </div>
+            <Field label="Contact address" hint="A postal or office address, e.g. for in-person meetings or paperwork.">
+              <Input
+                name="contactAddress"
+                maxLength={300}
+                autoComplete="street-address"
+                defaultValue={consenter.contactAddress ?? ""}
+                placeholder="Street, city, postcode, country"
+              />
+            </Field>
             <Field label="Manager / agency contact">
               <Input name="managerContact" defaultValue={consenter.managerContact ?? ""} />
             </Field>
@@ -202,10 +238,40 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
               </div>
             </div>
             <p className="text-xs text-ink-faint">
-              If a request auto-expires unanswered, {REFUND_PCT} of the consent request fee is refunded
-              to the requester, so silence never pays. Any usage fee you negotiate after approval is still
-              settled directly between you and the requester, never through Consent. Track everything under{" "}
+              A request expires when neither side acts for {settings.slaDays} days. If it expires without a
+              yes, {REFUND_PCT} of the consent request fee is refunded to the requester, so silence never
+              pays. Any usage fee you negotiate after approval is still settled directly between you and
+              the requester, never through Consent. Track everything under{" "}
               <Link href="/c-panel/earnings" className="underline underline-offset-4">Earnings & settlements</Link>.
+            </p>
+          </Card>
+
+          <Card className="space-y-4" id="limits">
+            <SectionTitle
+              title="Request limits"
+              desc="Pause new requests when you have too many to answer. While paused, nobody can send you a request or pay for one, and they see when it opens again. Leave a box empty for no limit."
+            />
+            <CapacityLine capacity={capacity} />
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {LIMIT_FIELDS.map((f) => (
+                <Field key={f.name} label={f.label} hint={f.hint}>
+                  <Input
+                    name={f.name}
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={MAX_LIMIT}
+                    step={1}
+                    defaultValue={consenter[f.name] ?? ""}
+                    placeholder="No limit"
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="text-xs text-ink-faint">
+              Answering a request (yes, a fee, an Ask or no) frees its place in &lsquo;Max waiting for your
+              answer&rsquo;. When they answer your Ask, it waits for you again and counts. Day, week and
+              month limits count requests sent in the last 24 hours, 7 days and 30 days.
             </p>
           </Card>
 

@@ -5,6 +5,23 @@ import { issueGrant } from "./grants";
 import { notifyConsenterTeam, notifyRequesterTeam, notifyUser } from "./notify";
 import { splitConsentFee } from "./escrow";
 import { fmtMoney } from "./utils";
+import { windowEnd } from "./request-window";
+import { requestCapacity, type Capacity } from "./capacity";
+import { MODE_LABEL, requestUrl, type Side } from "./meetings";
+import type { CallMode, ConsentRequest, ConsenterProfile, RequesterProfile } from "@prisma/client";
+
+/** A moment for notifications and emails, which can't know the reader's time zone. */
+export function fmtUtc(d: Date): string {
+  return `${new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d)} UTC`;
+}
 
 /**
  * What a requester is told when a request ends without a yes: 80% of the
@@ -19,6 +36,25 @@ export async function noYesRefundNote(requestId: string, owner: string) {
   return `80% of ${owner}'s consent request fee (${fmtMoney(back.toString(), fee.currency)}) is refunded to you; Consent keeps 20%. The platform fee isn't refunded.`;
 }
 
+/**
+ * What the owner's team is told when their request limits pause new
+ * requests: why, and what opens them again.
+ */
+export function pausedNotice(c: Capacity, fmt: (d: Date) => string): { title: string; body: string } {
+  const reopen =
+    c.untilAnswered && c.opensAt
+      ? `They open again once you answer some of the waiting requests, and not before ${fmt(c.opensAt)}.`
+      : c.untilAnswered
+        ? "They open again when you answer some of the waiting requests."
+        : c.opensAt
+          ? `They open again ${fmt(c.opensAt)}.`
+          : "";
+  return {
+    title: "New requests are paused",
+    body: `New requests are paused: ${c.reasons.join("; ")}. ${reopen} You can change your request limits in settings.`.replace(/\s+/g, " ").trim(),
+  };
+}
+
 /** Called when the platform fee settles: submit + evaluate auto-decision. */
 export async function onRequestPaid(requestId: string) {
   const request = await db.consentRequest.findUnique({
@@ -26,9 +62,26 @@ export async function onRequestPaid(requestId: string) {
     include: { requester: true, consenter: true, files: true },
   });
   if (!request || request.status !== "DRAFT") return;
+  // Whether the owner's request limits already held new requests back before this one.
+  const before = await requestCapacity(request.consenterId).catch(() => null);
+  await submitAndDecide(request);
+  // This request reached a limit: tell the owner's team once, as it happens.
+  if (before && !before.paused) {
+    const after = await requestCapacity(request.consenterId).catch(() => null);
+    if (after?.paused) {
+      await notifyConsenterTeam(request.consenterId, { ...pausedNotice(after, fmtUtc), href: "/c-panel" });
+    }
+  }
+}
+
+async function submitAndDecide(
+  request: ConsentRequest & { requester: RequesterProfile; consenter: ConsenterProfile; files: { kind: string }[] },
+) {
+  const requestId = request.id;
   const settings = await getSettings();
   const now = new Date();
-  const slaExpiresAt = new Date(now.getTime() + settings.slaDays * 86400_000);
+  // The first window: it expires this many days from now unless someone acts.
+  const slaExpiresAt = windowEnd(now, settings.slaDays);
 
   await db.consentRequest.update({
     where: { id: requestId },
@@ -176,35 +229,91 @@ export async function onRequestPaid(requestId: string) {
   }
 }
 
+export type ContactField = "email" | "phone" | "address" | "manager";
+export const CONTACT_FIELDS: ContactField[] = ["email", "phone", "address", "manager"];
+
+/** One side's details on a request, as shared. A detail that isn't shared is null. */
+export type SharedContact = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  manager: string | null;
+};
+export type ContactSnapshot = { consenter: SharedContact; requester: SharedContact; revealedAt: string };
+
+type ContactProfile = Pick<
+  ConsenterProfile,
+  | "displayName"
+  | "contactEmail"
+  | "contactPhone"
+  | "contactAddress"
+  | "managerContact"
+  | "shareEmail"
+  | "sharePhone"
+  | "shareAddress"
+  | "shareManager"
+>;
+
+/** The details a profile shares unless told otherwise: its share switches in settings. */
+export function defaultContactFields(p: ContactProfile): ContactField[] {
+  const flags: [ContactField, boolean][] = [
+    ["email", p.shareEmail],
+    ["phone", p.sharePhone],
+    ["address", p.shareAddress],
+    ["manager", p.shareManager],
+  ];
+  return flags.filter(([, on]) => on).map(([f]) => f);
+}
+
+/**
+ * One side's shared details: only the chosen fields (by default the
+ * profile's share switches), and only those that have a value.
+ */
+export function contactCard(p: ContactProfile, fields?: ContactField[]): SharedContact {
+  const chosen = new Set(fields ?? defaultContactFields(p));
+  const pick = (f: ContactField, v: string | null) => (chosen.has(f) ? v?.trim() || null : null);
+  return {
+    name: p.displayName,
+    email: pick("email", p.contactEmail),
+    phone: pick("phone", p.contactPhone),
+    address: pick("address", p.contactAddress),
+    manager: pick("manager", p.managerContact),
+  };
+}
+
+/** The fields of a shared card that carry a value. */
+export function sharedFields(c: SharedContact): ContactField[] {
+  return CONTACT_FIELDS.filter((f) => !!c[f]);
+}
+
 /**
  * Shares both sides' contact details on a request. Only ever called because
- * the consenter chose to share — at approval, when accepting a fee, or later
- * from the request page. Each side's profile settings decide which fields
- * (email / phone / manager) are included.
+ * the owner chose to share — at approval, when accepting a fee, or later from
+ * the request page. The owner's half has only the details they ticked
+ * (`fields`; when left out, their profile's share switches decide) that have
+ * a value. The requester's half follows the requester's own share switches.
+ * Returns null and shares nothing when none of the owner's chosen details has
+ * a value.
  */
-export async function revealContacts(requestId: string, sharedBy: string) {
+export async function revealContacts(
+  requestId: string,
+  sharedBy: string,
+  fields?: ContactField[],
+): Promise<ContactSnapshot | null> {
   const request = await db.consentRequest.findUniqueOrThrow({
     where: { id: requestId },
     include: { consenter: true, requester: true },
   });
   if (request.contactsRevealed && request.contactsSnapshot) {
-    return request.contactsSnapshot;
+    return request.contactsSnapshot as unknown as ContactSnapshot;
   }
-  const c = request.consenter;
-  const r = request.requester;
-  const snapshot = {
-    consenter: {
-      name: c.displayName,
-      email: c.shareEmail ? c.contactEmail : null,
-      phone: c.sharePhone ? c.contactPhone : null,
-      manager: c.shareManager ? c.managerContact : null,
-    },
-    requester: {
-      name: r.displayName,
-      email: r.shareEmail ? r.contactEmail : null,
-      phone: r.sharePhone ? r.contactPhone : null,
-      manager: r.shareManager ? r.managerContact : null,
-    },
+  const consenter = contactCard(request.consenter, fields);
+  const shared = sharedFields(consenter);
+  if (shared.length === 0) return null;
+  const snapshot: ContactSnapshot = {
+    consenter,
+    requester: contactCard(request.requester),
     revealedAt: new Date().toISOString(),
   };
   await db.$transaction([
@@ -213,8 +322,25 @@ export async function revealContacts(requestId: string, sharedBy: string) {
       data: { contactsRevealed: true, contactsSnapshot: snapshot },
     }),
     db.requestEvent.create({
-      data: { requestId, type: "contacts_shared", actorName: sharedBy, actorSide: "consenter" },
+      data: { requestId, type: "contacts_shared", actorName: sharedBy, actorSide: "consenter", detail: { fields: shared } },
     }),
   ]);
   return snapshot;
+}
+
+// ── Meetings: what calendars show ─────────────────────────────
+
+/** The event title, the same in emailed invites, downloads and add-to-calendar links. */
+export function meetingTitle(r: { number: number; consenter: { displayName: string }; requester: { displayName: string } }) {
+  return `Consent: ${r.consenter.displayName} × ${r.requester.displayName} (request #${r.number})`;
+}
+
+/** The event description for one side: how to join, the note, and that side's link to the request. */
+export function meetingDescription(
+  m: { requestId: string; mode: CallMode; link: string | null; location: string | null; note: string | null },
+  side: Side,
+) {
+  const how =
+    m.mode === "IN_PERSON" ? `In person at ${m.location}` : m.link ? `${MODE_LABEL[m.mode]}: ${m.link}` : MODE_LABEL[m.mode];
+  return [how, m.note, `Request on Consent: ${requestUrl(m.requestId, side)}`].filter(Boolean).join("\n\n");
 }

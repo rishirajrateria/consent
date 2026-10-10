@@ -116,13 +116,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ requ
   kv(doc, "Requester", request.requester.legalName);
   kv(doc, "Status", request.status);
   kv(doc, "Asset types", request.assetTypeNames.join(", "));
-  kv(doc, "Fee", request.isPaid ? `${request.agreedCurrency ?? ""} ${request.agreedAmount?.toString() ?? "under negotiation"} (settled directly between parties)` : "Free");
+  kv(doc, "Usage fee", request.isPaid ? `${request.agreedCurrency ?? ""} ${request.agreedAmount?.toString() ?? "under negotiation"} (settled directly between parties)` : "Free");
   sectionTitle(doc, "File versions & hashes");
   for (const f of dossier.files) para(doc, `${f.kind} v${f.version} — ${f.name}\nsha256:${f.sha256}`, 7);
   sectionTitle(doc, "Offers");
   for (const o of dossier.offers) kv(doc, `v${o.version} (${o.side})`, `${o.currency} ${o.amount} — ${o.status} — ${o.by}`);
-  sectionTitle(doc, "Messages");
-  for (const m of dossier.messages.slice(0, 50)) para(doc, `[${new Date(m.at).toISOString()}] ${m.by} (${m.side}): ${m.body}`, 7);
+  // Messages were replaced by "Ask"; older requests may still have some.
+  if (dossier.messages.length) {
+    sectionTitle(doc, "Messages");
+    for (const m of dossier.messages.slice(0, 50)) para(doc, `[${new Date(m.at).toISOString()}] ${m.by} (${m.side}): ${m.body}`, 7);
+  }
   sectionTitle(doc, "Timeline");
   for (const e of dossier.events) kv(doc, new Date(e.at).toISOString(), `${e.type}${e.actor ? ` — ${e.actor}` : ""}`);
   if (dossier.grant) {

@@ -71,7 +71,7 @@ in DECISIONS.md, and continue").
     in-app (alongside the platform fee, in one checkout), held as an `EarningEntry` (see #25h for
     how it splits: 80% to the owner on a yes, 80% refunded otherwise, Consent keeps 20%), and the
     owner's share is paid out by a weekly settlement sweep (`Settlement` batches, one per
-    consenter+currency, at most every 7 days). The original rules here (the fee buys the ask, not
+    consenter+currency, paid out weekly on Fridays). The original rules here (the fee buys the ask, not
     the answer; non-refundable like all submission fees; an auto-expired request reverses the
     earning; a withdrawn request still pays out) were superseded by #25f and then #25h. Usage fees
     negotiated after approval still never move through Consent — negotiation happens in-app,
@@ -119,13 +119,15 @@ in DECISIONS.md, and continue").
     any time after approval. When a requester accepts the owner's fee offer, nothing is shared until
     the owner chooses; both sides are told so, and the in-app messages remain the fallback for
     arranging payment. Once shared, each side's profile settings decide which fields (email, phone,
-    manager) appear, and a `contacts_shared` event records who shared and when.
+    manager) appear, and a `contacts_shared` event records who shared and when. (Messages were
+    retired in #25k; the owner now ticks the fields per request, see #25l.)
 
 25d. **Review first, decide last (owner amendment).** Request pages show who's asking, what they
     want, the exact files, messages and history before any action; the owner's answer comes last
     in one card (Approve / Set a fee / Ask for changes / Decline) with a single confirm button at the
     end, so typed input can't be lost by pressing a different button. The requester page follows
-    the same order with its next steps at the bottom.
+    the same order with its next steps at the bottom. (Since #25k there are no messages, and "Ask
+    for changes" is "Ask".)
 25e. **Counter-offer limit (owner amendment).** Each side can send at most 3 counter-offers per
     request (`MAX_COUNTER_OFFERS`, `src/lib/negotiation.ts`); the opening fee is not a counter, and
     revising your own open offer uses one. A side with none left can only accept the other side's
@@ -164,6 +166,79 @@ in DECISIONS.md, and continue").
     `refundRef`). Every screen shows numbers from these rows, never hard-coded amounts. The
     migration `20261010090022_consent_fee_80_percent_split` moved held and unpaid earnings to the
     80% share; earnings already paid out and refunds already made keep their full amounts.
+
+25i. **7-day request window (owner amendment, replaces the answer-only SLA and the separate
+    negotiation-idle timeout).** Every open request (`OPEN_STATUSES`: sent, pending, in
+    negotiation, asked, deal agreed, approved in principle, agreement steps) expires a fixed number
+    of days after its last action from either side: Admin → System settings → "Request window
+    (days)" (`slaDays`, 7 by default). The last action is read from what actions leave behind,
+    not from a timer each action must remember to reset: the latest of submission, any person's
+    timeline event (owner, requester or admin side; system events such as reminders and refunds
+    don't count), an offer, an upload or an old message (`lastActivity()` / `requestWindows()` in
+    `src/lib/request-window.ts`). So answering, an offer or counter, an Ask, answering an Ask, an
+    upload, an agreement step and scheduling, moving or cancelling a meeting all start a fresh
+    window. Both sides see "Expires {date} unless someone acts" in the request header and at the
+    top of the Timeline, in the viewer's own time zone. The sweep (`requestWindowSweep` in
+    `src/lib/jobs.ts`) keeps `slaExpiresAt` in step for lists, and sends one "expires soon"
+    reminder per window, when under 48 hours remain, to the side whose move it is (`waitingOn()`;
+    both sides when either can act; `remindedAt` marks it). On expiry: if it was waiting on the
+    owner it becomes EXPIRED_NO_RESPONSE (platform fee forfeited, counts against the owner's score,
+    as before); otherwise it becomes CLOSED with closedReason "No action for 7 days" (no score
+    change). Either way `syncConsentPrice` runs: before a yes, 80% of the consent request fee goes
+    back to the requester; after a yes the owner's share stays theirs. The platform fee is never
+    refunded. Both sides are notified. The negotiation-idle setting (`negotiationIdleDays`) is no
+    longer read and no longer shown in admin settings; the key may linger in stored settings.
+25j. **Request limits (owner amendment).** Owners set, under Profile settings → Request limits:
+    how many requests may wait for their answer at once (`maxOpenRequests`; SUBMITTED and
+    PENDING count; any answer, whether a yes, a fee, an Ask or a no, frees the place, and an
+    answered Ask comes back as waiting), and
+    optional limits on new requests in any 24 hours, 7 days or 30 days (`dailyRequestLimit`,
+    `weeklyRequestLimit`, `monthlyRequestLimit`, counted by `submittedAt`). An empty box means no
+    limit; anything else must be a whole number from 1 to 10,000, checked on the server before
+    anything saves. While any limit is reached, new requests are paused (`requestCapacity()` /
+    `evaluateCapacity()` in `src/lib/capacity.ts`). Requesters are stopped before any charge and
+    see one plain sentence saying why and when it opens again (`pausedMessage()`); on the public
+    profile that sentence replaces the "Request consent" button, and the rest of the profile stays
+    visible. The owner sees a "New requests are paused" banner on their panel home with the
+    reasons and links to the requests waiting and to the limits, and settings shows the live state
+    ("Taking new requests" or "Paused: {reasons}, opens again {date}"). The owner's team is
+    notified once when the profile becomes paused: when a new request reaches a limit, or when a
+    limit is lowered below the current count in settings. Pausing is not a penalty (no score
+    change) and requests already sent carry on. It reopens by itself: time limits as old requests
+    age out of the rolling window, the waiting limit as the owner answers.
+25k. **Ask replaces messages (owner amendment, supersedes the in-app messages in #25c/#25d).**
+    The Messages card and message form are gone from both request pages and the practice copy. The
+    owner's "Ask for changes" option is now "Ask", for a question or a change alike: one field,
+    "What do you want to ask or change?", sent with "Send". It still sets CHANGES_REQUESTED and logs
+    `changes_requested` with `{ note }`. The requester must answer in writing ("Your answer") and
+    may, in the same step, update their plan and/or upload a new file; sending puts the request
+    back to the owner (PENDING) and logs `ask_answered` (requester side, `{ answer }`). The owner
+    sees "You asked: …" and "They answered: …" above their decision, and the Timeline shows both.
+    Every "use the messages to arrange payment" line now points at sharing contact details
+    instead. Old `RequestMessage` rows stay in the database for the record but aren't shown.
+25l. **Contact choices and meetings (owner amendment, extends #25c).** *Contact choices:* when
+    approving, and when sharing later, "Share my contact details" lists Email, Phone, Address and
+    Manager/agency, each with its actual value; a field with no value is shown disabled with "add
+    it in settings". The ticks start from the profile's share flags. Only ticked fields that have a
+    value go into the request's contact snapshot (`revealContacts(requestId, sharedBy, fields)`,
+    keys `name, email, phone, address, manager`); the requester's half follows the requester's
+    own share flags. Profiles gained an address (`contactAddress`) and a "Share address" switch
+    (`shareAddress`, off by default), editable in owner settings and consenter onboarding (and on
+    the requester side's contact settings). *Meetings:* either side can schedule one meeting per
+    request while it is in play or approved (`MEETING_STATUSES`); the owner can also do it from
+    "Also schedule a meeting" on the approve form. It has a date and time in the scheduler's own
+    time zone (sent from their browser), a length, how (video link, phone, or in person plus a
+    place) and a note. It is stored once (`RequestMeeting`: UTC start and end plus the scheduler's
+    zone) and shown on both request pages in each viewer's local time. It goes into both people's
+    calendars: each person gets their own calendar invite (.ics) listing only themselves, so
+    scheduling never reveals contact details the owner didn't share, and the card offers Add to
+    Google Calendar, Outlook and .ics (`/api/meetings/{id}/ics`, members of either side only).
+    Either side can move it (same calendar entry, next SEQUENCE) or cancel it (confirmed first; a
+    CANCEL invite goes out). Scheduling, moving and cancelling are timeline events, notify the other
+    side and count as actions for the window (#25i). Who may: on the owner side OWNER, canApprove or
+    canNegotiate; on the requester side anyone but a VIEWER. The calendar provider is a mock that
+    emails the .ics (`src/lib/providers.ts`); Google Calendar / Microsoft Graph plug into the same
+    `CalendarProvider`, keyed by the same uid so updates replace the entry.
 
 26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
