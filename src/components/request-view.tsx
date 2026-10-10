@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { Card, SectionTitle, StatusBadge, KV, Divider, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
-import { Input, Textarea } from "@/components/ui";
+import { Textarea } from "@/components/ui";
 import { storage } from "@/lib/storage";
 import { fmtDateTime, fmtBytes, titleCase, fmtMoney, statusLabel } from "@/lib/utils";
-import { sendMessageAction, makeOfferAction, acceptOfferAction, closeNegotiationAction } from "@/app/(app)/requests/shared-actions";
+import { sendMessageAction } from "@/app/(app)/requests/shared-actions";
 import type { Selection } from "@/lib/rules";
 import type { Prisma } from "@prisma/client";
 import { FileText, Paperclip, Download, Award } from "lucide-react";
+import { NegotiationActions } from "./negotiation-actions";
+import { countersLeft, MAX_COUNTER_OFFERS } from "@/lib/negotiation";
 
 export type FullRequest = Prisma.ConsentRequestGetPayload<{
   include: {
@@ -122,7 +124,7 @@ export function NegotiationCard({ request, side }: { request: FullRequest; side:
     <Card className="space-y-4" id="negotiation">
       <SectionTitle
         title="Fee negotiation"
-        desc="Unlimited counter-offers. Once a fee is agreed, the owner can share contact details and payment is settled directly — never through Consent."
+        desc={`Each side can send up to ${MAX_COUNTER_OFFERS} counter-offers. Once a fee is agreed, the owner can share contact details and payment is settled directly, never through Consent.`}
       />
       <ol className="space-y-2">
         {offers.map((o) => (
@@ -136,41 +138,18 @@ export function NegotiationCard({ request, side }: { request: FullRequest; side:
           </li>
         ))}
       </ol>
-      {canAct && (
-        <div className="space-y-3 border-t hairline pt-3">
-          {latest && latest.bySide !== side && latest.status === "OPEN" && (
-            <form action={acceptOfferAction} className="space-y-2">
-              <input type="hidden" name="id" value={request.id} />
-              {side === "consenter" && !request.contactsRevealed && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name="shareContacts" defaultChecked className="size-4 accent-black" />
-                  Share my contact details so they can pay me directly
-                </label>
-              )}
-              <SubmitButton>Accept {fmtMoney(latest.amount.toString(), latest.currency)}</SubmitButton>
-            </form>
-          )}
-          <form action={makeOfferAction} className="flex flex-wrap items-end gap-2">
-            <input type="hidden" name="id" value={request.id} />
-            <div className="w-28">
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-ink-faint">Amount</label>
-              <Input name="amount" type="number" step="0.01" min="0" required placeholder="500" />
-            </div>
-            <div className="w-20">
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-ink-faint">Currency</label>
-              <Input name="currency" defaultValue={latest?.currency ?? "USD"} maxLength={3} required />
-            </div>
-            <div className="min-w-40 flex-1">
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-ink-faint">Scope note</label>
-              <Input name="scopeNote" placeholder="optional change to scope" />
-            </div>
-            <SubmitButton variant="secondary">Counter-offer</SubmitButton>
-          </form>
-          <form action={closeNegotiationAction}>
-            <input type="hidden" name="id" value={request.id} />
-            <SubmitButton variant="ghost" size="sm">Walk away (close request)</SubmitButton>
-          </form>
-        </div>
+      {canAct && latest && (
+        <NegotiationActions
+          requestId={request.id}
+          side={side}
+          latestLabel={fmtMoney(latest.amount.toString(), latest.currency)}
+          latestIsTheirs={latest.bySide !== side && latest.status === "OPEN"}
+          currency={latest.currency}
+          showShareContacts={side === "consenter" && !request.contactsRevealed}
+          myCountersLeft={countersLeft(request.offers, side)}
+          theirCountersLeft={countersLeft(request.offers, side === "consenter" ? "requester" : "consenter")}
+          otherName={side === "consenter" ? request.requester.displayName : request.consenter.displayName}
+        />
       )}
     </Card>
   );

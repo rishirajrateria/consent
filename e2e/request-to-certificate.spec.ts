@@ -41,8 +41,10 @@ test("negotiated request ends in a verified certificate", async ({ browser }) =>
   await visit(clips, `/r-panel/requests/${requestId}`);
   const negotiation = clips.locator("#negotiation");
   await expect(negotiation.getByRole("button", { name: /^Accept/ })).toBeVisible();
+  await expect(negotiation.getByText(/you 3 of 3/)).toBeVisible();
+  await negotiation.getByRole("radio", { name: "Counter-offer" }).click();
   await negotiation.locator('input[name="amount"]').fill("300");
-  await negotiation.getByRole("button", { name: "Counter-offer" }).click();
+  await negotiation.getByRole("button", { name: "Send counter-offer" }).click();
   await expect
     .poll(async () =>
       (await db.negotiationOffer.findFirst({ where: { requestId, version: 2 } }))?.bySide
@@ -50,6 +52,7 @@ test("negotiated request ends in a verified certificate", async ({ browser }) =>
     .toBe("requester");
   await visit(clips, `/r-panel/requests/${requestId}`);
   await expect(clips.getByText("by Casey Clips (requester)")).toBeVisible();
+  await expect(clips.locator("#negotiation").getByText(/you 2 of 3/)).toBeVisible();
 
   // ── Show owner accepts → deal agreed, contacts revealed ─────
   await visit(show, `/c-panel/requests/${requestId}`);

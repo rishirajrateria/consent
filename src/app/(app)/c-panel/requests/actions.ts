@@ -10,6 +10,7 @@ import { revealContacts } from "@/lib/requests";
 import { recalcConsenterScore } from "@/lib/score";
 import type { Selection } from "@/lib/rules";
 import { Prisma } from "@prisma/client";
+import { canSendOffer, COUNTERS_USED_UP } from "@/lib/negotiation";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
@@ -169,12 +170,16 @@ export async function markPaidAction(formData: FormData) {
   const amount = parseFloat(String(formData.get("amount") ?? ""));
   const currency = String(formData.get("currency") ?? "USD").toUpperCase().slice(0, 3);
   if (!(amount > 0)) fail(path, "Enter a fee amount");
+  // A fee set again after an earlier negotiation counts as a counter-offer.
+  const earlier = await db.negotiationOffer.findMany({ where: { requestId: id }, select: { version: true, bySide: true } });
+  if (!canSendOffer(earlier, "consenter")) fail(path, COUNTERS_USED_UP);
 
   await db.$transaction([
+    db.negotiationOffer.updateMany({ where: { requestId: id, status: "OPEN" }, data: { status: "SUPERSEDED" } }),
     db.negotiationOffer.create({
       data: {
         requestId: id,
-        version: 1,
+        version: Math.max(0, ...earlier.map((o) => o.version)) + 1,
         bySide: "consenter",
         byUserId: session.userId,
         amount: new Prisma.Decimal(amount.toFixed(2)),

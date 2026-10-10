@@ -7,6 +7,7 @@ import { storeUpload } from "@/lib/storage";
 import { revealContacts } from "@/lib/requests";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 import { Prisma } from "@prisma/client";
+import { canSendOffer, COUNTERS_USED_UP } from "@/lib/negotiation";
 
 /** Resolves which side of a request the current user is on (with membership). */
 export async function resolveSide(requestId: string) {
@@ -87,6 +88,9 @@ export async function makeOfferAction(formData: FormData) {
   const currency = String(formData.get("currency") ?? "USD").toUpperCase().slice(0, 3);
   const scopeNote = String(formData.get("scopeNote") ?? "").trim() || null;
   if (!(amount >= 0)) redirect(`${path}?error=${encodeURIComponent("Enter a valid amount")}`);
+
+  // Each side gets at most 3 counter-offers; after that, accept or end and raise a new request.
+  if (!canSendOffer(request.offers, side)) redirect(`${path}?error=${encodeURIComponent(COUNTERS_USED_UP)}`);
 
   const latest = request.offers[0];
   await db.$transaction([

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -65,6 +66,14 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
         <Alert tone="warn">
           The consenter did not respond within the window. The fee is forfeited — you can submit a
           fresh request any time.
+        </Alert>
+      )}
+      {request.status === "CLOSED" && (
+        <Alert tone="warn">
+          This request was closed without a deal. To try again, raise a new request.{" "}
+          <Link href={`/r-panel/new?consenter=${request.consenter.slug}`} className="font-medium underline underline-offset-4">
+            Raise a new request
+          </Link>
         </Alert>
       )}
       {request.status === "CHANGES_REQUESTED" && (

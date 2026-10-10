@@ -119,6 +119,18 @@ in DECISIONS.md, and continue").
     arranging payment. Once shared, each side's profile settings decide which fields (email, phone,
     manager) appear, and a `contacts_shared` event records who shared and when.
 
+25d. **Review first, decide last (owner amendment).** Request pages show who's asking, what they
+    want, the exact files, messages and history before any action; the owner's answer comes last
+    in one card (Approve / Set a fee / Ask for changes / Decline) with a single confirm button at the
+    end, so typed input can't be lost by pressing a different button. The requester page follows
+    the same order with its next steps at the bottom.
+25e. **Counter-offer limit (owner amendment).** Each side can send at most 3 counter-offers per
+    request (`MAX_COUNTER_OFFERS`, `src/lib/negotiation.ts`); the opening fee is not a counter, and
+    revising your own open offer uses one. A side with none left can only accept the other side's
+    latest offer or end the request; to keep negotiating, a new request must be raised (closed
+    requests link straight to a new one). Enforced in the server actions, shown on both sides as
+    "Counter-offers left: you N of 3".
+
 26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
     existing interfaces; admin read-only impersonation; relationship-wide dossier export;
