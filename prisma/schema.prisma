@@ -40,9 +40,6 @@ model User {
   notifPrefs           NotificationPref?
   decisions            ConsentRequest[]      @relation("decidedBy")
   messages             RequestMessage[]
-  offers               NegotiationOffer[]
-  requestMeetings      RequestMeeting[]
-  signatures           AgreementSignature[]
   uploadedFiles        StoredFile[]
   verificationMeetings VerificationMeeting[] @relation("officer")
   scoreAdjustments     ScoreLog[]            @relation("adjustedBy")
@@ -87,7 +84,6 @@ enum OtpPurpose {
   EMAIL_VERIFY
   PHONE_VERIFY
   LOGIN
-  SIGNATURE
 }
 
 model OtpCode {
@@ -142,47 +138,37 @@ enum VerificationStatus {
 }
 
 model ConsenterProfile {
-  id                                  String              @id @default(cuid())
-  slug                                String              @unique
-  displayName                         String
-  legalName                           String
-  normalizedLegalName                 String
-  entityType                          ConsenterEntityType
-  aliases                             String[]            @default([])
-  bio                                 String?
-  photoFileId                         String?
-  country                             String
-  category                            String?
-  status                              VerificationStatus  @default(DRAFT)
-  verifiedAt                          DateTime?
-  documentNumberHash                  String? // for duplicate detection
-  duplicateFlag                       Boolean             @default(false)
-  adminNotes                          String?
-  // which contact details are revealed on deal agreed
-  shareEmail                          Boolean             @default(true)
-  sharePhone                          Boolean             @default(false)
-  shareManager                        Boolean             @default(false)
-  managerContact                      String?
-  contactEmail                        String?
-  contactPhone                        String?
-  contactAddress                      String?
-  shareAddress                        Boolean             @default(false)
-  // defaults
-  defaultRequireLegalAgreementForPaid Boolean             @default(false)
-  // Consent price: what a requester pays IN-APP just to ask (spam deterrent).
-  // Credited to this consenter's balance and settled weekly. null/0 = free to ask.
-  consentPrice                        Decimal?            @db.Decimal(14, 2)
-  consentPriceCurrency                String              @default("USD")
-  payoutDetails                       String? // where weekly settlements are paid (bank/UPI/PayPal note)
+  id                   String              @id @default(cuid())
+  slug                 String              @unique
+  displayName          String
+  legalName            String
+  normalizedLegalName  String
+  entityType           ConsenterEntityType
+  aliases              String[]            @default([])
+  bio                  String?
+  photoFileId          String?
+  country              String
+  category             String?
+  status               VerificationStatus  @default(DRAFT)
+  verifiedAt           DateTime?
+  documentNumberHash   String? // for duplicate detection
+  duplicateFlag        Boolean             @default(false)
+  adminNotes           String?
+  // Consent request fee: what someone pays IN-APP to ask this profile. Held
+  // until the answer: 80% to this profile on a yes, 80% refunded otherwise.
+  // null = free to ask. A paid fee is at least Currency.minConsentFee.
+  consentPrice         Decimal?            @db.Decimal(14, 2)
+  consentPriceCurrency String              @default("INR")
+  payoutDetails        String? // where weekly settlements are paid (bank/UPI/PayPal note)
   // Request limits the owner chooses (null = no limit). New requests are paused
   // while any limit is reached.
-  maxOpenRequests                     Int? // requests waiting for their first answer, at once
-  dailyRequestLimit                   Int? // new requests in any 24 hours
-  weeklyRequestLimit                  Int? // new requests in any 7 days
-  monthlyRequestLimit                 Int? // new requests in any 30 days
-  score                               Int                 @default(500)
-  createdAt                           DateTime            @default(now())
-  updatedAt                           DateTime            @updatedAt
+  maxOpenRequests      Int? // requests waiting for their first answer, at once
+  dailyRequestLimit    Int? // new requests in any 24 hours
+  weeklyRequestLimit   Int? // new requests in any 7 days
+  monthlyRequestLimit  Int? // new requests in any 30 days
+  score                Int                 @default(500)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   members        ConsenterMember[]
   documents      StoredFile[]          @relation("consenterDocs")
@@ -197,6 +183,9 @@ model ConsenterProfile {
   settlements    Settlement[]
   priceTiers     ConsentPriceTier[]
   tipOffs        PublicTipOff[]
+  // Every profile can both receive and send. This is its sending half:
+  // created together with it, same name, same verification.
+  asker          RequesterProfile?     @relation("asksAs")
 
   @@index([normalizedLegalName])
   @@index([status])
@@ -249,34 +238,28 @@ enum RequesterType {
   OTHER
 }
 
+// The sending half of a profile. Every ConsenterProfile has exactly one
+// (consenterId), created with it and kept in step (name, country, status).
 model RequesterProfile {
-  id                  String             @id @default(cuid())
-  slug                String             @unique
-  displayName         String
-  legalName           String
-  type                RequesterType
-  country             String
-  description         String?
-  categories          String[]           @default([])
-  channels            Json               @default("[]") // [{platform, url, followers}]
-  signatoryName       String?
-  status              VerificationStatus @default(DRAFT)
-  approvedAt          DateTime?
-  adminNotes          String?
-  shareEmail          Boolean            @default(true)
-  sharePhone          Boolean            @default(false)
-  shareManager        Boolean            @default(false)
-  managerContact      String?
-  contactEmail        String?
-  contactPhone        String?
-  contactAddress      String?
-  shareAddress        Boolean            @default(false)
-  score               Int                @default(500)
-  // subscription
-  onboardingFeePaidAt DateTime?
-  subscriptionEndsAt  DateTime?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  id               String             @id @default(cuid())
+  consenterId      String?            @unique
+  consenter        ConsenterProfile?  @relation("asksAs", fields: [consenterId], references: [id], onDelete: Cascade)
+  slug             String             @unique
+  displayName      String
+  legalName        String
+  type             RequesterType
+  country          String
+  description      String?
+  categories       String[]           @default([])
+  channels         Json               @default("[]") // [{platform, url, followers}]
+  status           VerificationStatus @default(DRAFT)
+  approvedAt       DateTime?
+  adminNotes       String?
+  score            Int                @default(500)
+  // Yearly membership, paid only while the admin has the membership fee on.
+  membershipEndsAt DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   members        RequesterMember[]
   documents      StoredFile[]      @relation("requesterDocs")
@@ -292,8 +275,7 @@ model RequesterProfile {
 enum TeamRole {
   OWNER
   MANAGER
-  LEGAL
-  EDITOR
+  EDITOR // the sending half's mirror of MANAGER
   VIEWER
 }
 
@@ -305,7 +287,6 @@ model ConsenterMember {
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   role          TeamRole
   canApprove    Boolean          @default(false)
-  canNegotiate  Boolean          @default(false)
   canEditRules  Boolean          @default(false)
   canExport     Boolean          @default(false)
   canManageTeam Boolean          @default(false)
@@ -328,12 +309,11 @@ model RequesterMember {
 
 model TeamInvite {
   id            String    @id @default(cuid())
-  profileKind   String // "consenter" | "requester"
+  profileKind   String // "consenter" (the profile); "requester" only on old invites
   profileId     String
   email         String
   role          TeamRole
   canApprove    Boolean   @default(false)
-  canNegotiate  Boolean   @default(false)
   canEditRules  Boolean   @default(false)
   canExport     Boolean   @default(false)
   canManageTeam Boolean   @default(false)
@@ -363,42 +343,6 @@ model SocialAccount {
 enum MeetingMode {
   VIDEO
   IN_PERSON
-}
-
-// ── Meetings between the two sides of a request ──────────────
-enum CallMode {
-  VIDEO
-  PHONE
-  IN_PERSON
-}
-
-enum RequestMeetingStatus {
-  SCHEDULED
-  CANCELLED
-}
-
-model RequestMeeting {
-  id            String               @id @default(cuid())
-  requestId     String
-  request       ConsentRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  startsAt      DateTime
-  endsAt        DateTime
-  timeZone      String // IANA zone of the person who scheduled it, e.g. "Asia/Kolkata"
-  mode          CallMode
-  link          String? // video link, or the number to call
-  location      String? // in person
-  note          String?
-  createdById   String
-  createdBy     User                 @relation(fields: [createdById], references: [id])
-  createdBySide String // "consenter" | "requester"
-  status        RequestMeetingStatus @default(SCHEDULED)
-  sequence      Int                  @default(0) // bumped on every change so calendars update the same event
-  calendarRef   String? // calendar provider reference(s)
-  cancelledAt   DateTime?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-
-  @@index([requestId])
 }
 
 model VerificationMeeting {
@@ -479,7 +423,6 @@ model ConsentMatrixEntry {
   policy           MatrixPolicy     @default(ASK)
   maxDurationSec   Int?
   thumbnailAllowed Boolean          @default(true)
-  paidDefault      Boolean          @default(false)
 
   @@unique([consenterId, platformId, formatId, assetTypeId])
 }
@@ -535,7 +478,6 @@ enum FileKind {
   RAW_CONTENT
   THUMBNAIL
   ATTACHMENT
-  AGREEMENT
   EVIDENCE
   PROFILE_PHOTO
 }
@@ -573,12 +515,8 @@ enum RequestStatus {
   DRAFT
   SUBMITTED
   PENDING
-  IN_NEGOTIATION
-  DEAL_AGREED
-  CHANGES_REQUESTED
-  APPROVED_IN_PRINCIPLE
-  AGREEMENT_MODE_PENDING
-  LEGAL_AGREEMENT_PENDING
+  CHANGES_REQUESTED // the owner asked a question; the requester answers
+  APPROVED_IN_PRINCIPLE // yes, waiting for the final content file the certificate binds to
   APPROVED
   DENIED
   CLOSED
@@ -590,11 +528,6 @@ enum ValidityKind {
   SINGLE_PUBLICATION
   DATE_RANGE
   PERPETUAL
-}
-
-enum AgreementMode {
-  APP_RECORD
-  LEGALLY_BINDING
 }
 
 model ConsentRequest {
@@ -625,15 +558,6 @@ model ConsentRequest {
   approvedSelections Json? // possibly reduced scope
   approvedThumbnail  Boolean?
 
-  // payment/fee between parties
-  isPaid         Boolean  @default(false)
-  agreedAmount   Decimal? @db.Decimal(14, 2)
-  agreedCurrency String?
-
-  // agreement mode
-  agreementMode           AgreementMode?
-  agreementModeProposedBy String? // "consenter"|"requester"
-
   // lifecycle
   submittedAt       DateTime?
   decidedAt         DateTime?
@@ -647,20 +571,14 @@ model ConsentRequest {
   reminder90Sent    Boolean   @default(false)
   remindedAt        DateTime? // last "about to expire" reminder; one per 7-day window
   closedReason      String?
-  contactsRevealed  Boolean   @default(false)
-  contactsSnapshot  Json?
 
-  files       StoredFile[]
-  messages    RequestMessage[]
-  offers      NegotiationOffer[]
-  grant       Grant?
-  agreement   Agreement?
-  payments    Payment[]
-  earning     EarningEntry?
-  reports     Report[]
-  events      RequestEvent[]
-  meetings    RequestMeeting[]
-  lastOfferAt DateTime?
+  files    StoredFile[]
+  messages RequestMessage[]
+  grant    Grant?
+  payments Payment[]
+  earning  EarningEntry?
+  reports  Report[]
+  events   RequestEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -692,96 +610,6 @@ model RequestMessage {
   body             String
   attachmentFileId String?
   createdAt        DateTime       @default(now())
-}
-
-enum OfferStatus {
-  OPEN
-  ACCEPTED
-  SUPERSEDED
-  WITHDRAWN
-}
-
-model NegotiationOffer {
-  id        String         @id @default(cuid())
-  requestId String
-  request   ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  version   Int
-  bySide    String // "consenter"|"requester"
-  byUserId  String
-  byUser    User           @relation(fields: [byUserId], references: [id])
-  amount    Decimal        @db.Decimal(14, 2)
-  currency  String
-  scopeNote String?
-  status    OfferStatus    @default(OPEN)
-  createdAt DateTime       @default(now())
-
-  @@unique([requestId, version])
-}
-
-// ─────────────────────────────────────────────────────────────
-// Agreements (legally binding mode)
-// ─────────────────────────────────────────────────────────────
-
-enum AgreementStatus {
-  PROPOSED
-  DECLINED
-  DRAFTING
-  AWAITING_SIGNATURES
-  UPLOAD_PENDING_CONFIRMATION
-  COMPLETED
-  CANCELLED
-}
-
-enum AgreementKind {
-  PLATFORM_GENERATED
-  UPLOADED
-}
-
-model Agreement {
-  id                    String               @id @default(cuid())
-  requestId             String               @unique
-  request               ConsentRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  kind                  AgreementKind?
-  status                AgreementStatus      @default(PROPOSED)
-  proposedBySide        String
-  templateId            String?
-  template              AgreementTemplate?   @relation(fields: [templateId], references: [id])
-  body                  String? // rendered agreement text
-  bodyVersion           Int                  @default(1)
-  uploadedFileId        String?
-  uploadConfirmedBySide String?
-  sha256                String?
-  signatures            AgreementSignature[]
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
-}
-
-model AgreementSignature {
-  id          String    @id @default(cuid())
-  agreementId String
-  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-  side        String // "consenter"|"requester"
-  typedName   String
-  otpVerified Boolean   @default(false)
-  ip          String?
-  signedAt    DateTime  @default(now())
-
-  @@unique([agreementId, side])
-}
-
-model AgreementTemplate {
-  id              String      @id @default(cuid())
-  name            String
-  jurisdiction    String // country code or "GLOBAL"
-  body            String // with {{placeholders}}
-  optionalClauses Json        @default("[]")
-  disclaimer      String
-  active          Boolean     @default(true)
-  agreements      Agreement[]
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -845,14 +673,14 @@ model TakedownRequest {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Payments (platform fees from requesters only)
+// Payments: the yearly membership, and per request the consent request fee
+// (held, 80/20) plus the platform fee (20% of it, never refunded)
 // ─────────────────────────────────────────────────────────────
 
 enum PaymentPurpose {
-  ONBOARDING
-  SUBSCRIPTION
-  PER_REQUEST
-  CONSENT_PRICE // consenter-set ask-price, collected in-app, settled weekly to the consenter
+  MEMBERSHIP // the yearly membership (only charged while the admin has the fee on)
+  PER_REQUEST // the platform fee: 20% of the consent request fee, never refunded
+  CONSENT_PRICE // the consent request fee: held until the answer, 80/20
 }
 
 enum PaymentStatus {
@@ -935,17 +763,27 @@ model Settlement {
   @@index([consenterId])
 }
 
+// Per country: the yearly membership price and the tax added to Consent's
+// own fees (membership and platform fee).
 model PriceConfig {
   id            String   @id @default(cuid())
   country       String // ISO code or "DEFAULT"
   currency      String
-  onboardingFee Decimal  @db.Decimal(14, 2)
-  yearlyFee     Decimal  @db.Decimal(14, 2)
-  perRequestFee Decimal  @db.Decimal(14, 2)
+  membershipFee Decimal  @db.Decimal(14, 2) // per year; charged only while the fee is switched on
   taxLabel      String?
   taxRate       Decimal? @db.Decimal(5, 2)
 
   @@unique([country])
+}
+
+// Currencies a consent request fee can be set in, and the smallest paid fee
+// in each (about ₹100). Free is always allowed. Admin-editable.
+model Currency {
+  code          String  @id // ISO 4217, e.g. "INR"
+  name          String
+  minConsentFee Decimal @db.Decimal(14, 2)
+  active        Boolean @default(true)
+  sortOrder     Int     @default(0)
 }
 
 model Coupon {

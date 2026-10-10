@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { authenticator } from "otplib";
 import { db } from "./db";
 import { redirect } from "next/navigation";
+import { ensureAsker, ensureProfileFor, mirrorMember, profilesOf } from "./profiles";
 
 const SESSION_COOKIE = "consent_session";
 const SESSION_DAYS = 30;
@@ -121,6 +122,11 @@ export function hasAdminPerm(
 }
 
 // ── Active profile context ─────────────────────────────────────
+// Every profile can both receive and send (src/lib/profiles.ts). The session
+// remembers which profile is active as "consenter:<profile id>". Old values
+// ("requester:<id>") are mapped to the profile that sending half belongs to.
+// requireConsenter and requireRequester both resolve that same profile: one
+// returns its receiving half, the other its sending half.
 
 export type ProfileContext =
   | { kind: "consenter"; id: string }
@@ -134,59 +140,88 @@ export function parseProfileContext(s: string | null): ProfileContext {
   return null;
 }
 
+/** Make a profile active. A sending half is stored as the profile it belongs to. */
 export async function setActiveProfile(ctx: ProfileContext) {
   const session = await getSession();
   if (!session) return;
-  await db.session.update({
-    where: { id: session.id },
-    data: { activeProfile: ctx ? `${ctx.kind}:${ctx.id}` : null },
-  });
+  let value: string | null = null;
+  if (ctx?.kind === "consenter") value = `consenter:${ctx.id}`;
+  if (ctx?.kind === "requester") value = `consenter:${await ensureProfileFor(ctx.id)}`;
+  await db.session.update({ where: { id: session.id }, data: { activeProfile: value } });
+  // The session is read once per request (cache), so keep that copy in step too.
+  session.activeProfile = value;
 }
 
-/** Resolve active consenter membership for the current session, or redirect. */
-export async function requireConsenter(minPerm?: "canApprove" | "canNegotiate" | "canEditRules" | "canExport" | "canManageTeam") {
-  const session = await requireUser();
+type Session = NonNullable<Awaited<ReturnType<typeof getSession>>>;
+
+/**
+ * The active profile's membership for this person: the profile in the
+ * session if they still belong to it, else their first profile (preferring
+ * one they own). Null when they have no profile yet.
+ */
+async function activeMembership(session: Session) {
   const ctx = parseProfileContext(session.activeProfile);
-  let member =
-    ctx?.kind === "consenter"
-      ? await db.consenterMember.findUnique({
-          where: { consenterId_userId: { consenterId: ctx.id, userId: session.userId } },
-          include: { consenter: true },
-        })
-      : null;
-  if (!member) {
-    member = await db.consenterMember.findFirst({
-      where: { userId: session.userId },
-      include: { consenter: true },
-    });
-    if (member) await setActiveProfile({ kind: "consenter", id: member.consenterId });
+  let profileId: string | null = null;
+  if (ctx?.kind === "consenter") profileId = ctx.id;
+  if (ctx?.kind === "requester") {
+    const r = await db.requesterProfile.findUnique({ where: { id: ctx.id }, select: { id: true } });
+    if (r) profileId = await ensureProfileFor(r.id);
   }
-  if (!member) redirect("/dashboard");
-  // 2FA is mandatory for consenter owners and team members
+  let member = profileId
+    ? await db.consenterMember.findUnique({
+        where: { consenterId_userId: { consenterId: profileId, userId: session.userId } },
+        include: { consenter: true },
+      })
+    : null;
+  if (!member) {
+    const all = await profilesOf(session.userId);
+    const first = all.find((m) => m.role === "OWNER") ?? all[0];
+    member = first ? { ...first, consenter: first.consenter } : null;
+  }
+  if (member && session.activeProfile !== `consenter:${member.consenterId}`) {
+    await setActiveProfile({ kind: "consenter", id: member.consenterId });
+  }
+  return member;
+}
+
+type ProfilePerm = "canApprove" | "canEditRules" | "canExport" | "canManageTeam";
+
+/**
+ * The active profile, for pages that receive requests, set terms or manage
+ * the profile. Redirects to onboarding without a profile, and to set up 2FA
+ * first (every account answers requests, so every account needs it).
+ */
+export async function requireConsenter(minPerm?: ProfilePerm) {
+  const session = await requireUser();
+  const member = await activeMembership(session);
+  if (!member) redirect("/onboarding");
   if (!session.user.totpEnabled) redirect("/settings/security?admin2fa=1");
   if (minPerm && member.role !== "OWNER" && !member[minPerm]) redirect("/c-panel?denied=1");
   return { session, member, consenter: member.consenter };
 }
 
+/**
+ * The active profile's sending half, for pages that send requests. Same
+ * profile as requireConsenter; its sending half (and this person's seat on
+ * it) is created if missing.
+ */
 export async function requireRequester() {
   const session = await requireUser();
-  const ctx = parseProfileContext(session.activeProfile);
-  let member =
-    ctx?.kind === "requester"
-      ? await db.requesterMember.findUnique({
-          where: { requesterId_userId: { requesterId: ctx.id, userId: session.userId } },
-          include: { requester: true },
-        })
-      : null;
+  const profile = await activeMembership(session);
+  if (!profile) redirect("/onboarding");
+  if (!session.user.totpEnabled) redirect("/settings/security?admin2fa=1");
+  const asker = await ensureAsker(profile.consenterId);
+  let member = await db.requesterMember.findUnique({
+    where: { requesterId_userId: { requesterId: asker.id, userId: session.userId } },
+    include: { requester: true },
+  });
   if (!member) {
-    member = await db.requesterMember.findFirst({
-      where: { userId: session.userId },
+    await mirrorMember(profile);
+    member = await db.requesterMember.findUniqueOrThrow({
+      where: { requesterId_userId: { requesterId: asker.id, userId: session.userId } },
       include: { requester: true },
     });
-    if (member) await setActiveProfile({ kind: "requester", id: member.requesterId });
   }
-  // No requester profile yet: show how to get one rather than a silent bounce.
-  if (!member) redirect("/onboarding/requester");
   return { session, member, requester: member.requester };
 }
 
@@ -198,7 +233,7 @@ export function generateOtpCode(): string {
 
 export async function issueOtp(
   userId: string,
-  purpose: "EMAIL_VERIFY" | "PHONE_VERIFY" | "LOGIN" | "SIGNATURE",
+  purpose: "EMAIL_VERIFY" | "PHONE_VERIFY" | "LOGIN",
   target: string
 ): Promise<string> {
   const code = generateOtpCode();
@@ -211,7 +246,7 @@ export async function issueOtp(
 /** Uses up a live code. With `target`, only a code sent to that address counts. */
 export async function consumeOtp(
   userId: string,
-  purpose: "EMAIL_VERIFY" | "PHONE_VERIFY" | "LOGIN" | "SIGNATURE",
+  purpose: "EMAIL_VERIFY" | "PHONE_VERIFY" | "LOGIN",
   code: string,
   target?: string
 ): Promise<boolean> {

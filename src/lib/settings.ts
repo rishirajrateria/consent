@@ -2,7 +2,8 @@ import { db } from "./db";
 
 export type SystemSettings = {
   slaDays: number;
-  negotiationIdleDays: number;
+  // The yearly membership. Off for now: every verified account can send for free.
+  membershipFeeOn: boolean;
   takedownResponseDays: number;
   maxUploadMb: number;
   minCreativePlanChars: number;
@@ -32,7 +33,7 @@ export type SystemSettings = {
 
 export const DEFAULT_SETTINGS: SystemSettings = {
   slaDays: 7,
-  negotiationIdleDays: 7,
+  membershipFeeOn: false,
   takedownResponseDays: 7,
   maxUploadMb: 200,
   minCreativePlanChars: 120,
