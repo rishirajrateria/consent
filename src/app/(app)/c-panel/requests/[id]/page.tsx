@@ -11,6 +11,7 @@ import {
 } from "@/components/request-view";
 import {
   approveRequestAction, requestChangesAction, markPaidAction, denyRequestAction, consenterProceedAppRecordAction,
+  shareContactsAction,
 } from "../actions";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
@@ -138,6 +139,13 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
               <input type="checkbox" name="proposeLegal" defaultChecked={request.isPaid && consenter.defaultRequireLegalAgreementForPaid} className="size-4 accent-black" />
               Also propose a legally binding agreement (requester must accept)
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="shareContacts" defaultChecked={request.isPaid} className="size-4 accent-black" />
+              Also share my contact details with {request.requester.displayName}
+            </label>
+            <p className="text-xs text-ink-faint">
+              Leave it unticked to just approve. You can share your details later from this page.
+            </p>
             <SubmitButton>Approve{request.isPaid ? " (deal agreed)" : ""}</SubmitButton>
           </form>
 
@@ -210,6 +218,27 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       )}
 
       <ContactsCard request={request} />
+      {!request.contactsRevealed &&
+        ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"].includes(request.status) &&
+        (member.role === "OWNER" || member.canApprove || member.canNegotiate) && (
+          <Card className="space-y-3">
+            <SectionTitle
+              title="Contact details not shared"
+              desc={
+                request.isPaid
+                  ? `You approved without sharing your contact details. ${request.requester.displayName} needs a way to pay the agreed fee — share your details, or arrange it in messages.`
+                  : `You approved without sharing your contact details. Share them if you'd like ${request.requester.displayName} to be able to reach you directly.`
+              }
+            />
+            <form action={shareContactsAction}>
+              <input type="hidden" name="id" value={request.id} />
+              <SubmitButton variant="secondary">Share my contact details</SubmitButton>
+            </form>
+            <p className="text-xs text-ink-faint">
+              Which details are shared (email, phone, manager) is set in your profile settings.
+            </p>
+          </Card>
+        )}
       <NegotiationCard request={request} side="consenter" />
       <div className="flex items-center justify-between">
         <ScoreRing score={request.requester.score} size={52} />

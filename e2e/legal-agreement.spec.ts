@@ -71,6 +71,19 @@ test("approval with a legally binding agreement signed by both sides", async ({ 
   await expect(clips.getByText("Verified authentic")).toBeVisible();
   await expect(clips.getByText("Legally binding agreement")).toBeVisible();
 
+  // ── Free approval: Jane just approved, so nothing was shared ─
+  expect(request!.contactsRevealed).toBe(false);
+  await visit(jane, `/c-panel/requests/${requestId}`);
+  await expect(jane.getByText("Contact details not shared")).toBeVisible();
+
+  // ── She chooses to share later ───────────────────────────────
+  await jane.getByRole("button", { name: "Share my contact details" }).click();
+  await expect
+    .poll(async () => (await db.consentRequest.findUnique({ where: { id: requestId } }))!.contactsRevealed)
+    .toBe(true);
+  await visit(clips, `/r-panel/requests/${requestId}`);
+  await expect(clips.getByText("Shared contact details")).toBeVisible();
+
   await clips.context().close();
   await jane.context().close();
 });

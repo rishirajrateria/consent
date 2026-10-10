@@ -173,10 +173,11 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
         </Card>
 
         <Card className="space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Contact sharing on deal agreed</h2>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Contact details you share</h2>
           <p className="text-xs text-ink-faint">
-            When you and a requester agree a paid deal, Consent reveals the contact details you
-            choose here so you can settle payment directly. Consent never processes that payment.
+            Nothing is shared automatically. When you approve a request — free or paid — you choose
+            whether to share your contact details. If you do, these are the ones the requester sees.
+            Any fee is settled directly between you; Consent never processes it.
           </p>
           <div className="space-y-2">
             <label className="flex items-center gap-3 text-sm">

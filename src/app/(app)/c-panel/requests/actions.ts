@@ -6,6 +6,7 @@ import { requireConsenter } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { notifyRequesterTeam } from "@/lib/notify";
 import { issueGrant } from "@/lib/grants";
+import { revealContacts } from "@/lib/requests";
 import { recalcConsenterScore } from "@/lib/score";
 import type { Selection } from "@/lib/rules";
 import { Prisma } from "@prisma/client";
@@ -98,6 +99,12 @@ export async function approveRequestAction(formData: FormData) {
     targetId: id,
   });
 
+  const shareContacts = formData.get("shareContacts") === "on";
+  if (shareContacts) await revealContacts(id, session.user.name);
+  const contactLine = shareContacts
+    ? ` ${consenter.displayName} also shared their contact details.`
+    : "";
+
   if (requireLegal) {
     await db.agreement.upsert({
       where: { requestId: id },
@@ -107,14 +114,14 @@ export async function approveRequestAction(formData: FormData) {
     await db.consentRequest.update({ where: { id }, data: { status: "LEGAL_AGREEMENT_PENDING" } });
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} approved — legally binding agreement proposed`,
-      body: `${consenter.displayName} approved${scopeChanged ? " with conditions" : ""} and proposes a legally binding agreement. You must accept or decline.`,
+      body: `${consenter.displayName} approved${scopeChanged ? " with conditions" : ""} and proposes a legally binding agreement. You must accept or decline.${contactLine}`,
       href: `/r-panel/requests/${id}`,
       critical: true,
     });
   } else {
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} approved${scopeChanged ? " with conditions" : ""}`,
-      body: "Choose the agreement mode to receive your certificate (default: Consent-app record).",
+      body: `Choose the agreement mode to receive your certificate (default: Consent-app record).${contactLine}`,
       href: `/r-panel/requests/${id}`,
       critical: true,
     });
@@ -254,4 +261,24 @@ export async function consenterProceedAppRecordAction(formData: FormData) {
     await db.consentRequest.update({ where: { id }, data: { status: "APPROVED_IN_PRINCIPLE" } });
   }
   redirect(`/c-panel/requests/${id}`);
+}
+
+/** Consenter shares contact details after approving (free or paid). */
+export async function shareContactsAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { session, member, consenter } = await requireConsenter();
+  const path = `/c-panel/requests/${id}`;
+  if (member.role !== "OWNER" && !member.canApprove && !member.canNegotiate)
+    fail(path, "You don't have permission to share contact details");
+  const request = await db.consentRequest.findUnique({ where: { id } });
+  if (!request || request.consenterId !== consenter.id) redirect("/c-panel/requests");
+  const shareable = ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"];
+  if (!shareable.includes(request.status)) fail(path, "Contact details can be shared once the request is approved");
+  await revealContacts(id, session.user.name);
+  await notifyRequesterTeam(request.requesterId, {
+    title: `${consenter.displayName} shared their contact details`,
+    body: `You can now reach them directly about request #${request.number}.`,
+    href: `/r-panel/requests/${id}`,
+  });
+  redirect(path);
 }

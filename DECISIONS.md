@@ -110,6 +110,15 @@ in DECISIONS.md, and continue").
     reports module. (d) *Playwright e2e suite* covering the spec's 7 flows against a dedicated
     `consent_e2e` database (`npm run e2e:prep`, then `npm run test:e2e`).
 
+25c. **Contact sharing is the owner's choice (owner amendment).** Contact details are never
+    revealed automatically. The consenter decides, for free and paid approvals alike: a "share my
+    contact details" box on the approve form (pre-ticked for paid requests) and on their
+    accept-the-fee form (pre-ticked), plus a "Share my contact details" button on the request page
+    any time after approval. When a requester accepts the owner's fee offer, nothing is shared until
+    the owner chooses; both sides are told so, and the in-app messages remain the fallback for
+    arranging payment. Once shared, each side's profile settings decide which fields (email, phone,
+    manager) appear, and a `contacts_shared` event records who shared and when.
+
 26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the
     existing interfaces; admin read-only impersonation; relationship-wide dossier export;

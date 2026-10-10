@@ -122,7 +122,7 @@ export function NegotiationCard({ request, side }: { request: FullRequest; side:
     <Card className="space-y-4" id="negotiation">
       <SectionTitle
         title="Fee negotiation"
-        desc="Unlimited counter-offers. When one side accepts, contact details are shared and payment is settled directly — never through Consent."
+        desc="Unlimited counter-offers. Once a fee is agreed, the owner can share contact details and payment is settled directly — never through Consent."
       />
       <ol className="space-y-2">
         {offers.map((o) => (
@@ -139,8 +139,14 @@ export function NegotiationCard({ request, side }: { request: FullRequest; side:
       {canAct && (
         <div className="space-y-3 border-t hairline pt-3">
           {latest && latest.bySide !== side && latest.status === "OPEN" && (
-            <form action={acceptOfferAction}>
+            <form action={acceptOfferAction} className="space-y-2">
               <input type="hidden" name="id" value={request.id} />
+              {side === "consenter" && !request.contactsRevealed && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="shareContacts" defaultChecked className="size-4 accent-black" />
+                  Share my contact details so they can pay me directly
+                </label>
+              )}
               <SubmitButton>Accept {fmtMoney(latest.amount.toString(), latest.currency)}</SubmitButton>
             </form>
           )}
@@ -179,7 +185,14 @@ export function ContactsCard({ request }: { request: FullRequest }) {
   };
   return (
     <Card className="space-y-3">
-      <SectionTitle title="Shared contact details" desc="Settle the agreed fee directly. Consent does not track or process this payment in any way." />
+      <SectionTitle
+        title="Shared contact details"
+        desc={
+          request.agreedAmount
+            ? "Shared by the owner. Settle the agreed fee directly. Consent does not track or process this payment in any way."
+            : "Shared by the owner, so you can reach each other directly."
+        }
+      />
       <div className="grid gap-3 sm:grid-cols-2">
         {([["Consenter", snap.consenter], ["Requester", snap.requester]] as const).map(([label, c]) => (
           <div key={label} className="glass-subtle space-y-1 px-4 py-3 text-sm">

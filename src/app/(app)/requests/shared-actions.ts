@@ -164,17 +164,29 @@ export async function acceptOfferAction(formData: FormData) {
       },
     }),
   ]);
-  await revealContacts(id);
-  // Move into agreement-mode selection
+  // Contact details are shared only when the consenter chooses to.
+  const shared = side === "consenter" && formData.get("shareContacts") === "on";
+  if (shared) await revealContacts(id, session.user.name);
   await db.consentRequest.update({ where: { id }, data: { status: "AGREEMENT_MODE_PENDING" } });
 
-  const msg = {
-    title: `Deal agreed on request #${request.number}`,
-    body: `${latest.currency} ${latest.amount.toString()} — contact details are now shared so you can settle directly. Consent does not process or track this payment. Next: choose the agreement mode.`,
+  const fee = `${latest.currency} ${latest.amount.toString()}`;
+  const title = `Deal agreed on request #${request.number}`;
+  await notifyRequesterTeam(request.requesterId, {
+    title,
+    body: shared
+      ? `${fee}. ${request.consenter.displayName} shared their contact details so you can settle the fee directly. Consent does not process this payment. Next: choose the agreement mode.`
+      : `${fee}. ${request.consenter.displayName} hasn't shared contact details — use the messages on this request to arrange payment. Next: choose the agreement mode.`,
+    href: `/r-panel/requests/${id}`,
     critical: true,
-  };
-  await notifyRequesterTeam(request.requesterId, { ...msg, href: `/r-panel/requests/${id}` });
-  await notifyConsenterTeam(request.consenterId, { ...msg, href: `/c-panel/requests/${id}` });
+  });
+  await notifyConsenterTeam(request.consenterId, {
+    title,
+    body: shared
+      ? `${fee}. Your contact details are shared so the fee can be settled directly.`
+      : `${fee}. You haven't shared contact details. The requester needs a way to pay you — share them from the request page, or arrange it in messages.`,
+    href: `/c-panel/requests/${id}`,
+    critical: true,
+  });
   redirect(path);
 }
 

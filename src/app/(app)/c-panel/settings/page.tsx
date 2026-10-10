@@ -108,8 +108,8 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
 
         <Card className="space-y-4">
           <SectionTitle
-            title="Contact sharing on deal agreed"
-            desc="Revealed to the requester only after a paid deal is agreed. Consent never processes the payment."
+            title="Contact details you share"
+            desc="Nothing is shared automatically. When you approve a request — free or paid — you choose whether to share your contact details. If you do, these are the ones the requester sees."
           />
           <div className="space-y-2">
             <label className="flex items-center gap-3 text-sm">

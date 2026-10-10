@@ -135,12 +135,20 @@ export async function onRequestPaid(requestId: string) {
   }
 }
 
-/** Contact details snapshot revealed when a deal is agreed. */
-export async function revealContacts(requestId: string) {
+/**
+ * Shares both sides' contact details on a request. Only ever called because
+ * the consenter chose to share — at approval, when accepting a fee, or later
+ * from the request page. Each side's profile settings decide which fields
+ * (email / phone / manager) are included.
+ */
+export async function revealContacts(requestId: string, sharedBy: string) {
   const request = await db.consentRequest.findUniqueOrThrow({
     where: { id: requestId },
     include: { consenter: true, requester: true },
   });
+  if (request.contactsRevealed && request.contactsSnapshot) {
+    return request.contactsSnapshot;
+  }
   const c = request.consenter;
   const r = request.requester;
   const snapshot = {
@@ -158,9 +166,14 @@ export async function revealContacts(requestId: string) {
     },
     revealedAt: new Date().toISOString(),
   };
-  await db.consentRequest.update({
-    where: { id: requestId },
-    data: { contactsRevealed: true, contactsSnapshot: snapshot },
-  });
+  await db.$transaction([
+    db.consentRequest.update({
+      where: { id: requestId },
+      data: { contactsRevealed: true, contactsSnapshot: snapshot },
+    }),
+    db.requestEvent.create({
+      data: { requestId, type: "contacts_shared", actorName: sharedBy, actorSide: "consenter" },
+    }),
+  ]);
   return snapshot;
 }

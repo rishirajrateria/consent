@@ -115,6 +115,12 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       )}
 
       <ContactsCard request={request} />
+      {!request.contactsRevealed && request.isPaid && request.agreedAmount && (
+        <Alert>
+          {request.consenter.displayName} hasn&apos;t shared contact details yet. Use the messages
+          below to arrange payment of the agreed fee.
+        </Alert>
+      )}
       <NegotiationCard request={request} side="requester" />
       <ScopeCard request={request} />
       <FilesCard request={request} />
