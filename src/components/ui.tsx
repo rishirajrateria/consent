@@ -236,6 +236,8 @@ const STATUS_TONE: Record<string, Tone> = {
   EXPIRED_NO_RESPONSE: "warn",
   IGNORED: "warn",
   FORFEITED: "warn",
+  HELD: "dashed",
+  REFUNDED: "negative",
 };
 
 const toneClasses: Record<Tone, string> = {
@@ -254,7 +256,7 @@ const toneIcon: Record<Tone, LucideIcon> = {
   warn: AlertTriangle,
 };
 
-export function StatusBadge({ status, className }: { status: string; className?: string }) {
+export function StatusBadge({ status, className, label }: { status: string; className?: string; label?: string }) {
   const tone = STATUS_TONE[status] ?? "outline";
   const Icon = toneIcon[tone];
   return (
@@ -266,7 +268,7 @@ export function StatusBadge({ status, className }: { status: string; className?:
       )}
     >
       <Icon className="size-3" strokeWidth={2.5} aria-hidden />
-      <span className={tone === "negative" ? "no-underline" : undefined}>{statusLabel(status)}</span>
+      <span className={tone === "negative" ? "no-underline" : undefined}>{label ?? statusLabel(status)}</span>
     </span>
   );
 }

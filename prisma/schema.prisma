@@ -811,6 +811,7 @@ enum PaymentStatus {
   PAID
   FAILED
   FORFEITED
+  REFUNDED // consent price returned to the requester (no yes from the owner)
 }
 
 model Payment {
@@ -831,6 +832,8 @@ model Payment {
   request     ConsentRequest?  @relation(fields: [requestId], references: [id])
   invoiceNumber String?        @unique
   paidAt      DateTime?
+  refundedAt  DateTime?
+  refundRef   String?
   createdAt   DateTime         @default(now())
   earning     EarningEntry?
 
@@ -840,9 +843,11 @@ model Payment {
 // ── Consenter earnings & weekly settlements ───────────────────
 
 enum EarningStatus {
-  PENDING // collected in-app, awaiting weekly settlement
+  HELD // collected in-app, held until the owner answers
+  PENDING // owner said yes: theirs, awaiting the weekly settlement
   SETTLED // paid out in a weekly settlement batch
-  REVERSED // request auto-expired unanswered — no reward for silence
+  REFUNDED // no yes (declined, withdrawn, ended, expired): returned to the requester
+  REVERSED // legacy: auto-expired before refunds existed
 }
 
 model EarningEntry {
@@ -855,7 +860,7 @@ model EarningEntry {
   payment     Payment          @relation(fields: [paymentId], references: [id])
   amount      Decimal          @db.Decimal(14, 2)
   currency    String
-  status      EarningStatus    @default(PENDING)
+  status      EarningStatus    @default(HELD)
   reversedReason String?
   settlementId String?
   settlement  Settlement?      @relation(fields: [settlementId], references: [id])

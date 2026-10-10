@@ -26,6 +26,8 @@ export interface PaymentProvider {
     description: string;
     returnTo: string;
   }): Promise<{ checkoutUrl: string; providerRef: string }>;
+  /** Returns a captured payment to the payer; mock refunds instantly. */
+  refund(opts: { paymentId: string; providerRef: string | null; amount: string; currency: string; reason: string }): Promise<{ refundRef: string }>;
 }
 
 class MockEmail implements EmailProvider {
@@ -54,6 +56,9 @@ class MockPayments implements PaymentProvider {
       checkoutUrl: `/pay/mock/${opts.paymentId}?return=${encodeURIComponent(opts.returnTo)}`,
       providerRef: ref,
     };
+  }
+  async refund(opts: { paymentId: string; providerRef: string | null; amount: string; currency: string; reason: string }) {
+    return { refundRef: `mock_refund_${opts.paymentId}` };
   }
 }
 

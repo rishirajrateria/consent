@@ -5,7 +5,16 @@ import { PageHeader, Card, SectionTitle, StatusBadge, EmptyState, Alert } from "
 import { fmtDateTime, fmtDate, fmtMoney } from "@/lib/utils";
 import { Wallet, ReceiptText } from "lucide-react";
 
-export const metadata = { title: "Earnings & settlements" };
+export const metadata = { title: "Earnings & payouts" };
+
+const WEEK = 7 * 86400_000;
+
+/** Sum amounts per currency, e.g. "$260.00" or "$260.00 + ₹299.00". */
+function total(rows: { amount: { toString(): string }; currency: string }[]) {
+  const by = new Map<string, number>();
+  for (const r of rows) by.set(r.currency, (by.get(r.currency) ?? 0) + Number(r.amount.toString()));
+  return by.size === 0 ? "—" : [...by.entries()].map(([cur, amt]) => fmtMoney(amt, cur)).join(" + ");
+}
 
 export default async function EarningsPage() {
   const { consenter } = await requireConsenter();
@@ -14,7 +23,7 @@ export default async function EarningsPage() {
       where: { consenterId: consenter.id },
       orderBy: { createdAt: "desc" },
       take: 100,
-      include: { request: { include: { requester: true } } },
+      include: { request: { include: { requester: true } }, settlement: true },
     }),
     db.settlement.findMany({
       where: { consenterId: consenter.id },
@@ -23,38 +32,32 @@ export default async function EarningsPage() {
     }),
   ]);
 
-  // Pending balance per currency
-  const pending = new Map<string, number>();
-  for (const e of earnings) {
-    if (e.status === "PENDING") pending.set(e.currency, (pending.get(e.currency) ?? 0) + Number(e.amount));
-  }
-  const settledTotal = new Map<string, number>();
-  for (const s of settlements) settledTotal.set(s.currency, (settledTotal.get(s.currency) ?? 0) + Number(s.amount));
+  // Payouts run weekly: at most once every 7 days, starting from the last one.
+  const last = settlements[0]?.createdAt;
+  const nextPayout = new Date(Math.max(Date.now(), last ? last.getTime() + WEEK : Date.now()));
+  const held = earnings.filter((e) => e.status === "HELD");
+  const yours = earnings.filter((e) => e.status === "PENDING");
 
   return (
     <div className="space-y-6">
       <PageHeader
         kicker={consenter.displayName}
-        title="Earnings & settlements"
-        desc="Your consent price, collected in-app every time someone asks. Settled to you weekly. Usage fees agreed after approval are settled directly between the parties — they never appear here."
+        title="Earnings & payouts"
+        desc="When someone asks you, their ask price is held. It becomes yours the moment you say yes and is paid out weekly. If you decline, or the request ends without a yes, it goes back to them. Fees you agree after approval are paid to you directly and never show here."
       />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
-          <div className="text-2xl font-semibold tabular-nums">
-            {pending.size === 0
-              ? "—"
-              : [...pending.entries()].map(([cur, amt]) => fmtMoney(amt, cur)).join(" + ")}
-          </div>
-          <div className="mt-0.5 text-xs text-ink-soft">Pending balance (next weekly settlement)</div>
+          <div className="text-2xl font-semibold tabular-nums">{total(held)}</div>
+          <div className="mt-0.5 text-xs text-ink-soft">Held until you answer</div>
         </Card>
         <Card>
-          <div className="text-2xl font-semibold tabular-nums">
-            {settledTotal.size === 0
-              ? "—"
-              : [...settledTotal.entries()].map(([cur, amt]) => fmtMoney(amt, cur)).join(" + ")}
-          </div>
-          <div className="mt-0.5 text-xs text-ink-soft">Settled to date</div>
+          <div className="text-2xl font-semibold tabular-nums">{total(yours)}</div>
+          <div className="mt-0.5 text-xs text-ink-soft">Yours · next payout {fmtDate(nextPayout)}</div>
+        </Card>
+        <Card>
+          <div className="text-2xl font-semibold tabular-nums">{total(settlements)}</div>
+          <div className="mt-0.5 text-xs text-ink-soft">Paid out so far</div>
         </Card>
         <Card>
           <div className="text-2xl font-semibold tabular-nums">
@@ -63,13 +66,9 @@ export default async function EarningsPage() {
               : "Free"}
           </div>
           <div className="mt-0.5 text-xs text-ink-soft">
-            Your consent price ·{" "}
+            Your ask price ·{" "}
             <Link href="/c-panel/settings" className="underline underline-offset-4">change</Link>
           </div>
-        </Card>
-        <Card>
-          <div className="text-2xl font-semibold tabular-nums">{earnings.filter((e) => e.status !== "REVERSED").length}</div>
-          <div className="mt-0.5 text-xs text-ink-soft">Paid asks received</div>
         </Card>
       </div>
 
@@ -77,13 +76,47 @@ export default async function EarningsPage() {
         <Alert tone="warn">
           Add your payout details in{" "}
           <Link href="/c-panel/settings" className="underline underline-offset-4">settings</Link> so
-          weekly settlements know where to go.
+          your weekly payouts know where to go.
         </Alert>
       )}
 
       <Card className="space-y-2">
-        <SectionTitle title="Settlements" desc="One batch per week while you have a pending balance." />
-        {settlements.length === 0 && <EmptyState icon={Wallet} title="No settlements yet" desc="Pending earnings are batched and paid out weekly." />}
+        <SectionTitle title="Every ask" desc="One line per paid ask, and where its money stands." />
+        {earnings.length === 0 && (
+          <p className="text-sm text-ink-faint">No paid asks yet. Set an ask price in settings and people pay it when they ask you.</p>
+        )}
+        {earnings.map((e) => {
+          const status =
+            e.status === "HELD"
+              ? { s: "HELD", label: "Held until you answer" }
+              : e.status === "PENDING"
+                ? { s: "OPEN", label: `Yours · paid out ${fmtDate(nextPayout)}` }
+                : e.status === "SETTLED"
+                  ? { s: "PAID", label: `Paid out ${e.settlement ? fmtDate(e.settlement.createdAt) : ""}`.trim() }
+                  : e.status === "REFUNDED"
+                    ? { s: "REFUNDED", label: `Refunded to ${e.request.requester.displayName}` }
+                    : { s: "REFUNDED", label: "Not paid (expired)" };
+          return (
+            <div key={e.id} className="flex flex-wrap items-center gap-2 border-t hairline py-2.5 text-sm first:border-t-0">
+              <div className="min-w-0 flex-1">
+                <Link href={`/c-panel/requests/${e.requestId}`} className="font-medium underline-offset-4 hover:underline">
+                  #{e.request.number} · {e.request.requester.displayName}
+                </Link>
+                <div className="text-xs text-ink-faint">
+                  {fmtDateTime(e.createdAt)}
+                  {e.reversedReason ? ` · ${e.reversedReason}` : ""}
+                </div>
+              </div>
+              <span className="font-semibold tabular-nums">{fmtMoney(e.amount.toString(), e.currency)}</span>
+              <StatusBadge status={status.s} label={status.label} />
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card className="space-y-2">
+        <SectionTitle title="Payouts" desc="One payout a week while you have money that's yours." />
+        {settlements.length === 0 && <EmptyState icon={Wallet} title="No payouts yet" desc="Once you say yes to a paid ask, its price goes out in the next weekly payout." />}
         {settlements.map((s) => (
           <div key={s.id} className="flex flex-wrap items-center gap-2 border-t hairline py-2.5 text-sm first:border-t-0">
             <ReceiptText className="size-4 text-ink-soft" aria-hidden />
@@ -91,27 +124,7 @@ export default async function EarningsPage() {
             <span className="text-xs text-ink-faint">
               {fmtDate(s.periodStart)} → {fmtDate(s.periodEnd)} · ref {s.reference}
             </span>
-            <StatusBadge status="PAID" className="ml-auto" />
-          </div>
-        ))}
-      </Card>
-
-      <Card className="space-y-2">
-        <SectionTitle title="Earnings" desc="One entry per paid ask. Unanswered requests that auto-expire are reversed — silence never pays." />
-        {earnings.length === 0 && <p className="text-sm text-ink-faint">No paid asks yet. Set a consent price in settings and every submission pays it up front.</p>}
-        {earnings.map((e) => (
-          <div key={e.id} className="flex flex-wrap items-center gap-2 border-t hairline py-2.5 text-sm first:border-t-0">
-            <div className="min-w-0 flex-1">
-              <Link href={`/c-panel/requests/${e.requestId}`} className="font-medium hover:underline underline-offset-4">
-                #{e.request.number} · {e.request.requester.displayName}
-              </Link>
-              <div className="text-xs text-ink-faint">
-                {fmtDateTime(e.createdAt)}
-                {e.reversedReason ? ` · ${e.reversedReason}` : ""}
-              </div>
-            </div>
-            <span className="font-semibold tabular-nums">{fmtMoney(e.amount.toString(), e.currency)}</span>
-            <StatusBadge status={e.status === "SETTLED" ? "PAID" : e.status === "REVERSED" ? "REVOKED" : "PENDING"} />
+            <StatusBadge status="PAID" label={`Paid out ${fmtDate(s.createdAt)}`} className="ml-auto" />
           </div>
         ))}
       </Card>
