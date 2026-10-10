@@ -4,47 +4,9 @@ import { requireAdmin } from "@/lib/auth";
 import { BottomNav, TopNavLinks, type NavItem } from "@/components/nav";
 import { logoutAction } from "@/app/(auth)/actions";
 import { ArrowLeft } from "lucide-react";
+import { ADMIN_MODULES } from "./modules";
 
 export const metadata = { title: { default: "Admin", template: "%s · Consent Admin" } };
-
-const SIDEBAR: { group: string; links: [string, string][] }[] = [
-  {
-    group: "Queues",
-    links: [
-      ["/admin/requesters", "Requester applications"],
-      ["/admin/consenters", "Consenter verification"],
-      ["/admin/reports", "Reports & disputes"],
-      ["/admin/takedowns", "Takedowns"],
-    ],
-  },
-  {
-    group: "Operations",
-    links: [
-      ["/admin/users", "Users & profiles"],
-      ["/admin/requests", "Requests & grants"],
-      ["/admin/payments", "Payments & invoices"],
-      ["/admin/scores", "Consent Score"],
-    ],
-  },
-  {
-    group: "Configuration",
-    links: [
-      ["/admin/catalog", "Platforms & catalog"],
-      ["/admin/pricing", "Pricing & coupons"],
-      ["/admin/templates", "Agreement templates"],
-      ["/admin/cms", "CMS pages"],
-      ["/admin/settings", "System settings"],
-      ["/admin/roles", "Admin roles"],
-    ],
-  },
-  {
-    group: "Insight",
-    links: [
-      ["/admin/analytics", "Analytics"],
-      ["/admin/audit", "Audit log"],
-    ],
-  },
-];
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const session = await requireAdmin();
@@ -54,7 +16,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
     { href: "/admin/consenters", label: "Verify", icon: "grid" },
     { href: "/admin/requesters", label: "Apps", icon: "inbox" },
     { href: "/admin/reports", label: "Reports", icon: "bell" },
-    { href: "/admin/settings", label: "System", icon: "settings" },
+    // Every other module, plus the way back to the app, lives behind "More" on phones.
+    { href: "/admin/more", label: "More", icon: "menu" },
   ];
 
   return (
@@ -84,7 +47,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             <Link href="/dashboard" className="flex items-center gap-1.5 text-xs text-ink-faint hover:text-ink">
               <ArrowLeft className="size-3" aria-hidden /> Back to app
             </Link>
-            {SIDEBAR.map((g) => (
+            {ADMIN_MODULES.map((g) => (
               <div key={g.group}>
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-ink-faint">
                   {g.group}

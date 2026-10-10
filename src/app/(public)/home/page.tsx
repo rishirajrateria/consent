@@ -27,7 +27,7 @@ export default function HomePage() {
           use becomes a tamper-proof record anyone can check, forever.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <ButtonLink href="/signup" className="px-6 py-3">
+          <ButtonLink href="/signup?next=%2Fonboarding%2Fconsenter" className="px-6 py-3">
             Set your terms <ArrowRight className="size-4" aria-hidden />
           </ButtonLink>
           <ButtonLink href="/directory" variant="secondary" className="px-6 py-3">
@@ -87,7 +87,7 @@ export default function HomePage() {
             <li>· Every yes signed and bound to the exact files you reviewed</li>
             <li>· You never pay. A no needs no reason.</li>
           </ul>
-          <ButtonLink href="/signup" variant="secondary">Set your terms</ButtonLink>
+          <ButtonLink href="/signup?next=%2Fonboarding%2Fconsenter" variant="secondary">Set your terms</ButtonLink>
         </Card>
         <Card strong className="space-y-3 p-8">
           <FileCheck className="size-7" strokeWidth={1.5} aria-hidden />
@@ -103,7 +103,7 @@ export default function HomePage() {
             <li>· Terms settled directly with the owner</li>
             <li>· Proof anyone can verify, forever</li>
           </ul>
-          <ButtonLink href="/signup" variant="secondary">Create with permission</ButtonLink>
+          <ButtonLink href="/signup?next=%2Fonboarding%2Frequester" variant="secondary">Create with permission</ButtonLink>
         </Card>
       </section>
 

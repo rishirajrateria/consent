@@ -10,9 +10,26 @@ export async function decideConsenterAction(formData: FormData) {
   const session = await requireAdmin("consenters", "approve");
   const id = String(formData.get("id"));
   const decision = String(formData.get("decision"));
+  // `note` is the message the applicant sees; `internalNote` stays with the team (audit log only).
   const note = String(formData.get("note") ?? "").trim();
+  const internalNote = String(formData.get("internalNote") ?? "").trim();
   const profile = await db.consenterProfile.findUnique({ where: { id } });
   if (!profile) redirect("/admin/consenters");
+  // A verified profile is live; sending it back to review goes through Users (reason + notice).
+  if (profile.status === "APPROVED")
+    redirect(
+      `/admin/consenters/${id}?error=` +
+        encodeURIComponent("This profile is already verified. To send it back to review, use Users.")
+    );
+  if ((decision === "reject" || decision === "more_info") && !note)
+    redirect(
+      `/admin/consenters/${id}?error=` +
+        encodeURIComponent(
+          decision === "reject"
+            ? "Write a message to the applicant saying why before you reject."
+            : "Write a message to the applicant saying what you need."
+        )
+    );
 
   const statusMap = {
     verify: "APPROVED",
@@ -55,17 +72,17 @@ export async function decideConsenterAction(formData: FormData) {
     action: `consenter_${decision}`,
     module: "consenters",
     targetId: id,
-    reason: note || null,
+    reason: [internalNote && `Internal: ${internalNote}`, note && `Told applicant: ${note}`].filter(Boolean).join(" · ") || null,
   });
   const messages = {
     APPROVED: {
       title: "You're verified ✓",
-      body: "Your profile is now searchable and can receive consent requests. Set up your consent matrix next.",
+      body: `${note ? `${note}\n\n` : ""}Your profile is now searchable and can receive consent requests. Set up your consent matrix next.`,
       href: "/c-panel",
     },
-    REJECTED: { title: "Verification rejected", body: note || "See your onboarding page.", href: "/onboarding/consenter" },
-    MORE_INFO_NEEDED: { title: "More information needed", body: note || "The verification team needs more information.", href: "/onboarding/consenter" },
-    UNDER_REVIEW: { title: "Verification in progress", body: "Your documents are being reviewed.", href: "/onboarding/consenter" },
+    REJECTED: { title: "Verification rejected", body: note, href: "/onboarding/consenter" },
+    MORE_INFO_NEEDED: { title: "More information needed", body: note, href: "/onboarding/consenter" },
+    UNDER_REVIEW: { title: "Verification in progress", body: note || "Your documents are being reviewed.", href: "/onboarding/consenter" },
   } as const;
   await notifyConsenterTeam(id, { ...messages[status], critical: status === "APPROVED" });
   if (status === "APPROVED") {

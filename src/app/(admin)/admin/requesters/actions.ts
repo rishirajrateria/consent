@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { notifyRequesterTeam } from "@/lib/notify";
+import { DECIDABLE_REQUESTER_STATUSES } from "./statuses";
 
 export async function decideRequesterAction(formData: FormData) {
   const session = await requireAdmin("requesters", "approve");
@@ -14,6 +15,16 @@ export async function decideRequesterAction(formData: FormData) {
 
   const profile = await db.requesterProfile.findUnique({ where: { id } });
   if (!profile) redirect("/admin/requesters");
+  const back = (msg: string) => redirect(`/admin/requesters/${id}?error=${encodeURIComponent(msg)}`);
+  if (!(DECIDABLE_REQUESTER_STATUSES as readonly string[]).includes(profile.status))
+    back(
+      profile.status === "APPROVED"
+        ? "This requester is already approved. To pause the account, use Users."
+        : "The applicant hasn't sent this application yet."
+    );
+  // The applicant can't act on a reject or a request for info without knowing why.
+  if ((decision === "reject" || decision === "more_info") && !note)
+    back(decision === "reject" ? "Write a message saying why before you reject." : "Write a message saying what you need.");
 
   const statusMap = {
     approve: "APPROVED",
@@ -43,12 +54,12 @@ export async function decideRequesterAction(formData: FormData) {
   const messages = {
     APPROVED: {
       title: "Application approved 🎉",
-      body: "Pay the onboarding fee + first yearly subscription to activate your account.",
+      body: `${note ? `${note}\n\n` : ""}Pay the onboarding fee + first yearly subscription to activate your account.`,
       href: "/onboarding/requester",
     },
-    REJECTED: { title: "Application rejected", body: note || "See your application page for details.", href: "/onboarding/requester" },
-    MORE_INFO_NEEDED: { title: "More information needed", body: note || "The review team needs more information.", href: "/onboarding/requester" },
-    UNDER_REVIEW: { title: "Application under review", body: "Your requester application is now being reviewed.", href: "/onboarding/requester" },
+    REJECTED: { title: "Application rejected", body: note, href: "/onboarding/requester" },
+    MORE_INFO_NEEDED: { title: "More information needed", body: note, href: "/onboarding/requester" },
+    UNDER_REVIEW: { title: "Application under review", body: note || "Your requester application is now being reviewed.", href: "/onboarding/requester" },
   } as const;
   await notifyRequesterTeam(id, messages[status]);
   redirect(`/admin/requesters/${id}?done=1`);

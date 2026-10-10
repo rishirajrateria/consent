@@ -4,10 +4,10 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { storeUpload } from "@/lib/storage";
-import { revealContacts } from "@/lib/requests";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 import { Prisma } from "@prisma/client";
-import { canSendOffer, COUNTERS_USED_UP } from "@/lib/negotiation";
+import { canSendOffer, COUNTERS_USED_UP, FEE_CHANGED } from "@/lib/negotiation";
+import { syncConsentPrice } from "@/lib/escrow";
 
 /** Resolves which side of a request the current user is on (with membership). */
 export async function resolveSide(requestId: string) {
@@ -135,17 +135,26 @@ export async function makeOfferAction(formData: FormData) {
 
 export async function acceptOfferAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side, consenterMember, requesterMember } = await resolveSide(id);
+  const { session, request, side, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
   await assertCanAct(side, requesterMember, path);
+  // The owner says yes in one place only: "Your answer" at the end of the page,
+  // where conditions and the agreement choice sit next to the button.
+  if (side === "consenter")
+    redirect(`${path}?error=${encodeURIComponent("To accept their offer, approve the deal in Your answer")}`);
   if (request.status !== "IN_NEGOTIATION")
     redirect(`${path}?error=${encodeURIComponent("No open negotiation")}`);
   const latest = request.offers[0];
   if (!latest || latest.status !== "OPEN" || latest.bySide === side)
     redirect(`${path}?error=${encodeURIComponent("You can only accept the other side's latest offer")}`);
-  if (side === "consenter" && consenterMember && consenterMember.role !== "OWNER" && !consenterMember.canNegotiate)
-    redirect(`${path}?error=${encodeURIComponent("You don't have negotiation permission")}`);
+  // Accept only the fee that was on screen, never one changed while deciding.
+  if (latest.id !== String(formData.get("offerId") ?? ""))
+    redirect(`${path}?error=${encodeURIComponent(FEE_CHANGED)}`);
 
+  // The note sent with the fee is part of what was agreed, so it becomes a condition.
+  const conditionsNote = latest.scopeNote
+    ? [request.conditionsNote, `Agreed with the fee: ${latest.scopeNote}`].filter(Boolean).join(" — ")
+    : request.conditionsNote;
   await db.$transaction([
     db.negotiationOffer.update({ where: { id: latest.id }, data: { status: "ACCEPTED" } }),
     db.consentRequest.update({
@@ -154,8 +163,9 @@ export async function acceptOfferAction(formData: FormData) {
         status: "DEAL_AGREED",
         agreedAmount: latest.amount,
         agreedCurrency: latest.currency,
+        conditionsNote,
         decidedAt: new Date(),
-        decidedById: side === "consenter" ? session.userId : request.decidedById,
+        decidedById: latest.byUserId,
       },
     }),
     db.requestEvent.create({
@@ -164,41 +174,78 @@ export async function acceptOfferAction(formData: FormData) {
         type: "deal_agreed",
         actorName: session.user.name,
         actorSide: side,
-        detail: { amount: latest.amount.toString(), currency: latest.currency },
+        detail: { amount: latest.amount.toString(), currency: latest.currency, scopeNote: latest.scopeNote },
       },
     }),
   ]);
-  // Contact details are shared only when the consenter chooses to.
-  const shared = side === "consenter" && formData.get("shareContacts") === "on";
-  if (shared) await revealContacts(id, session.user.name);
-  await db.consentRequest.update({ where: { id }, data: { status: "AGREEMENT_MODE_PENDING" } });
+
+  // The owner's standing preference: propose a legally binding agreement for paid deals.
+  const legal = request.consenter.defaultRequireLegalAgreementForPaid;
+  if (legal) {
+    await db.$transaction([
+      db.agreement.upsert({
+        where: { requestId: id },
+        update: { status: "PROPOSED", proposedBySide: "consenter", kind: null },
+        create: { requestId: id, status: "PROPOSED", proposedBySide: "consenter" },
+      }),
+      db.consentRequest.update({ where: { id }, data: { status: "LEGAL_AGREEMENT_PENDING" } }),
+      db.requestEvent.create({
+        data: {
+          requestId: id,
+          type: "legal_agreement_proposed",
+          actorName: request.consenter.displayName,
+          actorSide: "consenter",
+          detail: { reason: "Owner's preference for paid requests" },
+        },
+      }),
+    ]);
+  } else {
+    await db.consentRequest.update({ where: { id }, data: { status: "AGREEMENT_MODE_PENDING" } });
+  }
 
   const fee = `${latest.currency} ${latest.amount.toString()}`;
   const title = `Deal agreed on request #${request.number}`;
+  const owner = request.consenter.displayName;
   await notifyRequesterTeam(request.requesterId, {
     title,
-    body: shared
-      ? `${fee}. ${request.consenter.displayName} shared their contact details so you can settle the fee directly. Consent does not process this payment. Next: choose the agreement mode.`
-      : `${fee}. ${request.consenter.displayName} hasn't shared contact details — use the messages on this request to arrange payment. Next: choose the agreement mode.`,
+    body: `${fee}. ${
+      request.contactsRevealed
+        ? `Settle the fee directly with ${owner} using their shared contact details.`
+        : `${owner} hasn't shared contact details — use the messages on this request to arrange payment.`
+    } Consent does not process this payment. ${
+      legal
+        ? `Next: accept or decline the legally binding agreement ${owner} asks for.`
+        : "Next: choose the agreement mode."
+    }`,
     href: `/r-panel/requests/${id}`,
     critical: true,
   });
   await notifyConsenterTeam(request.consenterId, {
     title,
-    body: shared
+    body: request.contactsRevealed
       ? `${fee}. Your contact details are shared so the fee can be settled directly.`
       : `${fee}. You haven't shared contact details. The requester needs a way to pay you — share them from the request page, or arrange it in messages.`,
     href: `/c-panel/requests/${id}`,
     critical: true,
   });
+  // An agreed deal is a yes: the held ask price goes to the owner.
+  await syncConsentPrice(id);
   redirect(path);
 }
 
 export async function closeNegotiationAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side, requesterMember } = await resolveSide(id);
+  const { session, request, side, consenterMember, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
   await assertCanAct(side, requesterMember, path);
+  if (
+    side === "consenter" &&
+    consenterMember &&
+    consenterMember.role !== "OWNER" &&
+    !consenterMember.canNegotiate &&
+    !consenterMember.canApprove
+  )
+    redirect(`${path}?error=${encodeURIComponent("You don't have permission to end this request")}`);
   if (!["IN_NEGOTIATION", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"].includes(request.status))
     redirect(`${path}?error=${encodeURIComponent("Nothing to close")}`);
   await db.$transaction([
@@ -213,8 +260,10 @@ export async function closeNegotiationAction(formData: FormData) {
   const notify = side === "consenter" ? notifyRequesterTeam : notifyConsenterTeam;
   await notify(side === "consenter" ? request.requesterId : request.consenterId, {
     title: `Request #${request.number} closed`,
-    body: "The other side closed the negotiation. The per-request fee is not refunded.",
+    body: "The other side closed the request. The platform fee is not refunded; an ask price still held is refunded to the requester.",
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
   });
+  // Ended before a yes: the held ask price is refunded (released prices stay with the owner).
+  await syncConsentPrice(id);
   redirect(path);
 }

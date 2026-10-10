@@ -18,9 +18,13 @@ function Bar({ label, value, max }: { label: string; value: number; max: number 
   );
 }
 
+function daysAgo(days: number) {
+  return new Date(Date.now() - days * 86400_000);
+}
+
 export default async function AdminAnalytics() {
   await requireAdmin("analytics", "view");
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000);
+  const thirtyDaysAgo = daysAgo(30);
 
   const [signups, byStatus, byPlatform, revenue, topConsenters, topRequesters, responseTimes] =
     await Promise.all([

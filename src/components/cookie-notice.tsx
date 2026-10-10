@@ -1,19 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
 /** Cookie notice: Consent uses only essential cookies (session, security). */
+const noSubscription = () => () => {};
+function needsNotice() {
+  try {
+    return !localStorage.getItem("cookie-notice-ack");
+  } catch {
+    return false; // private mode
+  }
+}
+
 export function CookieNotice() {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    try {
-      if (!localStorage.getItem("cookie-notice-ack")) setVisible(true);
-    } catch {
-      /* private mode */
-    }
-  }, []);
-  if (!visible) return null;
+  // Read the browser's saved choice without a render-then-hide flash; the server never shows it.
+  const needed = useSyncExternalStore(noSubscription, needsNotice, () => false);
+  const [dismissed, setDismissed] = useState(false);
+  if (!needed || dismissed) return null;
   return (
     <div className="glass-bar fixed inset-x-3 bottom-20 z-[60] mx-auto max-w-xl rounded-2xl px-4 py-3 md:bottom-4" role="region" aria-label="Cookie notice">
       <div className="flex flex-wrap items-center gap-3 text-sm text-ink-soft">
@@ -29,7 +33,7 @@ export function CookieNotice() {
             } catch {
               /* ignore */
             }
-            setVisible(false);
+            setDismissed(true);
           }}
         >
           Understood

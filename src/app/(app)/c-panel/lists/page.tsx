@@ -1,6 +1,6 @@
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, Field, Input, SectionTitle, EmptyState } from "@/components/ui";
+import { PageHeader, Card, Field, Input, SectionTitle, EmptyState, Alert } from "@/components/ui";
 import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { addListEntryAction, removeListEntryAction } from "../rules/actions";
@@ -11,7 +11,8 @@ export const metadata = { title: "Blacklist & whitelist" };
 
 export default async function ListsPage({ searchParams }: PageProps<"/c-panel/lists">) {
   const sp = await searchParams;
-  const { consenter } = await requireConsenter();
+  const { consenter, member } = await requireConsenter();
+  const canEdit = member.role === "OWNER" || member.canEditRules;
   const entries = await db.listEntry.findMany({
     where: { consenterId: consenter.id },
     include: { requester: true },
@@ -29,6 +30,9 @@ export default async function ListsPage({ searchParams }: PageProps<"/c-panel/li
       />
       <ErrorNote error={sp.error as string | undefined} />
       {sp.saved && <SuccessNote msg="List updated." />}
+      {!canEdit && (
+        <Alert>You can view these lists. Editing needs the &lsquo;Edit matrix &amp; rules&rsquo; permission.</Alert>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {([
@@ -37,22 +41,24 @@ export default async function ListsPage({ searchParams }: PageProps<"/c-panel/li
         ] as const).map(([kind, title, Icon, list, desc]) => (
           <Card key={kind} className="space-y-4">
             <SectionTitle title={title} desc={desc} />
-            <form action={addListEntryAction} className="flex flex-wrap items-end gap-2">
-              <input type="hidden" name="kind" value={kind} />
-              <div className="min-w-40 flex-1">
-                <Field label="Requester name or handle" required>
-                  <Input name="requester" required placeholder="Acme Clips" />
-                </Field>
-              </div>
-              <div className="min-w-32 flex-1">
-                <Field label="Note">
-                  <Input name="note" placeholder="optional" />
-                </Field>
-              </div>
-              <SubmitButton variant="secondary" size="sm">
-                <Icon className="size-3.5" aria-hidden /> Add
-              </SubmitButton>
-            </form>
+            {canEdit && (
+              <form action={addListEntryAction} className="flex flex-wrap items-end gap-2">
+                <input type="hidden" name="kind" value={kind} />
+                <div className="min-w-40 flex-1">
+                  <Field label="Requester name or handle" required>
+                    <Input name="requester" required placeholder="Acme Clips" />
+                  </Field>
+                </div>
+                <div className="min-w-32 flex-1">
+                  <Field label="Note">
+                    <Input name="note" placeholder="optional" />
+                  </Field>
+                </div>
+                <SubmitButton variant="secondary" size="sm">
+                  <Icon className="size-3.5" aria-hidden /> Add
+                </SubmitButton>
+              </form>
+            )}
             {list.length === 0 ? (
               <EmptyState icon={Icon} title={`${title} is empty`} />
             ) : (
@@ -65,12 +71,14 @@ export default async function ListsPage({ searchParams }: PageProps<"/c-panel/li
                         {e.note ? `${e.note} · ` : ""}added {fmtDate(e.createdAt)}
                       </div>
                     </div>
-                    <form action={removeListEntryAction}>
-                      <input type="hidden" name="id" value={e.id} />
-                      <ConfirmSubmit confirm={`Remove ${e.requester.displayName} from the ${title.toLowerCase()}?`} variant="ghost" size="sm">
-                        Remove
-                      </ConfirmSubmit>
-                    </form>
+                    {canEdit && (
+                      <form action={removeListEntryAction}>
+                        <input type="hidden" name="id" value={e.id} />
+                        <ConfirmSubmit confirm={`Remove ${e.requester.displayName} from the ${title.toLowerCase()}?`} variant="ghost" size="sm">
+                          Remove
+                        </ConfirmSubmit>
+                      </form>
+                    )}
                   </div>
                 ))}
               </div>

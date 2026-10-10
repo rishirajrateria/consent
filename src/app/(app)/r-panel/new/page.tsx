@@ -4,7 +4,8 @@ import { PageHeader, Card, Input, VerifiedBadge, EmptyState, Alert } from "@/com
 import { SubmitButton } from "@/components/form";
 import { ErrorNote } from "@/components/error-note";
 import { createDraftAction } from "../requests/actions";
-import { requesterActive } from "@/lib/payments";
+import { requesterActive, consentPriceFor } from "@/lib/payments";
+import { db } from "@/lib/db";
 import { InvitePanel } from "@/components/invite-panel";
 import { SuccessNote } from "@/components/error-note";
 import { titleCase, fmtMoney } from "@/lib/utils";
@@ -19,6 +20,36 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
   const preselect = typeof sp.consenter === "string" ? sp.consenter : "";
   const results = await searchConsenters(q || preselect);
   const active = requesterActive(requester);
+  // The consent price can depend on what the request is for (per-intent tiers),
+  // so show its range rather than only the base price.
+  const [tiers, intents] = results.length
+    ? await Promise.all([
+        db.consentPriceTier.findMany({
+          where: { consenterId: { in: results.map((c) => c.id) } },
+          select: { consenterId: true, intentCategoryId: true, amount: true },
+        }),
+        db.intentCategory.findMany({ where: { active: true }, select: { id: true } }),
+      ])
+    : [[], []];
+  const asks = new Map(
+    results.map((c) => {
+      const priceTiers = tiers
+        .filter((t) => t.consenterId === c.id)
+        .map((t) => ({ intentCategoryId: t.intentCategoryId, amount: t.amount.toString() }));
+      const prices = priceTiers.length && intents.length
+        ? intents.map((i) => Number(consentPriceFor({ consentPrice: c.consentPrice, priceTiers }, i.id) ?? 0))
+        : [Number(c.consentPrice ?? 0)];
+      const [min, max] = [Math.min(...prices), Math.max(...prices)];
+      const money = (n: number) => fmtMoney(n, c.consentPriceCurrency);
+      const ask =
+        min !== max
+          ? { price: `${money(min)} to ${money(max)}`, note: " · depends on what it's for" }
+          : max > 0
+            ? { price: money(max), note: " · paid at submission" }
+            : { price: "nothing", note: "" };
+      return [c.id, ask];
+    })
+  );
 
   return (
     <div className="space-y-6">
@@ -60,11 +91,8 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
                   {titleCase(c.entityType)}{c.category ? ` · ${c.category}` : ""} · score {c.score}
                 </div>
                 <div className="mt-1 text-xs text-ink-soft">
-                  Asking costs{" "}
-                  <strong className="text-ink">
-                    {c.consentPrice ? fmtMoney(c.consentPrice, c.consentPriceCurrency) : "nothing"}
-                  </strong>
-                  {c.consentPrice ? " · paid at submission" : ""}
+                  Asking costs <strong className="text-ink">{asks.get(c.id)?.price}</strong>
+                  {asks.get(c.id)?.note}
                 </div>
               </div>
               <form action={createDraftAction}>

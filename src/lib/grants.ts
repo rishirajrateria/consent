@@ -5,6 +5,40 @@ import { notifyConsenterTeam, notifyRequesterTeam } from "./notify";
 import { recalcConsenterScore, recalcRequesterScore } from "./score";
 
 /**
+ * The files a grant covers: every consenter asset, plus one version of the raw
+ * content and of the thumbnail: the newest one that already existed when the
+ * owner said yes. A version replaced before that (for example after the owner
+ * asked for changes) or uploaded after it was never approved, so it is left
+ * out. When no version existed yet (approved before the file was uploaded),
+ * the newest one is used.
+ */
+export function boundFiles<F extends { kind: string; version: number; createdAt: Date }>(
+  files: F[],
+  approvedAt?: Date | null
+): F[] {
+  const newest = (list: F[]) => [...list].sort((a, b) => b.version - a.version)[0];
+  const versioned = (["RAW_CONTENT", "THUMBNAIL"] as const).flatMap((kind) => {
+    const all = files.filter((f) => f.kind === kind);
+    const seen = approvedAt ? all.filter((f) => f.createdAt <= approvedAt) : all;
+    const pick = newest(seen.length ? seen : all);
+    return pick ? [pick] : [];
+  });
+  return [...files.filter((f) => f.kind === "ASSET"), ...versioned];
+}
+
+/**
+ * When the owner said yes to this request. If the requester accepted the
+ * owner's fee, the owner's yes was sending that fee, not the moment of accepting.
+ */
+export function ownerYesAt(request: {
+  decidedAt: Date | null;
+  offers: { status: string; bySide: string; createdAt: Date }[];
+}): Date | null {
+  const accepted = request.offers.find((o) => o.status === "ACCEPTED");
+  return accepted?.bySide === "consenter" ? accepted.createdAt : request.decidedAt;
+}
+
+/**
  * Issues the grant + signed certificate for an approved request.
  * Preconditions: request approved with a raw content file uploaded (approval is
  * bound to exact file hashes). The canonical payload is signed with the
@@ -24,9 +58,8 @@ export async function issueGrant(requestId: string, issuedByName: string) {
   });
   if (request.grant) return request.grant;
 
-  const files = request.files
-    .filter((f) => ["ASSET", "RAW_CONTENT", "THUMBNAIL"].includes(f.kind))
-    .map((f) => ({ kind: f.kind, name: f.name, sha256: f.sha256, version: f.version }));
+  const bound = boundFiles(request.files, ownerYesAt(request));
+  const files = bound.map((f) => ({ kind: f.kind, name: f.name, sha256: f.sha256, version: f.version }));
 
   const publicId = shortId(10);
   const certificateId = `CERT-${new Date().getFullYear()}-${shortId(8).toUpperCase()}`;
@@ -101,7 +134,7 @@ export async function issueGrant(requestId: string, issuedByName: string) {
   await db.$transaction([
     db.consentRequest.update({ where: { id: requestId }, data: { status: "APPROVED" } }),
     db.storedFile.updateMany({
-      where: { requestId, kind: { in: ["ASSET", "RAW_CONTENT", "THUMBNAIL"] } },
+      where: { id: { in: bound.map((f) => f.id) } },
       data: { approvedInGrant: true },
     }),
     db.requestEvent.create({

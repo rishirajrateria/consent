@@ -1,12 +1,12 @@
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, Field, Input, Textarea, Select, StatusBadge, Alert, KV, VerifiedBadge } from "@/components/ui";
+import { PageHeader, Card, Field, Input, Textarea, Select, StatusBadge, Alert, KV, VerifiedBadge, SectionTitle, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
-import { submitConsenterApplicationAction, mockOauthConnectAction } from "../actions";
+import { submitConsenterApplicationAction, mockOauthConnectAction, replyToConsenterReviewAction } from "../actions";
 import { COUNTRIES } from "@/lib/countries";
 import { fmtDateTime, titleCase } from "@/lib/utils";
-import { Link2, CalendarClock } from "lucide-react";
+import { Link2, CalendarClock, ArrowRight } from "lucide-react";
 
 export const metadata = { title: "Consenter onboarding" };
 
@@ -24,12 +24,15 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
 
   if (member) {
     const c = member.consenter;
+    const isOwner = member.role === "OWNER";
     return (
       <div className="mx-auto max-w-2xl space-y-6">
         <PageHeader kicker="Consenter onboarding" title={c.displayName} desc="Verification status" />
+        <ErrorNote error={sp.error as string | undefined} />
         {sp.submitted && (
           <SuccessNote msg="Submitted. Our team will review your documents and schedule a mandatory verification meeting (video call or in person)." />
         )}
+        {sp.replied && <SuccessNote msg="Sent. The verification team will look at your profile again." />}
         <Card className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">Status</span>
@@ -45,10 +48,15 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
           <KV k="Entity type" v={titleCase(c.entityType)} />
           <KV k="Country" v={c.country} />
           {c.status === "APPROVED" && (
-            <Alert>
-              Your profile is live and searchable. Set up your consent matrix and standing rules in
-              the consenter panel.
-            </Alert>
+            <>
+              <Alert>
+                Your profile is live and searchable. Set up your consent matrix and standing rules in
+                the consenter panel.
+              </Alert>
+              <ButtonLink href="/c-panel/matrix">
+                Set your terms <ArrowRight className="size-4" aria-hidden />
+              </ButtonLink>
+            </>
           )}
         </Card>
 
@@ -90,6 +98,43 @@ export default async function ConsenterOnboarding({ searchParams }: PageProps<"/
                 )}
               </div>
             ))}
+          </Card>
+        )}
+
+        {c.status === "MORE_INFO_NEEDED" && (
+          <Card strong className="space-y-4">
+            <SectionTitle
+              title="Reply to the verification team"
+              desc="Answer the verification team and add a new document if they asked for one. Your profile then goes back for review."
+            />
+            {isOwner ? (
+              <form action={replyToConsenterReviewAction} className="space-y-4">
+                <Field label="Your reply">
+                  <Textarea name="reply" maxLength={2000} placeholder="Here is the trademark certificate you asked for." />
+                </Field>
+                <Field label="Upload a new document" hint="Optional. A PDF or an image.">
+                  <Input
+                    name="document"
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="file:mr-3 file:rounded-lg file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white"
+                  />
+                </Field>
+                <SubmitButton className="w-full">Send to the verification team</SubmitButton>
+              </form>
+            ) : (
+              <p className="text-sm text-ink-soft">Only the account owner can reply.</p>
+            )}
+          </Card>
+        )}
+
+        {c.status === "REJECTED" && (
+          <Card className="space-y-3">
+            <SectionTitle
+              title="What you can do next"
+              desc="If you think this is a mistake, or you have new documents, contact support."
+            />
+            <ButtonLink href="/contact" variant="secondary">Contact support</ButtonLink>
           </Card>
         )}
       </div>

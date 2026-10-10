@@ -2,6 +2,7 @@ import { db } from "./db";
 import { getSettings } from "./settings";
 import { notifyConsenterTeam, notifyRequesterTeam } from "./notify";
 import { recalcConsenterScore, recalcRequesterScore } from "./score";
+import { syncConsentPrice, escrowSweep } from "./escrow";
 
 /**
  * Background sweeps (DB-backed scheduler). Run periodically by:
@@ -19,6 +20,8 @@ export async function runSweeps(): Promise<Record<string, number>> {
   out.grantsExpired = await grantExpire();
   out.takedownsIgnored = await takedownIgnored();
   out.subscriptionReminders = await subscriptionReminders();
+  // Settle held ask prices first so anything released this run is paid out.
+  out.askPricesSettled = await escrowSweep();
   out.settlements = await settlementSweep();
   return out;
 }
@@ -132,16 +135,12 @@ async function slaExpire(): Promise<number> {
         where: { requestId: r.id, status: "PAID", purpose: "PER_REQUEST" },
         data: { status: "FORFEITED" },
       }),
-      // No reward for silence: an unanswered request never pays out its
-      // consent price to the consenter.
-      db.earningEntry.updateMany({
-        where: { requestId: r.id, status: "PENDING" },
-        data: { status: "REVERSED", reversedReason: "Request auto-expired unanswered" },
-      }),
     ]);
+    // No reward for silence: the held ask price goes back to the requester.
+    await syncConsentPrice(r.id);
     await notifyRequesterTeam(r.requesterId, {
       title: `Request #${r.number} expired unanswered`,
-      body: `${r.consenter.displayName} did not respond within the window. The per-request fee is forfeited; you may submit a fresh request.`,
+      body: `${r.consenter.displayName} did not respond within the window. Their ask price is refunded to you; the platform fee is not. You can raise a new request any time.`,
       href: `/r-panel/requests/${r.id}`,
     });
     await recalcConsenterScore(r.consenterId, `Request #${r.number} auto-expired unanswered`);
@@ -168,6 +167,7 @@ async function negotiationIdleClose(): Promise<number> {
         data: { requestId: r.id, type: "negotiation_auto_closed", actorSide: "system", detail: { idleSide } },
       }),
     ]);
+    await syncConsentPrice(r.id);
   }
   return idle.length;
 }

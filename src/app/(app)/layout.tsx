@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { BottomNav, TopNavLinks, type NavItem } from "@/components/nav";
 import { switchProfileAction } from "./actions";
 import { logoutAction } from "../(auth)/actions";
-import { ChevronDown, Repeat, ShieldCheck, LogOut, UserCircle, Inbox } from "lucide-react";
+import { ChevronDown, Repeat, ShieldCheck, LogOut, UserCircle, Inbox, Users, CreditCard } from "lucide-react";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const session = await requireUser();
@@ -131,6 +131,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                 <Link href="/admin" className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-ink-soft hover:bg-ink/5">
                   <ShieldCheck className="size-4" aria-hidden /> Admin panel
                 </Link>
+              )}
+              {/* The requester bottom nav has no room for these, so they live here. */}
+              {ctx?.kind === "requester" && (
+                <>
+                  <Link href="/r-panel/team" className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-ink-soft hover:bg-ink/5">
+                    <Users className="size-4" aria-hidden /> Team
+                  </Link>
+                  <Link href="/r-panel/billing" className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-ink-soft hover:bg-ink/5">
+                    <CreditCard className="size-4" aria-hidden /> Billing
+                  </Link>
+                </>
               )}
               <Link href="/settings" className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm text-ink-soft hover:bg-ink/5">
                 <UserCircle className="size-4" aria-hidden /> Account settings

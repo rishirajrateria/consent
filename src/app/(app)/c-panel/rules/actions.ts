@@ -12,7 +12,7 @@ export async function createRuleAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const action = String(formData.get("action")) as RuleAction;
   if (!name || !["AUTO_APPROVE", "AUTO_DENY", "ROUTE_TO_MEMBER"].includes(action))
-    redirect("/c-panel/rules?error=" + encodeURIComponent("Name and action are required"));
+    redirect("/c-panel/rules?error=" + encodeURIComponent("Give the rule a name and choose what happens"));
 
   const conditions: RuleConditions = {};
   const platformIds = formData.getAll("platformIds").map(String).filter(Boolean);
@@ -31,7 +31,21 @@ export async function createRuleAction(formData: FormData) {
   if (categories.length) conditions.categories = categories;
   if (formData.get("whitelistOnly") === "on") conditions.whitelistOnly = true;
 
+  // A rule with no conditions matches every request, so it must never approve on its own.
+  if (action === "AUTO_APPROVE" && Object.keys(conditions).length === 0)
+    redirect("/c-panel/rules?error=" + encodeURIComponent("An auto-approve rule needs at least one condition"));
+
   const routeToUserId = String(formData.get("routeToUserId") ?? "") || null;
+  if (action === "ROUTE_TO_MEMBER") {
+    // Only someone who can answer may receive routed requests; anyone else is a dead end.
+    const target = routeToUserId
+      ? await db.consenterMember.findUnique({
+          where: { consenterId_userId: { consenterId: consenter.id, userId: routeToUserId } },
+        })
+      : null;
+    if (!target || (target.role !== "OWNER" && !target.canApprove))
+      redirect("/c-panel/rules?error=" + encodeURIComponent("Choose a team member who can approve requests"));
+  }
   const last = await db.standingRule.findFirst({
     where: { consenterId: consenter.id },
     orderBy: { priority: "desc" },

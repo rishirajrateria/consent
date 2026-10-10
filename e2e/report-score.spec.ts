@@ -53,6 +53,7 @@ test("upheld breach report lowers the requester score", async ({ browser }) => {
   await visit(admin, "/admin/reports");
   const card = admin.locator(`form:has(input[name="id"][value="${report!.id}"])`);
   await expect(card).toBeVisible();
+  admin.once("dialog", (d) => d.accept());
   await card.getByRole("button", { name: "Uphold" }).click();
 
   await expect

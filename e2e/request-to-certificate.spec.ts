@@ -54,9 +54,9 @@ test("negotiated request ends in a verified certificate", async ({ browser }) =>
   await expect(clips.getByText("by Casey Clips (requester)")).toBeVisible();
   await expect(clips.locator("#negotiation").getByText(/you 2 of 3/)).toBeVisible();
 
-  // ── Show owner accepts → deal agreed, contacts revealed ─────
+  // ── Show owner approves the deal at $300 → contacts revealed ─
   await visit(show, `/c-panel/requests/${requestId}`);
-  await show.getByRole("button", { name: /^Accept/ }).click();
+  await show.getByRole("button", { name: /^Approve the deal at/ }).click();
   await expect(show.getByText("Shared contact details")).toBeVisible();
   await expect(show.getByText("Agreement mode pending", { exact: true }).first()).toBeVisible();
 

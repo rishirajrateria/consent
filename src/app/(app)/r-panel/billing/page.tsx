@@ -1,27 +1,31 @@
 import { requireRequester } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, KV, StatusBadge, SectionTitle, Alert, Field, Input } from "@/components/ui";
+import { PageHeader, Card, KV, StatusBadge, SectionTitle, Alert, Field, Input, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
-import { SuccessNote } from "@/components/error-note";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { payRenewalAction } from "@/app/(app)/onboarding/actions";
-import { requesterActive } from "@/lib/payments";
+import { requesterActive, priceFor } from "@/lib/payments";
 import { fmtDate, fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
 
 export const metadata = { title: "Billing" };
 
 export default async function BillingPage({ searchParams }: PageProps<"/r-panel/billing">) {
   const sp = await searchParams;
-  const { requester } = await requireRequester();
-  const payments = await db.payment.findMany({
-    where: { requesterId: requester.id },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-  });
+  const { requester, member } = await requireRequester();
+  const [payments, price] = await Promise.all([
+    db.payment.findMany({
+      where: { requesterId: requester.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    priceFor(requester.country),
+  ]);
   const active = requesterActive(requester);
 
   return (
     <div className="space-y-6">
       <PageHeader kicker={requester.displayName} title="Billing & subscription" />
+      <ErrorNote error={sp.error as string | undefined} />
       {sp.renewed && <SuccessNote msg="Subscription renewed. Thank you!" />}
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -36,27 +40,58 @@ export default async function BillingPage({ searchParams }: PageProps<"/r-panel/
               cannot send new requests until you renew.
             </Alert>
           )}
-          <form action={payRenewalAction} className="flex flex-wrap items-end gap-2 pt-2">
-            <div className="w-40">
-              <Field label="Coupon code" hint="Optional.">
-                <Input name="coupon" placeholder="CODE" className="uppercase" />
-              </Field>
+          {/* Renewal only extends an active account; until then the onboarding payment covers the first year. */}
+          {requester.status !== "APPROVED" ? (
+            <div className="space-y-2 pt-2">
+              <p className="text-sm text-ink-soft">You can pay once your application is approved.</p>
+              <ButtonLink href="/onboarding/requester" variant="secondary">See application status</ButtonLink>
             </div>
-            <SubmitButton variant="secondary">Renew for one year</SubmitButton>
-          </form>
+          ) : member.role === "VIEWER" ? (
+            // Viewer seats are read-only, so they never see a pay button.
+            <p className="pt-2 text-sm text-ink-soft">
+              {requester.onboardingFeePaidAt
+                ? "Viewers can't renew. Ask the account owner."
+                : "Viewers can't pay. Ask the account owner to activate the account."}
+            </p>
+          ) : !requester.onboardingFeePaidAt ? (
+            <div className="space-y-2 pt-2">
+              <p className="text-sm text-ink-soft">
+                You&apos;re approved. Pay the onboarding fee to start sending requests; it includes your first year.
+              </p>
+              <ButtonLink href="/onboarding/requester">Activate your account</ButtonLink>
+            </div>
+          ) : (
+            <form action={payRenewalAction} className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="w-40">
+                <Field label="Coupon code" hint="Optional.">
+                  <Input name="coupon" placeholder="CODE" className="uppercase" />
+                </Field>
+              </div>
+              <SubmitButton variant="secondary">
+                Renew for one year — {fmtMoney(price.yearlyFee.toString(), price.currency)}
+                {price.taxRate && Number(price.taxRate) > 0 ? ` + ${price.taxLabel ?? "tax"} ${price.taxRate}%` : ""}
+              </SubmitButton>
+            </form>
+          )}
         </Card>
 
         <Card className="space-y-2">
-          <SectionTitle title="Payment history" desc="Platform fees only — Consent never handles fees between you and consenters." />
+          <SectionTitle
+            title="Payment history"
+            desc="Platform fees and owners' consent prices. A consent price is held until the owner answers and refunded to you unless they say yes. Consent never handles fees agreed between you and owners."
+          />
           {payments.length === 0 && <p className="text-sm text-ink-faint">No payments yet.</p>}
           {payments.map((p) => (
             <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 border-t hairline py-2 text-sm first:border-t-0">
               <div>
-                <div className="font-medium">{titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}</div>
+                <div className="font-medium">
+                  {p.purpose === "PER_REQUEST" ? "Platform fee" : titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}
+                </div>
                 <div className="text-xs text-ink-faint">
                   {fmtDateTime(p.createdAt)}
                   {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ""}
                   {p.taxLabel && p.tax ? ` · incl. ${p.taxLabel} ${fmtMoney(p.tax.toString(), p.currency)}` : ""}
+                  {p.refundedAt ? ` · refunded ${fmtDateTime(p.refundedAt)}` : ""}
                 </div>
               </div>
               <div className="flex items-center gap-2">

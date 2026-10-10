@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, hasAdminPerm } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState, Field, Textarea } from "@/components/ui";
-import { SubmitButton } from "@/components/form";
+import { SubmitButton, ConfirmSubmit } from "@/components/form";
+import { storage } from "@/lib/storage";
+import { safeChannelUrl } from "@/lib/channels";
+import { NoPermission } from "../no-permission";
 import { audit } from "@/lib/audit";
 import { recalcConsenterScore, recalcRequesterScore } from "@/lib/score";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
-import { fmtDateTime, cn } from "@/lib/utils";
-import { Flag, Megaphone } from "lucide-react";
+import { fmtDateTime, fmtBytes, cn } from "@/lib/utils";
+import { Flag, Megaphone, FileText, ExternalLink } from "lucide-react";
 import type { ReportStatus } from "@prisma/client";
 
 export const metadata = { title: "Reports & disputes" };
@@ -49,7 +52,8 @@ async function decideReportAction(formData: FormData) {
     else await recalcConsenterScore(report.request.consenterId, `Report ${decision.toLowerCase()}`);
     const msg = {
       title: `Report on request #${report.request.number}: ${decision.toLowerCase()}`,
-      body: notes || "The Consent review team has decided.",
+      // A reason saved earlier (with "Under review") still reaches both sides.
+      body: notes || report.adminNotes || "The Consent review team has decided.",
     };
     await notifyConsenterTeam(report.request.consenterId, { ...msg, href: `/c-panel/requests/${report.requestId}` });
     await notifyRequesterTeam(report.request.requesterId, { ...msg, href: `/r-panel/requests/${report.requestId}` });
@@ -65,7 +69,9 @@ const TABS: [string, ReportStatus[] | null][] = [
 ];
 
 export default async function AdminReports({ searchParams }: PageProps<"/admin/reports">) {
-  await requireAdmin("reports", "view");
+  const session = await requireAdmin("reports", "view");
+  const canDecide = hasAdminPerm(session.user.adminRole, "reports", "approve");
+  const canEditTips = hasAdminPerm(session.user.adminRole, "reports", "edit");
   const sp = await searchParams;
   const tab = typeof sp.tab === "string" ? sp.tab : "Open";
   const statuses = TABS.find(([t]) => t === tab)?.[1] ?? TABS[0][1];
@@ -74,7 +80,7 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
       where: statuses ? { status: { in: statuses } } : {},
       orderBy: { createdAt: "asc" },
       take: 100,
-      include: { request: { include: { consenter: true, requester: true } } },
+      include: { request: { include: { consenter: true, requester: true, grant: true } } },
     }),
     db.publicTipOff.findMany({
       where: { status: "OPEN" },
@@ -83,6 +89,12 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
       include: { consenter: true },
     }),
   ]);
+  // The reporter's uploaded evidence (screenshots, exports), shown before the decision.
+  const evidenceFiles = new Map(
+    (
+      await db.storedFile.findMany({ where: { id: { in: reports.flatMap((r) => r.evidenceFileIds) } } })
+    ).map((f) => [f.id, f])
+  );
 
   return (
     <div className="space-y-6">
@@ -109,22 +121,89 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
                 <StatusBadge status={r.status} className="ml-auto" />
               </div>
               <p className="text-sm text-ink-soft">{r.description}</p>
-              {r.evidenceLinks.length > 0 && <p className="text-xs text-ink-faint">Evidence: {r.evidenceLinks.join(" · ")}</p>}
-              {r.response && <p className="text-sm text-ink-soft"><strong>Other party&apos;s response:</strong> {r.response}</p>}
-              {r.adminNotes && <p className="text-xs text-ink-faint">Admin notes: {r.adminNotes}</p>}
-              {(r.status === "OPEN" || r.status === "UNDER_REVIEW") && (
-                <form action={decideReportAction} className="space-y-2 border-t hairline pt-3">
-                  <input type="hidden" name="id" value={r.id} />
-                  <Field label="Notes">
-                    <Textarea name="notes" className="min-h-14" placeholder="Reason for the decision…" />
-                  </Field>
-                  <div className="flex flex-wrap gap-2">
-                    <SubmitButton name="decision" value="UNDER_REVIEW" variant="secondary" size="sm">Under review</SubmitButton>
-                    <SubmitButton name="decision" value="UPHELD" size="sm">Uphold</SubmitButton>
-                    <SubmitButton name="decision" value="DISMISSED" variant="danger" size="sm">Dismiss</SubmitButton>
-                  </div>
-                </form>
+              {/* Everything the decision depends on comes first: evidence, what was approved, the other side's answer. */}
+              {r.evidenceFileIds.map((fid) => {
+                const f = evidenceFiles.get(fid);
+                if (!f) return null;
+                return (
+                  <a
+                    key={fid}
+                    href={storage.signedUrl(f.storageKey, f.name, 600)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="glass-subtle flex min-h-10 items-center gap-2 px-4 py-2.5 text-sm hover:border-ink/20"
+                  >
+                    <FileText className="size-4 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                    <span className="text-xs text-ink-faint">{fmtBytes(f.size)}</span>
+                  </a>
+                );
+              })}
+              {r.evidenceLinks.length > 0 && (
+                <ul className="space-y-1 text-xs">
+                  {r.evidenceLinks.map((l, i) => {
+                    const href = safeChannelUrl(l);
+                    return (
+                      <li key={i} className="truncate">
+                        {href ? (
+                          <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-ink-soft underline underline-offset-4">
+                            {l} <ExternalLink className="size-3 shrink-0" aria-hidden />
+                          </a>
+                        ) : (
+                          <span className="text-ink-faint" title="Not a web address, so not linked">{l}</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
+              {r.request.grant ? (
+                <Link href={`/v/${r.request.grant.publicId}`} target="_blank" className="inline-flex min-h-10 items-center gap-1 text-sm underline underline-offset-4">
+                  What was approved <ExternalLink className="size-3" aria-hidden />
+                </Link>
+              ) : (
+                <p className="text-xs text-ink-faint">No consent was granted on this request.</p>
+              )}
+              {r.response ? (
+                <p className="text-sm text-ink-soft"><strong>Other party&apos;s response:</strong> {r.response}</p>
+              ) : (
+                <p className="text-sm text-ink-faint">
+                  {r.status === "OPEN" || r.status === "UNDER_REVIEW"
+                    ? "The other side hasn't responded yet."
+                    : "The other side didn't respond."}
+                </p>
+              )}
+              {r.adminNotes && <p className="text-xs text-ink-faint">Admin notes: {r.adminNotes}</p>}
+              {(r.status === "OPEN" || r.status === "UNDER_REVIEW") &&
+                (canDecide ? (
+                  <form action={decideReportAction} className="space-y-2 border-t hairline pt-3">
+                    <input type="hidden" name="id" value={r.id} />
+                    <Field label="Reason" hint="Sent to both sides when you Uphold or Dismiss.">
+                      <Textarea name="notes" className="min-h-14" placeholder="Why you decided this…" />
+                    </Field>
+                    <div className="flex flex-wrap gap-2">
+                      <SubmitButton name="decision" value="UNDER_REVIEW" variant="secondary">Under review</SubmitButton>
+                      <ConfirmSubmit
+                        confirm="Dismiss this report? Both sides are told."
+                        name="decision"
+                        value="DISMISSED"
+                        variant="secondary"
+                      >
+                        Dismiss
+                      </ConfirmSubmit>
+                      <ConfirmSubmit
+                        confirm="Uphold this report? It lowers their public Consent Score and both sides are told."
+                        name="decision"
+                        value="UPHELD"
+                        variant="primary"
+                      >
+                        Uphold
+                      </ConfirmSubmit>
+                    </div>
+                  </form>
+                ) : (
+                  <NoPermission to="decide reports" perm="approve" module="reports" />
+                ))}
             </Card>
           ))}
         </div>
@@ -146,12 +225,16 @@ export default async function AdminReports({ searchParams }: PageProps<"/admin/r
             </div>
             <p className="text-ink-soft">{t.description}</p>
             <p className="text-xs text-ink-faint">{t.links.join(" · ")}</p>
-            <form action={resolveTipAction} className="flex flex-wrap items-center gap-2 pt-1">
-              <input type="hidden" name="id" value={t.id} />
-              <input name="note" placeholder="Admin note…" className="input-glass max-w-56 py-1.5 text-xs" aria-label="Admin note" />
-              <SubmitButton name="status" value="REVIEWED" variant="secondary" size="sm">Reviewed</SubmitButton>
-              <SubmitButton name="status" value="DISMISSED" variant="ghost" size="sm">Dismiss</SubmitButton>
-            </form>
+            {canEditTips ? (
+              <form action={resolveTipAction} className="flex flex-wrap items-center gap-2 pt-1">
+                <input type="hidden" name="id" value={t.id} />
+                <input name="note" placeholder="Admin note…" className="input-glass max-w-56 py-1.5 text-xs" aria-label="Admin note" />
+                <SubmitButton name="status" value="REVIEWED" variant="secondary" size="sm">Reviewed</SubmitButton>
+                <SubmitButton name="status" value="DISMISSED" variant="ghost" size="sm">Dismiss</SubmitButton>
+              </form>
+            ) : (
+              <NoPermission to="close tip-offs" perm="edit" module="reports" />
+            )}
           </div>
         ))}
       </Card>

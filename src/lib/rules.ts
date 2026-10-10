@@ -1,5 +1,5 @@
 import { db } from "./db";
-import type { MatrixPolicy } from "@prisma/client";
+import type { ConsentMatrixEntry, MatrixPolicy } from "@prisma/client";
 
 export type Selection = {
   platformId: string;
@@ -36,8 +36,11 @@ export async function evaluateAutoDecision(opts: {
   requester: { id: string; type: string; score: number; categories: string[] };
   selections: Selection[];
   assetTypeIds: string[];
+  /** Whether the request's thumbnail uses the consenter. Omitted = assume it does (the safe side). */
+  thumbnailUsed?: boolean;
 }): Promise<AutoDecision> {
   const { consenterId, requester, selections, assetTypeIds } = opts;
+  const thumbnailUsed = opts.thumbnailUsed ?? true;
 
   const whitelisted = !!(await db.listEntry.findUnique({
     where: { kind_consenterId_requesterId: { kind: "WHITELIST", consenterId, requesterId: requester.id } },
@@ -77,19 +80,29 @@ export async function evaluateAutoDecision(opts: {
       }
       sawAny = true;
       if (e.policy === "AUTO_DENY") return { kind: "matrix", policy: "AUTO_DENY" };
-      if (e.policy !== "AUTO_APPROVE") allAutoApprove = false;
-      if (
-        e.policy === "AUTO_APPROVE" &&
-        e.maxDurationSec != null &&
-        sel.durationSec != null &&
-        sel.durationSec > e.maxDurationSec
-      ) {
-        allAutoApprove = false; // exceeds allowed duration → fall back to Ask
-      }
+      if (!cellAutoApproves(e, sel, thumbnailUsed)) allAutoApprove = false; // fall back to Ask
     }
   }
   if (sawAny && allAutoApprove) return { kind: "matrix", policy: "AUTO_APPROVE" };
   return { kind: "none" };
+}
+
+/**
+ * Whether one matrix cell lets a request through without asking. A ✓ still
+ * falls back to Ask when the clip is longer than the row's cap, when the
+ * request uses a thumbnail the row doesn't allow, or when the row is paid by
+ * default (so the owner can set a fee).
+ */
+export function cellAutoApproves(
+  e: Pick<ConsentMatrixEntry, "policy" | "maxDurationSec" | "thumbnailAllowed" | "paidDefault">,
+  sel: Pick<Selection, "durationSec">,
+  thumbnailUsed: boolean
+): boolean {
+  if (e.policy !== "AUTO_APPROVE") return false;
+  if (e.maxDurationSec != null && sel.durationSec != null && sel.durationSec > e.maxDurationSec) return false;
+  if (thumbnailUsed && !e.thumbnailAllowed) return false;
+  if (e.paidDefault) return false;
+  return true;
 }
 
 export function ruleMatches(

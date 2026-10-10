@@ -13,35 +13,57 @@ type Mode = "accept" | "counter" | "end";
  * Your move in a fee negotiation: accept, counter or end. One choice at a
  * time with its button last, so a typed counter-offer can't be lost by
  * pressing Accept. Each side gets MAX_COUNTER_OFFERS counter-offers.
+ * The owner accepts a fee by approving in "Your answer" at the end of the
+ * page, so their yes carries the conditions and agreement choice with it.
+ * "End this request" is never picked for you, so a red button is never the
+ * only thing on offer.
  */
 export function NegotiationActions({
   requestId,
   side,
+  canApprove = true,
+  latestId,
   latestLabel,
+  latestNote,
   latestIsTheirs,
   currency,
-  showShareContacts,
   myCountersLeft,
   theirCountersLeft,
   otherName,
 }: {
   requestId: string;
   side: "consenter" | "requester";
+  /** Owner's side: whether this teammate can approve, which is how the owner accepts. */
+  canApprove?: boolean;
+  /** The offer shown here, so accepting can't land on a fee changed meanwhile. */
+  latestId: string;
   latestLabel: string;
+  latestNote: string | null;
   latestIsTheirs: boolean;
   currency: string;
-  showShareContacts: boolean;
   myCountersLeft: number;
   theirCountersLeft: number;
   otherName: string;
 }) {
   const canCounter = myCountersLeft > 0;
+  const canAccept = latestIsTheirs && side === "requester";
   const options: [Mode, string][] = [
-    ...(latestIsTheirs ? ([["accept", `Accept ${latestLabel}`]] as [Mode, string][]) : []),
+    ...(canAccept ? ([["accept", `Accept ${latestLabel}`]] as [Mode, string][]) : []),
     ...(canCounter ? ([["counter", latestIsTheirs ? "Counter-offer" : "Change my offer"]] as [Mode, string][]) : []),
     ["end", "End this request"],
   ];
-  const [mode, setMode] = useState<Mode>(options[0][0]);
+  // Never open "End this request" by itself: with nothing else to pick, start with nothing picked.
+  const first = options[0][0] === "end" ? null : options[0][0];
+  const [picked, setMode] = useState<Mode | null>(first);
+  // The choices change when a new offer arrives; fall back to the first one.
+  const mode = picked && options.some(([m]) => m === picked) ? picked : first;
+  const lastMove = !latestIsTheirs
+    ? `Wait for ${otherName} to answer, or end this request.`
+    : side === "requester"
+      ? "Accept the latest offer or end this request."
+      : canApprove
+        ? "Approve the latest offer in Your answer below, or end this request."
+        : "Someone with the approve permission can accept the latest offer, or you can end this request.";
 
   return (
     <div className="space-y-3 border-t hairline pt-3">
@@ -50,10 +72,22 @@ export function NegotiationActions({
         {theirCountersLeft} of {MAX_COUNTER_OFFERS}.{" "}
         {canCounter
           ? "After that, the latest offer can only be accepted, or the request ended."
-          : "You've used all yours. Accept the latest offer or end this request. To keep negotiating, a new request needs to be raised."}
+          : `You've used all yours. ${lastMove} To keep negotiating, a new request needs to be raised.`}
       </p>
       {!latestIsTheirs && (
         <p className="text-sm text-ink-soft">Waiting for {otherName} to answer your offer of {latestLabel}.</p>
+      )}
+      {latestIsTheirs && side === "consenter" && (
+        <p className="text-sm text-ink-soft">
+          {canApprove ? (
+            <>
+              To accept {latestLabel}, approve the deal in{" "}
+              <a href="#decide" className="font-medium text-ink underline underline-offset-4">Your answer</a> below.
+            </>
+          ) : (
+            `Accepting ${latestLabel} needs the approve permission.`
+          )}
+        </p>
       )}
       <div role="radiogroup" aria-label="Your move" className="flex flex-wrap gap-2">
         {options.map(([m, label]) => (
@@ -73,14 +107,12 @@ export function NegotiationActions({
         ))}
       </div>
 
-      {mode === "accept" && latestIsTheirs && (
+      {mode === "accept" && canAccept && (
         <form action={acceptOfferAction} className="space-y-3">
           <input type="hidden" name="id" value={requestId} />
-          {showShareContacts && (
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" name="shareContacts" defaultChecked className="size-4 accent-black" />
-              Share my contact details so they can pay me directly
-            </label>
+          <input type="hidden" name="offerId" value={latestId} />
+          {latestNote && (
+            <p className="text-sm">Their note becomes a condition of this consent: &ldquo;{latestNote}&rdquo;</p>
           )}
           <p className="text-xs text-ink-faint">The fee is paid directly between you, never through Consent.</p>
           <SubmitButton className="w-full sm:w-auto">Accept {latestLabel}</SubmitButton>
@@ -97,8 +129,8 @@ export function NegotiationActions({
             <Field label="Currency" required>
               <Input name="currency" defaultValue={currency} maxLength={3} required />
             </Field>
-            <Field label="Note (optional)">
-              <Input name="scopeNote" placeholder="e.g. Includes a 3-month window" />
+            <Field label="Condition (optional)" hint="Becomes part of the consent if accepted.">
+              <Input name="scopeNote" placeholder="e.g. Instagram only, for 3 months" />
             </Field>
           </div>
           <p className="text-xs text-ink-faint">
@@ -113,7 +145,7 @@ export function NegotiationActions({
           <input type="hidden" name="id" value={requestId} />
           <p className="text-sm text-ink-soft">
             {side === "requester"
-              ? "This closes the request without a deal. The fee you paid to ask isn't refunded. You can raise a new request any time."
+              ? "This closes the request without a deal. The consent price is refunded to you if the owner hasn't said yes; the platform fee isn't. You can raise a new request any time."
               : `This closes the request without a deal. ${otherName} can raise a new request if they want to try again.`}
           </p>
           <ConfirmSubmit confirm="End this request without a deal?" variant="danger" className="w-full sm:w-auto">

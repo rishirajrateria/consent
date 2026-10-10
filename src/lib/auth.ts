@@ -72,12 +72,29 @@ async function readSession() {
 /** Current session + user; null if not logged in. Cached per request. */
 export const getSession = cache(readSession);
 
-/** User requiring completed 2FA if enabled. Redirects if absent. */
+/** User requiring completed 2FA if enabled and a verified email. Redirects if absent. */
 export async function requireUser() {
   const session = await getSession();
   if (!session) redirect("/login");
   if (session.user.totpEnabled && !session.totpPassed) redirect("/2fa");
+  // Email OTP is mandatory: the account stays locked until the address is proven.
+  if (!session.user.emailVerified) redirect("/verify-email");
   return session;
+}
+
+/**
+ * Where to go after sign-in, signup or verification: a path on this site, or
+ * null. Rejects anything that would leave the site ("//host", "/\host", full URLs).
+ */
+export function safeNext(v: unknown): string | null {
+  if (typeof v !== "string" || !v.startsWith("/") || v.length > 500) return null;
+  try {
+    const u = new URL(v, "http://local");
+    if (u.origin !== "http://local") return null;
+    return u.pathname + u.search + u.hash;
+  } catch {
+    return null;
+  }
 }
 
 export async function requireAdmin(module?: string, perm?: string) {
@@ -168,7 +185,8 @@ export async function requireRequester() {
     });
     if (member) await setActiveProfile({ kind: "requester", id: member.requesterId });
   }
-  if (!member) redirect("/dashboard");
+  // No requester profile yet: show how to get one rather than a silent bounce.
+  if (!member) redirect("/onboarding/requester");
   return { session, member, requester: member.requester };
 }
 
@@ -190,13 +208,15 @@ export async function issueOtp(
   return code;
 }
 
+/** Uses up a live code. With `target`, only a code sent to that address counts. */
 export async function consumeOtp(
   userId: string,
   purpose: "EMAIL_VERIFY" | "PHONE_VERIFY" | "LOGIN" | "SIGNATURE",
-  code: string
+  code: string,
+  target?: string
 ): Promise<boolean> {
   const row = await db.otpCode.findFirst({
-    where: { userId, purpose, code, usedAt: null, expiresAt: { gt: new Date() } },
+    where: { userId, purpose, code, usedAt: null, expiresAt: { gt: new Date() }, ...(target ? { target } : {}) },
     orderBy: { createdAt: "desc" },
   });
   if (!row) return false;

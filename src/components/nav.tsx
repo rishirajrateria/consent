@@ -29,8 +29,11 @@ export type NavItem = {
   prominent?: boolean;
 };
 
+// Panel homes match only themselves, so "Home" isn't marked current on every page inside the panel.
+const HOMES = ["/dashboard", "/c-panel", "/r-panel", "/admin"];
+
 function isActive(pathname: string, href: string) {
-  if (href === "/dashboard") return pathname === "/dashboard";
+  if (HOMES.includes(href)) return pathname === href;
   return pathname === href || pathname.startsWith(href + "/");
 }
 

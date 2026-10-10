@@ -74,7 +74,11 @@ export default async function DirectoryPage({ searchParams }: PageProps<"/direct
         </div>
       )}
 
-      <InvitePanel query={q} returnTo={q ? `/directory?q=${encodeURIComponent(q)}` : "/directory"} />
+      <InvitePanel
+        query={q}
+        returnTo={q ? `/directory?q=${encodeURIComponent(q)}` : "/directory"}
+        hasResults={results.length > 0}
+      />
     </div>
   );
 }

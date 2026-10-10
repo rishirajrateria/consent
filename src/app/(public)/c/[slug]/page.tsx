@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { Card, VerifiedBadge, ScoreRing, ButtonLink, SectionTitle } from "@/components/ui";
@@ -39,6 +40,12 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
   };
 
   const session = await getSession();
+  // Asking needs a requester profile; without one, send people to set it up
+  // instead of a page that silently bounces them.
+  const isRequester = session
+    ? (await db.requesterMember.count({ where: { userId: session.userId } })) > 0
+    : false;
+  const askPath = `/r-panel/new?consenter=${c.slug}`;
 
   const [decided, expired, decidedTimes] = await Promise.all([
     db.consentRequest.count({ where: { consenterId: c.id, decidedAt: { not: null } } }),
@@ -75,11 +82,14 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
       byAsset.set(e.assetTypeId, [...(byAsset.get(e.assetTypeId) ?? []), e.policy]);
     }
     const chips = [...byAsset.entries()].map(([assetTypeId, policies]) => {
+      // A mix that includes "never" must not read as a safe "ask first".
       const policy = policies.every((x) => x === "AUTO_APPROVE")
         ? "allowed"
         : policies.every((x) => x === "AUTO_DENY")
           ? "never"
-          : "ask";
+          : policies.some((x) => x === "AUTO_DENY")
+            ? "some-never"
+            : "ask";
       return { name: assetName.get(assetTypeId) ?? "?", policy };
     });
     return { platform: p.name, chips: chips.filter((ch) => ch.policy !== "ask").concat(chips.filter((ch) => ch.policy === "ask")) };
@@ -117,23 +127,29 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
           {medianHours != null && <span>Median response <strong className="text-ink">{medianHours < 48 ? `${medianHours}h` : `${Math.round(medianHours / 24)}d`}</strong></span>}
           <span><strong className="text-ink">{decided}</strong> requests decided</span>
           <span>
-            Asking costs{" "}
+            Consent price{" "}
             <strong className="text-ink">
-              {c.consentPrice ? fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency) : "nothing"}
+              {c.priceTiers.length > 0
+                ? "varies by intent"
+                : c.consentPrice
+                  ? fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency)
+                  : "none"}
             </strong>
-            {c.priceTiers.length > 0 ? " (varies by intent)" : c.consentPrice ? " — set by the owner, paid when you submit" : ""}
+            {" · plus the "}
+            <Link href="/pricing" className="underline underline-offset-4">platform request fee</Link>
           </span>
         </div>
-        <ButtonLink href={session ? `/r-panel/new?consenter=${c.slug}` : `/signup`} className="w-full justify-center sm:w-auto">
-          Request consent
-        </ButtonLink>
+        {/* Review first: point at the terms, the ask button comes after them. */}
+        <a href="#terms" className="inline-flex min-h-10 items-center text-sm font-medium underline underline-offset-4">
+          See their terms
+        </a>
       </Card>
 
       {c.priceTiers.length > 0 && (
-        <Card className="space-y-2">
+        <Card className="space-y-2" id="terms">
           <SectionTitle
             title="Consent price by intent"
-            desc="What it costs to ask, depending on why. Paid in-app when a request is submitted; it buys the ask, not the answer."
+            desc="What it costs to ask, depending on why. Paid in-app when a request is submitted and held until the owner answers: theirs on a yes, refunded otherwise."
           />
           <div className="flex flex-wrap gap-1.5">
             {c.priceTiers
@@ -153,7 +169,7 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
         </Card>
       )}
 
-      <Card className="space-y-4">
+      <Card className="space-y-4" id={c.priceTiers.length > 0 ? undefined : "terms"}>
         <SectionTitle
           title="What's generally allowed"
           desc="Defaults set by the consenter. Your specific request may still be reviewed, negotiated or declined."
@@ -177,8 +193,8 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
                           : "inline-flex items-center gap-1 rounded-full border border-dashed border-ink/30 px-2.5 py-1 text-[11px] text-ink-soft"
                     }
                   >
-                    {chip.policy === "allowed" ? <Check className="size-3" aria-hidden /> : chip.policy === "never" ? <X className="size-3" aria-hidden /> : <CircleDashed className="size-3" aria-hidden />}
-                    {chip.name}
+                    {chip.policy === "allowed" ? <Check className="size-3" aria-hidden /> : chip.policy === "ask" ? <CircleDashed className="size-3" aria-hidden /> : <X className="size-3" aria-hidden />}
+                    {chip.policy === "some-never" ? `${chip.name} · some formats never` : chip.name}
                   </span>
                 ))}
               </div>
@@ -186,8 +202,32 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
           ))}
         </div>
         <p className="text-xs text-ink-faint">
-          Solid = allowed without asking · dashed = ask first · crossed = never allowed.
+          Solid = allowed without asking · dashed = ask first · dashed with ✕ = never on some formats · crossed = never allowed.
         </p>
+      </Card>
+
+      {/* Decide last: the ask comes after the prices and the allowed / never terms. */}
+      <Card strong className="space-y-3" id="ask">
+        <SectionTitle
+          title="Ready to ask?"
+          desc="You pay the request fee, plus any consent price, when you submit. Neither is refunded. Uses marked never allowed are declined automatically."
+        />
+        {!session ? (
+          <p className="text-sm text-ink-soft">
+            You&apos;ll sign in first. New here?{" "}
+            <Link href={`/signup?next=${encodeURIComponent(askPath)}`} className="font-medium text-ink underline underline-offset-4">
+              Create an account
+            </Link>
+          </p>
+        ) : !isRequester ? (
+          <p className="text-sm text-ink-soft">To send requests you need a requester profile. It&apos;s reviewed before you can ask.</p>
+        ) : null}
+        <ButtonLink
+          href={!session ? `/login?next=${encodeURIComponent(askPath)}` : isRequester ? askPath : "/onboarding/requester"}
+          className="w-full justify-center sm:w-auto"
+        >
+          {session && !isRequester ? "Set up a requester profile to ask" : "Request consent"}
+        </ButtonLink>
       </Card>
 
       <TipOffForm

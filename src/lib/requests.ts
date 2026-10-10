@@ -33,6 +33,7 @@ export async function onRequestPaid(requestId: string) {
     },
     selections: request.selections as Selection[],
     assetTypeIds: request.assetTypeIds,
+    thumbnailUsed: request.thumbnailUsed,
   });
 
   if (decision.kind === "rule" && decision.action === "AUTO_DENY") {
@@ -51,7 +52,7 @@ export async function onRequestPaid(requestId: string) {
     });
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} has a standing rule that declines this kind of request. The per-request fee is not refunded.`,
+      body: `${request.consenter.displayName} has a standing rule that declines this kind of request. Their consent price is refunded to you; the platform fee is not.`,
       href: `/r-panel/requests/${requestId}`,
     });
     return;
@@ -72,7 +73,7 @@ export async function onRequestPaid(requestId: string) {
     });
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} never allows this combination. The per-request fee is not refunded.`,
+      body: `${request.consenter.displayName} never allows this combination. Their consent price is refunded to you; the platform fee is not.`,
       href: `/r-panel/requests/${requestId}`,
     });
     return;

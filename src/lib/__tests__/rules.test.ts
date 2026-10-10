@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ruleMatches, type RuleConditions, type Selection } from "../rules";
+import { ruleMatches, cellAutoApproves, type RuleConditions, type Selection } from "../rules";
 
 const sel = (platformId: string, durationSec?: number): Selection => ({
   platformId,
@@ -53,5 +53,32 @@ describe("ruleMatches", () => {
   it("matches categories on overlap", () => {
     expect(ruleMatches({ categories: ["news", "sports"] }, baseCtx)).toBe(true);
     expect(ruleMatches({ categories: ["gaming"] }, baseCtx)).toBe(false);
+  });
+});
+
+describe("cellAutoApproves", () => {
+  const allow = { policy: "AUTO_APPROVE" as const, maxDurationSec: null, thumbnailAllowed: true, paidDefault: false };
+
+  it("approves a plain ✓ cell", () => {
+    expect(cellAutoApproves(allow, sel("yt", 20), true)).toBe(true);
+  });
+
+  it("asks when the cell isn't ✓", () => {
+    expect(cellAutoApproves({ ...allow, policy: "ASK" }, sel("yt", 20), false)).toBe(false);
+  });
+
+  it("asks when the clip is longer than the row's cap", () => {
+    expect(cellAutoApproves({ ...allow, maxDurationSec: 30 }, sel("yt", 20), false)).toBe(true);
+    expect(cellAutoApproves({ ...allow, maxDurationSec: 10 }, sel("yt", 20), false)).toBe(false);
+  });
+
+  it("asks when the request uses a thumbnail the row doesn't allow", () => {
+    const noThumb = { ...allow, thumbnailAllowed: false };
+    expect(cellAutoApproves(noThumb, sel("yt", 20), true)).toBe(false);
+    expect(cellAutoApproves(noThumb, sel("yt", 20), false)).toBe(true);
+  });
+
+  it("asks when the row is paid by default", () => {
+    expect(cellAutoApproves({ ...allow, paidDefault: true }, sel("yt", 20), false)).toBe(false);
   });
 });

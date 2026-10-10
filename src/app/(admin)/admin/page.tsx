@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card } from "@/components/ui";
+import { PageHeader, Card, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { runSweeps } from "@/lib/jobs";
 import { revalidatePath } from "next/cache";
@@ -15,8 +15,9 @@ async function runJobsAction() {
   revalidatePath("/admin");
 }
 
-export default async function AdminOverview() {
+export default async function AdminOverview({ searchParams }: PageProps<"/admin">) {
   await requireAdmin();
+  const sp = await searchParams;
   const [pendingRequesters, pendingConsenters, openReports, pendingRequests, activeGrants, users, paidRevenue, openTakedowns] =
     await Promise.all([
       db.requesterProfile.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
@@ -52,6 +53,12 @@ export default async function AdminOverview() {
           </form>
         }
       />
+      {/* requireAdmin(module, perm) sends admins without that permission here. */}
+      {sp.denied && (
+        <Alert tone="warn">
+          Your role doesn&apos;t allow that action, so nothing was changed. Ask a Super Admin for access.
+        </Alert>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {stats.map(([label, value, href]) => (
           <Link key={label} href={href as "/admin"} className="group">

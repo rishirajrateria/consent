@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { getSession } from "@/lib/auth";
+import { getSession, safeNext } from "@/lib/auth";
 import { email as emailProvider } from "@/lib/providers";
 import { audit } from "@/lib/audit";
 import { normalizeLegalName } from "@/lib/utils";
@@ -24,16 +24,21 @@ const inviteSchema = z.object({
 export async function sendAppInviteAction(formData: FormData) {
   const session = await getSession();
   const parsed = inviteSchema.safeParse(Object.fromEntries(formData));
-  const back = parsed.success && parsed.data.returnTo?.startsWith("/") ? parsed.data.returnTo : "/directory";
-  if (!session) redirect(`/signup`);
+  const back = (parsed.success && safeNext(parsed.data.returnTo)) || "/directory";
+  // returnTo usually already carries ?q=, so merge params instead of appending.
+  function go(params: Record<string, string>): never {
+    const u = new URL(back, "http://local");
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    redirect(u.pathname + u.search);
+  }
+  if (!session) redirect(`/login?next=${encodeURIComponent(back)}`);
+  if (!session.user.emailVerified) redirect(`/verify-email?next=${encodeURIComponent(back)}`);
   if (!rateLimit("invite", session.userId, 10, 60 * 60_000))
-    redirect(`${back}?error=${encodeURIComponent("Too many invites this hour — try again later")}`);
-  if (!parsed.success)
-    redirect(`${back}?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Check the invite form")}`);
+    go({ error: "Too many invites this hour — try again later" });
+  if (!parsed.success) go({ error: parsed.error.issues[0]?.message ?? "Check the invite form" });
   const d = parsed.data;
   const normalizedName = normalizeLegalName(d.targetName);
-  if (!normalizedName)
-    redirect(`${back}?error=${encodeURIComponent("Enter the person's or IP's name")}`);
+  if (!normalizedName) go({ error: "Enter the person's or IP's name" });
 
   // Already here? Point the searcher at the live profile instead.
   const existing = await db.consenterProfile.findFirst({
@@ -47,6 +52,14 @@ export async function sendAppInviteAction(formData: FormData) {
     },
   });
   if (existing) redirect(`/c/${existing.slug}`);
+
+  // Email the person only the first time (or to a new address), so a
+  // repeat submit doesn't send them the same invite again.
+  const before = await db.appInvite.findUnique({
+    where: { invitedById_normalizedName: { invitedById: session.userId, normalizedName } },
+    select: { email: true },
+  });
+  const shouldEmail = !!d.email && (!before || before.email?.toLowerCase() !== d.email.toLowerCase());
 
   await db.appInvite.upsert({
     where: { invitedById_normalizedName: { invitedById: session.userId, normalizedName } },
@@ -67,7 +80,7 @@ export async function sendAppInviteAction(formData: FormData) {
 
   const demand = await db.appInvite.count({ where: { normalizedName, claimedAt: null } });
 
-  if (d.email) {
+  if (shouldEmail && d.email) {
     const base = process.env.APP_URL ?? "";
     const others = demand > 1 ? ` ${demand - 1} other${demand > 2 ? "s are" : " is"} waiting too.` : "";
     await emailProvider.send(
@@ -79,7 +92,7 @@ ${session.user.name} searched for you on Consent and wants to ask your permissio
 
 Consent is where you set the terms for your own likeness: what's allowed, what's never allowed, and what it costs — platform by platform. Every approval becomes a signed, verifiable certificate. Verification is strict, and it costs you nothing.
 ${d.note ? `\nTheir note: "${d.note}"\n` : ""}
-Claim your identity: ${base}/signup
+Claim your identity: ${base}/signup?next=%2Fonboarding%2Fconsenter
 
 — Consent · Your likeness. Your terms.`
     );
@@ -94,7 +107,7 @@ Claim your identity: ${base}/signup
     detail: { targetName: d.targetName.trim(), email: d.email || null, demand },
   });
 
-  redirect(`${back}?invited=${encodeURIComponent(d.targetName.trim())}&demand=${demand}`);
+  go({ invited: d.targetName.trim(), demand: String(demand) });
 }
 
 /**

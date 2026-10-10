@@ -3,14 +3,18 @@ import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, ScoreRing, StatusBadge, VerifiedBadge, Alert, ButtonLink } from "@/components/ui";
 import { fmtDateTime } from "@/lib/utils";
+import type { RequestStatus } from "@prisma/client";
 import { ArrowRight } from "lucide-react";
 
 export const metadata = { title: "Consenter panel" };
 
+// Same statuses as the "Needs action" tab on /c-panel/requests, so the tile count matches the list it opens.
+const NEEDS_ACTION: RequestStatus[] = ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"];
+
 export default async function ConsenterHome() {
   const { consenter } = await requireConsenter();
   const [pending, inNegotiation, activeGrants, matrixCount, recent] = await Promise.all([
-    db.consentRequest.count({ where: { consenterId: consenter.id, status: "PENDING" } }),
+    db.consentRequest.count({ where: { consenterId: consenter.id, status: { in: NEEDS_ACTION } } }),
     db.consentRequest.count({ where: { consenterId: consenter.id, status: "IN_NEGOTIATION" } }),
     db.grant.count({ where: { request: { consenterId: consenter.id }, status: "ACTIVE" } }),
     db.consentMatrixEntry.count({ where: { consenterId: consenter.id } }),
@@ -48,9 +52,10 @@ export default async function ConsenterHome() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          ["Pending requests", pending, "/c-panel/requests"],
-          ["In negotiation", inNegotiation, "/c-panel/requests?tab=negotiation"],
-          ["Active grants", activeGrants, "/c-panel/requests?tab=grants"],
+          ["Needs action", pending, "/c-panel/requests"],
+          ["In negotiation", inNegotiation, "/c-panel/requests?tab=Negotiation"],
+          // Approved requests (and their grants) are listed under "Decided".
+          ["Active grants", activeGrants, "/c-panel/requests?tab=Decided"],
           ["Matrix cells set", matrixCount, "/c-panel/matrix"],
         ].map(([label, value, href]) => (
           <Link key={String(label)} href={href as "/c-panel"}>

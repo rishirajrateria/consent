@@ -97,7 +97,7 @@ export async function raiseTakedownAction(formData: FormData) {
 }
 
 export async function respondTakedownAction(formData: FormData) {
-  const { session, requester } = await requireRequester();
+  const { session, member, requester } = await requireRequester();
   const takedownId = String(formData.get("takedownId"));
   const action = String(formData.get("action")); // down | decline
   const takedown = await db.takedownRequest.findUnique({
@@ -106,6 +106,8 @@ export async function respondTakedownAction(formData: FormData) {
   });
   if (!takedown || takedown.grant.request.requesterId !== requester.id) redirect("/r-panel/requests");
   const path = `/r-panel/requests/${takedown.grant.requestId}`;
+  // Requester viewer seats are read-only: the answer moves the Consent Score.
+  if (member.role === "VIEWER") fail(path, "Viewers have read-only access");
   if (takedown.status !== "RAISED" && takedown.status !== "REJECTED_CLAIM")
     fail(path, "This takedown request is no longer open");
 

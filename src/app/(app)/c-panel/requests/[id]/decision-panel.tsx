@@ -21,6 +21,9 @@ export function DecisionPanel({
   thumbnailUsed,
   isPaid,
   inNegotiation,
+  openOffer,
+  canNegotiate,
+  canSetFee,
   proposeLegalByDefault,
   denialReasons,
 }: {
@@ -30,17 +33,30 @@ export function DecisionPanel({
   thumbnailUsed: boolean;
   isPaid: boolean;
   inNegotiation: boolean;
+  /** The fee waiting for an answer, if any. */
+  openOffer: { id: string; label: string; note: string | null; fromRequester: boolean } | null;
+  canNegotiate: boolean;
+  /** Can negotiate and still has a counter-offer left, so a new fee can be sent. */
+  canSetFee: boolean;
   proposeLegalByDefault: boolean;
   denialReasons: { id: string; label: string }[];
 }) {
-  const [mode, setMode] = useState<Mode>("approve");
+  // Approving settles an open fee from the requester, so it is the owner's one
+  // "yes" to a fee. With the owner's own fee open, the requester answers first.
+  const theirFee = openOffer?.fromRequester ? openOffer : null;
+  const myFee = openOffer && !openOffer.fromRequester ? openOffer : null;
+  const canApprove = !myFee && (!theirFee || canNegotiate);
+  const approveLabel = theirFee ? `Approve the deal at ${theirFee.label}` : "Approve";
   const options: [Mode, string][] = [
-    ["approve", isPaid ? "Approve the deal" : "Approve"],
+    ...(canApprove ? ([["approve", approveLabel]] as [Mode, string][]) : []),
     // While a fee is being discussed, counter-offers live in the fee card above.
-    ...(inNegotiation ? [] : ([["fee", "Set a fee"]] as [Mode, string][])),
+    ...(inNegotiation || !canSetFee ? [] : ([["fee", "Set a fee"]] as [Mode, string][])),
     ["changes", "Ask for changes"],
     ["deny", "Decline"],
   ];
+  const [picked, setMode] = useState<Mode>(options[0][0]);
+  // The choices change when the fee does; fall back to the first one.
+  const mode = options.some(([m]) => m === picked) ? picked : options[0][0];
 
   return (
     <Card strong className="space-y-5" id="decide">
@@ -48,6 +64,25 @@ export function DecisionPanel({
         title="Your answer"
         desc="You've seen who's asking, what for and the exact files. Choose your answer, then confirm it at the bottom."
       />
+      {myFee && (
+        <p className="text-sm text-ink-soft">
+          {inNegotiation
+            ? `Waiting for ${requesterName} to answer your fee of ${myFee.label}.${canSetFee ? " You can change it in Fee negotiation above." : ""}`
+            : canSetFee
+              ? `Your fee of ${myFee.label} hasn't been answered yet. Send it again with Set a fee so ${requesterName} can answer it.`
+              : canNegotiate
+                ? `You've used all your counter-offers. Ask for changes or decline, or ${requesterName} can raise a new request.`
+                : `Your fee of ${myFee.label} hasn't been answered yet.`}
+        </p>
+      )}
+      {theirFee && (
+        <p className="text-sm text-ink-soft">
+          {requesterName} offered {theirFee.label}.{" "}
+          {canNegotiate
+            ? `Approving accepts this fee.${inNegotiation && canSetFee ? " To ask for a different fee, counter it in Fee negotiation above." : ""}`
+            : "Accepting a fee needs the negotiate permission."}
+        </p>
+      )}
       <div role="radiogroup" aria-label="How do you want to answer?" className="flex flex-wrap gap-2">
         {options.map(([m, label]) => (
           <button
@@ -69,6 +104,8 @@ export function DecisionPanel({
       {mode === "approve" && (
         <form action={approveRequestAction} className="space-y-3">
           <input type="hidden" name="id" value={requestId} />
+          {/* The fee on the button; approving fails if it changed meanwhile. */}
+          <input type="hidden" name="offerId" value={openOffer?.id ?? ""} />
           <details className="group">
             <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-ink">
               Conditions (optional): fewer formats, shorter clips, no thumbnail, shorter validity
@@ -123,7 +160,17 @@ export function DecisionPanel({
             <input type="checkbox" name="proposeLegal" defaultChecked={proposeLegalByDefault} className="size-4 accent-black" />
             Also propose a legally binding agreement ({requesterName} must accept)
           </label>
-          <SubmitButton className="w-full sm:w-auto">{isPaid ? "Approve the deal" : "Approve"}</SubmitButton>
+          {theirFee && (
+            <div className="space-y-1 border-t hairline pt-3">
+              {theirFee.note && (
+                <p className="text-sm">Their note becomes a condition of this consent: &ldquo;{theirFee.note}&rdquo;</p>
+              )}
+              <p className="text-xs text-ink-faint">
+                You accept {theirFee.label}. The fee is paid directly between you, never through Consent.
+              </p>
+            </div>
+          )}
+          <SubmitButton className="w-full sm:w-auto">{approveLabel}</SubmitButton>
         </form>
       )}
 
@@ -137,8 +184,8 @@ export function DecisionPanel({
             <Field label="Currency" required>
               <Input name="currency" defaultValue="USD" maxLength={3} required />
             </Field>
-            <Field label="Note (optional)">
-              <Input name="scopeNote" placeholder="e.g. Flat fee for 3 months" />
+            <Field label="Condition (optional)" hint="Becomes part of the consent if accepted.">
+              <Input name="scopeNote" placeholder="e.g. Instagram only, for 3 months" />
             </Field>
           </div>
           <p className="text-xs text-ink-faint">

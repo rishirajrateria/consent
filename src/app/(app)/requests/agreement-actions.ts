@@ -3,8 +3,8 @@
 import { redirect } from "next/navigation";
 import { createHash } from "crypto";
 import { db } from "@/lib/db";
-import { issueOtp, consumeOtp } from "@/lib/auth";
-import { getESignProvider } from "@/lib/esign";
+import { issueOtp } from "@/lib/auth";
+import { getESignProvider, canActOnAgreement, agreementTemplateFor } from "@/lib/esign";
 import { email } from "@/lib/providers";
 import { storeUpload } from "@/lib/storage";
 import { issueGrant } from "@/lib/grants";
@@ -21,6 +21,19 @@ function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
 }
 
+/**
+ * Resolves the acting side and refuses read-only seats: requester viewers, and
+ * consenter team members who can't approve requests.
+ */
+async function agreementActor(id: string) {
+  const resolved = await resolveSide(id);
+  const path = panelPath(resolved.side, id);
+  const member = resolved.side === "consenter" ? resolved.consenterMember : resolved.requesterMember;
+  if (!canActOnAgreement(resolved.side, member))
+    fail(path, resolved.side === "requester" ? "Viewers have read-only access" : "You need the approve permission to act on the agreement");
+  return { ...resolved, path };
+}
+
 async function notifyOther(side: "consenter" | "requester", request: { id: string; number: number; consenterId: string; requesterId: string }, title: string, body: string) {
   const other = side === "consenter" ? "requester" : "consenter";
   const notify = other === "consenter" ? notifyConsenterTeam : notifyRequesterTeam;
@@ -34,8 +47,7 @@ async function notifyOther(side: "consenter" | "requester", request: { id: strin
 
 export async function proposeLegalAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   if (request.status !== "AGREEMENT_MODE_PENDING") fail(path, "Agreement mode is not open");
   await db.agreement.upsert({
     where: { requestId: id },
@@ -53,10 +65,9 @@ export async function proposeLegalAction(formData: FormData) {
 export async function respondProposalAction(formData: FormData) {
   const id = String(formData.get("id"));
   const accept = String(formData.get("respond")) === "accept";
-  const { session, request, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   const agreement = await db.agreement.findUnique({ where: { requestId: id } });
-  if (!agreement || agreement.status !== "PROPOSED") fail(path, "No open proposal");
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "PROPOSED") fail(path, "No open proposal");
   if (agreement.proposedBySide === side) fail(path, "The other side must respond to your proposal");
 
   if (accept) {
@@ -66,8 +77,9 @@ export async function respondProposalAction(formData: FormData) {
     });
     await notifyOther(side, request, `Agreement proposal accepted on request #${request.number}`, "Choose how to create the agreement: platform-generated or upload your own signed contract.");
   } else {
+    // The request stays here: the side that proposed decides what happens next
+    // (continueWithAppRecordAction, or close the request).
     await db.agreement.update({ where: { requestId: id }, data: { status: "DECLINED" } });
-    await db.consentRequest.update({ where: { id }, data: { status: "AGREEMENT_MODE_PENDING" } });
     await db.requestEvent.create({
       data: { requestId: id, type: "legal_agreement_declined", actorName: session.user.name, actorSide: side },
     });
@@ -124,23 +136,24 @@ function renderTemplate(body: string, request: {
 export async function chooseAgreementKindAction(formData: FormData) {
   const id = String(formData.get("id"));
   const kind = String(formData.get("kind"));
-  const { session, request, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   const agreement = await db.agreement.findUnique({ where: { requestId: id } });
-  if (!agreement || agreement.status !== "DRAFTING") fail(path, "Agreement is not in drafting state");
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "DRAFTING")
+    fail(path, "Agreement is not in drafting state");
 
   if (kind === "PLATFORM_GENERATED") {
     const full = await db.consentRequest.findUniqueOrThrow({
       where: { id },
       include: { consenter: true, requester: true, files: true },
     });
-    const template = await db.agreementTemplate.findFirst({
-      where: { active: true, jurisdiction: { in: [full.requester.country, "GLOBAL"] } },
-      orderBy: { jurisdiction: "desc" }, // country-specific first, GLOBAL fallback
-    });
+    // Country-specific first, GLOBAL fallback; the panel lists clauses from the same template.
+    const template = await agreementTemplateFor(full.requester.country);
     if (!template) fail(path, "No agreement template is configured — contact support");
     const optional = (template.optionalClauses as { id: string; title: string; body: string }[]) ?? [];
     const chosen = formData.getAll("clauses").map(String);
+    // Never drop a ticked clause without a word (e.g. the template changed meanwhile).
+    if (chosen.some((c) => !optional.some((o) => o.id === c)))
+      fail(path, "The optional clauses have changed. Tick the ones you want again.");
     let body = renderTemplate(template.body, full);
     const extra = optional.filter((c) => chosen.includes(c.id));
     if (extra.length) {
@@ -176,24 +189,27 @@ export async function chooseAgreementKindAction(formData: FormData) {
 
 export async function sendSignatureOtpAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, side } = await resolveSide(id);
+  const { session, path } = await agreementActor(id);
   const code = await issueOtp(session.userId, "SIGNATURE", session.user.email);
   const { renderMessage } = await import("@/lib/templates");
   const msg = await renderMessage("signature_otp_email", { subject: "Your Consent e-signature code", body: "Code to sign the agreement: {{code}}. It expires in 10 minutes." }, { code });
   await email.send(session.user.email, msg.subject!, msg.body);
-  redirect(`${panelPath(side, id)}?otp=sent`);
+  redirect(`${path}?otp=sent`);
 }
 
 export async function signAgreementAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   const agreement = await db.agreement.findUnique({
     where: { requestId: id },
     include: { signatures: true },
   });
-  if (!agreement || agreement.status !== "AWAITING_SIGNATURES") fail(path, "Agreement is not awaiting signatures");
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "AWAITING_SIGNATURES")
+    fail(path, "Agreement is not awaiting signatures");
   if (agreement.signatures.some((s) => s.side === side)) fail(path, "Your side has already signed");
+  // The signature binds the exact text the signer read, never a newer draft.
+  if (String(formData.get("sha256") ?? "") !== agreement.sha256)
+    fail(path, "The agreement text has changed. Read the new version, then sign.");
 
   const typedName = String(formData.get("typedName") ?? "").trim();
   const code = String(formData.get("code") ?? "").trim();
@@ -230,10 +246,14 @@ export async function signAgreementAction(formData: FormData) {
 
 export async function uploadOwnAgreementAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   const agreement = await db.agreement.findUnique({ where: { requestId: id } });
-  if (!agreement || agreement.status !== "UPLOAD_PENDING_CONFIRMATION") fail(path, "Not awaiting an upload");
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "UPLOAD_PENDING_CONFIRMATION")
+    fail(path, "Not awaiting an upload");
+  // The uploader may replace their own file; a file from the other side is
+  // confirmed or rejected, not overwritten.
+  if (agreement.uploadedFileId && agreement.uploadConfirmedBySide !== side)
+    fail(path, "The other side already uploaded a file. Check it first.");
   const file = formData.get("file") as File | null;
   if (!file || file.size === 0) fail(path, "Choose the fully signed agreement file");
   const stored = await storeUpload({ file, kind: "AGREEMENT", uploadedById: session.userId, requestId: id });
@@ -250,15 +270,120 @@ export async function uploadOwnAgreementAction(formData: FormData) {
 
 export async function confirmUploadedAgreementAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, side } = await resolveSide(id);
-  const path = panelPath(side, id);
+  const { session, request, side, path } = await agreementActor(id);
   const agreement = await db.agreement.findUnique({ where: { requestId: id } });
-  if (!agreement || !agreement.uploadedFileId) fail(path, "No uploaded agreement to confirm");
+  if (
+    request.status !== "LEGAL_AGREEMENT_PENDING" ||
+    !agreement ||
+    agreement.status !== "UPLOAD_PENDING_CONFIRMATION" ||
+    !agreement.uploadedFileId
+  )
+    fail(path, "No uploaded agreement to confirm");
   if (agreement.uploadConfirmedBySide === side) fail(path, "The other side must confirm the upload");
+  // Confirm only the file that was checked, not one swapped in meanwhile.
+  if (String(formData.get("fileId") ?? "") !== agreement.uploadedFileId)
+    fail(path, "The file was replaced. Open the new one and check it.");
   await db.requestEvent.create({
     data: { requestId: id, type: "agreement_upload_confirmed", actorName: session.user.name, actorSide: side },
   });
   await completeAgreement(id, session.user.name);
+  redirect(path);
+}
+
+/**
+ * Either side that hasn't signed yet sends the generated agreement back to
+ * drafting with a reason. Any signature already on it is voided.
+ */
+export async function requestRedraftAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { session, request, side, path } = await agreementActor(id);
+  const agreement = await db.agreement.findUnique({ where: { requestId: id }, include: { signatures: true } });
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "AWAITING_SIGNATURES")
+    fail(path, "Agreement is not awaiting signatures");
+  if (agreement.signatures.some((s) => s.side === side)) fail(path, "Your side has already signed this draft");
+  if (String(formData.get("sha256") ?? "") !== agreement.sha256)
+    fail(path, "The agreement text has changed. Read the new version first.");
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!reason) fail(path, "Say what should change");
+
+  await db.$transaction([
+    db.agreement.update({ where: { requestId: id }, data: { status: "DRAFTING", kind: null } }),
+    db.agreementSignature.deleteMany({ where: { agreementId: agreement.id } }),
+    // The reason goes in the messages so both sides can talk it through.
+    db.requestMessage.create({
+      data: { requestId: id, senderId: session.userId, senderSide: side, body: `I asked for a new draft of the agreement: ${reason}` },
+    }),
+    db.requestEvent.create({
+      data: { requestId: id, type: "agreement_redraft_requested", actorName: session.user.name, actorSide: side, detail: { reason } },
+    }),
+  ]);
+  await notifyOther(side, request, `New agreement draft asked for on request #${request.number}`, `“${reason.slice(0, 140)}” Any signature on the old draft was removed. Choose how to write the agreement again.`);
+  redirect(path);
+}
+
+/** The checking side says the uploaded file isn't the right, fully signed document. */
+export async function rejectUploadedAgreementAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { session, request, side, path } = await agreementActor(id);
+  const agreement = await db.agreement.findUnique({ where: { requestId: id } });
+  if (
+    request.status !== "LEGAL_AGREEMENT_PENDING" ||
+    !agreement ||
+    agreement.status !== "UPLOAD_PENDING_CONFIRMATION" ||
+    !agreement.uploadedFileId
+  )
+    fail(path, "No uploaded agreement to check");
+  if (agreement.uploadConfirmedBySide === side) fail(path, "The other side checks the file you uploaded");
+  if (String(formData.get("fileId") ?? "") !== agreement.uploadedFileId)
+    fail(path, "The file was replaced. Open the new one and check it.");
+  // Back to the upload step for both sides; the stored file stays in the history.
+  await db.agreement.update({
+    where: { requestId: id },
+    data: { uploadedFileId: null, uploadConfirmedBySide: null, sha256: null },
+  });
+  await db.requestEvent.create({
+    data: { requestId: id, type: "agreement_upload_rejected", actorName: session.user.name, actorSide: side },
+  });
+  await notifyOther(side, request, `Uploaded agreement not accepted on request #${request.number}`, "The other side says it isn't the right, fully signed document. Upload the correct file, or talk it through in messages.");
+  redirect(path);
+}
+
+/**
+ * After the other side declines the agreement, the side that proposed it
+ * continues with the Consent-app record (or closes the request instead).
+ */
+export async function continueWithAppRecordAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { session, request, side, path } = await agreementActor(id);
+  const agreement = await db.agreement.findUnique({ where: { requestId: id } });
+  if (request.status !== "LEGAL_AGREEMENT_PENDING" || !agreement || agreement.status !== "DECLINED")
+    fail(path, "Nothing to continue");
+  if (agreement.proposedBySide !== side) fail(path, "The side that proposed the agreement decides what happens next");
+
+  await db.consentRequest.update({ where: { id }, data: { agreementMode: "APP_RECORD" } });
+  await db.requestEvent.create({
+    data: {
+      requestId: id,
+      type: "agreement_mode_chosen",
+      actorName: session.user.name,
+      actorSide: side,
+      detail: { mode: "Consent-app record only" },
+    },
+  });
+  const hasRaw = (await db.storedFile.count({ where: { requestId: id, kind: "RAW_CONTENT" } })) > 0;
+  if (hasRaw) {
+    // The certificate names whoever approved the request.
+    const decider =
+      side === "consenter"
+        ? session.user.name
+        : request.decidedById
+          ? (await db.user.findUnique({ where: { id: request.decidedById } }))?.name
+          : undefined;
+    await issueGrant(id, decider ?? request.decidedByRuleName ?? "Consenter");
+  } else {
+    await db.consentRequest.update({ where: { id }, data: { status: "APPROVED_IN_PRINCIPLE" } });
+    await notifyOther(side, request, `Request #${request.number} continues with the Consent-app record`, "No legally binding agreement. The certificate is issued once the final content file is uploaded.");
+  }
   redirect(path);
 }
 

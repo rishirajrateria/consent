@@ -3,7 +3,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { verifyPayload } from "@/lib/signing";
 import { Card, SectionTitle, StatusBadge, KV, Alert, VerifiedBadge } from "@/components/ui";
-import { HashChecker } from "@/components/hash-checker";
+import { FileChecker } from "./file-checker";
 import { fmtDateTime } from "@/lib/utils";
 import { ShieldCheck, ShieldAlert, Download } from "lucide-react";
 import type { Metadata } from "next";
@@ -39,11 +39,29 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
 
   const effectiveStatus =
     grant.status === "ACTIVE" && grant.validUntil && grant.validUntil < new Date() ? "EXPIRED" : grant.status;
+  // Same rule as /embed: only a valid seal on an active grant reads as permission.
+  const live = signatureValid && effectiveStatus === "ACTIVE";
+  const endedAt = effectiveStatus === "REVOKED" ? grant.revokedAt : effectiveStatus === "EXPIRED" ? grant.validUntil : null;
+  const notCovered = !signatureValid
+    ? "this certificate could not be verified"
+    : effectiveStatus === "REVOKED"
+      ? `this permission was revoked on ${fmtDateTime(endedAt)}`
+      : effectiveStatus === "EXPIRED"
+        ? `this permission ended on ${fmtDateTime(endedAt)}`
+        : null;
+  // Any takedown not yet confirmed down still stands (incl. a rejected "it's down" claim or a refusal).
+  const openTakedown = grant.takedowns.find((t) => t.status !== "CONFIRMED");
+  const requester = <strong>{grant.request.requester.displayName}</strong>;
+  const consenter = (
+    <>
+      <strong>{grant.request.consenter.displayName}</strong> <VerifiedBadge className="align-middle" />
+    </>
+  );
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <Card strong className="fade-up space-y-4 p-7 text-center">
-        {signatureValid ? (
+        {live ? (
           <ShieldCheck className="mx-auto size-12" strokeWidth={1.25} aria-hidden />
         ) : (
           <ShieldAlert className="mx-auto size-12" strokeWidth={1.25} aria-hidden />
@@ -58,22 +76,45 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
             {signatureValid ? "Verified authentic" : "COULD NOT BE VERIFIED — do not trust"}
           </span>
         </div>
+        {/* The status decides what this page may claim, so it is said first. */}
         <p className="text-sm text-ink-soft">
-          <strong>{grant.request.requester.displayName}</strong> has documented permission from{" "}
-          <strong>{grant.request.consenter.displayName}</strong> <VerifiedBadge className="align-middle" /> for the exact
-          scope and files below.
+          {!signatureValid ? (
+            <>The seal on this record doesn&apos;t match. Don&apos;t rely on anything below.</>
+          ) : effectiveStatus === "REVOKED" ? (
+            <>
+              {requester} had permission from {consenter} until {fmtDateTime(endedAt)}. Only content published
+              before then is covered.
+            </>
+          ) : effectiveStatus === "EXPIRED" ? (
+            <>
+              {requester} had permission from {consenter}. It ended on {fmtDateTime(endedAt)} and no longer covers
+              new use.
+            </>
+          ) : (
+            <>
+              {requester} has documented permission from {consenter} for the exact scope and files below.
+            </>
+          )}
         </p>
+        {(grant.revokedAt || openTakedown) && (
+          <div className="space-y-2 text-left">
+            {grant.revokedAt && (
+              <Alert tone="warn">
+                <strong>Revoked on {fmtDateTime(grant.revokedAt)}.</strong>
+                {grant.revokeReason && <> Reason: {grant.revokeReason}</>}
+              </Alert>
+            )}
+            {openTakedown && (
+              <Alert tone="warn">
+                The owner asked for this content to be taken down on {fmtDateTime(openTakedown.createdAt)}.
+              </Alert>
+            )}
+          </div>
+        )}
         <a href={`/api/certificates/${grant.publicId}`} className="glass-ink mx-auto inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium hover:opacity-85">
           <Download className="size-4" aria-hidden /> Download certificate PDF
         </a>
       </Card>
-
-      {grant.revokedAt && (
-        <Alert tone="warn">
-          <strong>Revoked on {fmtDateTime(grant.revokedAt)}.</strong> Valid for use published before
-          this date. Reason: {grant.revokeReason}
-        </Alert>
-      )}
 
       <Card className="space-y-1">
         <SectionTitle title="Approved scope" />
@@ -109,7 +150,7 @@ export default async function VerificationPage({ params }: PageProps<"/v/[public
         )}
       </Card>
 
-      <HashChecker hashes={payload.files.map((f) => f.sha256)} />
+      <FileChecker hashes={payload.files.map((f) => f.sha256)} notCovered={notCovered} />
 
       {grant.takedowns.length > 0 && (
         <Card className="space-y-2">

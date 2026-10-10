@@ -7,6 +7,7 @@ import { fmtDateTime, fmtBytes, titleCase, fmtMoney, statusLabel } from "@/lib/u
 import { sendMessageAction } from "@/app/(app)/requests/shared-actions";
 import type { Selection } from "@/lib/rules";
 import type { Prisma } from "@prisma/client";
+import type { ReactNode } from "react";
 import { FileText, Paperclip, Download, Award } from "lucide-react";
 import { NegotiationActions } from "./negotiation-actions";
 import { countersLeft, MAX_COUNTER_OFFERS } from "@/lib/negotiation";
@@ -70,6 +71,8 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
     ["ASSET", "Assets of the consenter"],
     ["THUMBNAIL", "Thumbnail"],
   ];
+  // A file another upload replaced is superseded; the grant never covers it.
+  const replaced = new Set(request.files.map((f) => f.replacesId).filter(Boolean));
   return (
     <Card className="space-y-4" id="uploads">
       <SectionTitle title="The exact files" desc="Approval is locked to these exact files — upload a new version and it needs its own approval." />
@@ -82,7 +85,7 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
         return (
           <div key={kind} className="space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wider text-ink-faint">{label}</div>
-            {files.map((f, i) => (
+            {files.map((f) => (
               <div key={f.id} className="glass-subtle relative overflow-hidden px-4 py-3">
                 {watermark && (
                   <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center text-2xl font-bold tracking-[0.3em] text-ink/5 select-none">
@@ -93,16 +96,20 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
                   <FileText className="size-4 shrink-0 text-ink-soft" aria-hidden />
                   <span className="min-w-0 flex-1 truncate font-medium">{f.name}</span>
                   <span className="rounded-full border border-ink/15 px-1.5 py-0.5 text-[10px]">v{f.version}</span>
-                  {i === 0 ? (
+                  {!replaced.has(f.id) ? (
                     <a href={storage.signedUrl(f.storageKey, f.name, 600)} target="_blank" rel="noreferrer" className="rounded-lg p-1.5 hover:bg-ink/5" aria-label={`Download ${f.name}`}>
                       <Download className="size-4" aria-hidden />
                     </a>
                   ) : (
-                    <span className="text-[10px] text-ink-faint">superseded</span>
+                    <span className="text-[10px] text-ink-faint">
+                      {request.grant && !f.approvedInGrant ? "superseded · not covered" : "superseded"}
+                    </span>
                   )}
                 </div>
                 <div className="mt-1 font-mono text-[10px] text-ink-faint break-all">sha256: {f.sha256}</div>
-                <div className="text-[10px] text-ink-faint">{fmtBytes(f.size)} · {fmtDateTime(f.createdAt)}{f.approvedInGrant ? " · bound to grant" : ""}</div>
+                <div className="text-[10px] text-ink-faint">{fmtBytes(f.size)} · {fmtDateTime(f.createdAt)}
+                  {f.approvedInGrant ? " · bound to grant" : request.grant && !replaced.has(f.id) ? " · not covered by the grant" : ""}
+                </div>
               </div>
             ))}
           </div>
@@ -115,11 +122,28 @@ export function FilesCard({ request, watermark }: { request: FullRequest; waterm
   );
 }
 
-export function NegotiationCard({ request, side }: { request: FullRequest; side: "consenter" | "requester" }) {
+/** View-only line for seats that can see a card but not act on it. */
+export function ViewOnlyNote({ children = "You have view-only access." }: { children?: ReactNode }) {
+  return <p className="border-t hairline pt-3 text-xs text-ink-faint">{children}</p>;
+}
+
+export function NegotiationCard({
+  request,
+  side,
+  canAct: allowed = true,
+  canApprove = true,
+}: {
+  request: FullRequest;
+  side: "consenter" | "requester";
+  /** False for read-only seats: requester viewers, owner's teammates who can't negotiate. */
+  canAct?: boolean;
+  /** Owner's side: whether this teammate can approve, which is how the owner accepts a fee. */
+  canApprove?: boolean;
+}) {
   const offers = [...request.offers].sort((a, b) => b.version - a.version);
   const latest = offers[0];
-  const canAct = request.status === "IN_NEGOTIATION";
-  if (offers.length === 0 && !canAct) return null;
+  const open = request.status === "IN_NEGOTIATION";
+  if (offers.length === 0 && !open) return null;
   return (
     <Card className="space-y-4" id="negotiation">
       <SectionTitle
@@ -138,14 +162,23 @@ export function NegotiationCard({ request, side }: { request: FullRequest; side:
           </li>
         ))}
       </ol>
-      {canAct && latest && (
+      {open && latest && !allowed && (
+        <ViewOnlyNote>
+          {side === "requester"
+            ? "You have view-only access."
+            : "You can follow the fee here. Answering it needs the negotiate permission."}
+        </ViewOnlyNote>
+      )}
+      {open && latest && allowed && (
         <NegotiationActions
           requestId={request.id}
           side={side}
+          canApprove={canApprove}
+          latestId={latest.id}
           latestLabel={fmtMoney(latest.amount.toString(), latest.currency)}
+          latestNote={latest.scopeNote}
           latestIsTheirs={latest.bySide !== side && latest.status === "OPEN"}
           currency={latest.currency}
-          showShareContacts={side === "consenter" && !request.contactsRevealed}
           myCountersLeft={countersLeft(request.offers, side)}
           theirCountersLeft={countersLeft(request.offers, side === "consenter" ? "requester" : "consenter")}
           otherName={side === "consenter" ? request.requester.displayName : request.consenter.displayName}
@@ -191,7 +224,16 @@ export function ContactsCard({ request }: { request: FullRequest }) {
   );
 }
 
-export function MessagesCard({ request, side }: { request: FullRequest; side: "consenter" | "requester" }) {
+export function MessagesCard({
+  request,
+  side,
+  canAct = true,
+}: {
+  request: FullRequest;
+  side: "consenter" | "requester";
+  /** False for read-only seats (requester viewers): history only, no composer. */
+  canAct?: boolean;
+}) {
   const messages = [...request.messages].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   const open = !["DENIED", "CLOSED", "EXPIRED_NO_RESPONSE", "WITHDRAWN"].includes(request.status);
   return (
@@ -220,7 +262,8 @@ export function MessagesCard({ request, side }: { request: FullRequest; side: "c
           );
         })}
       </div>
-      {open && (
+      {open && !canAct && <ViewOnlyNote />}
+      {open && canAct && (
         <form action={sendMessageAction} className="space-y-2 border-t hairline pt-3">
           <input type="hidden" name="id" value={request.id} />
           <Textarea name="body" placeholder="Write a message…" className="min-h-16" />

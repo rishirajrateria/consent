@@ -9,8 +9,10 @@ import { getSettings } from "@/lib/settings";
 import { audit } from "@/lib/audit";
 import { notifyConsenterTeam } from "@/lib/notify";
 import { issueGrant } from "@/lib/grants";
+import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import type { Selection } from "@/lib/rules";
 import type { FileKind, ValidityKind } from "@prisma/client";
+import { syncConsentPrice } from "@/lib/escrow";
 
 function fail(path: string, error: string): never {
   redirect(`${path}?error=${encodeURIComponent(error)}`);
@@ -83,7 +85,7 @@ export async function createDraftAction(formData: FormData) {
 
 export async function saveScopeAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { request } = await ownedRequest(id);
+  const { requester, request } = await ownedRequest(id);
   if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
   const path = `/r-panel/requests/${id}/edit`;
 
@@ -120,7 +122,15 @@ export async function saveScopeAction(formData: FormData) {
       thumbnailUsed: formData.get("thumbnailUsed") === "on",
     },
   });
-  redirect(`${path}?saved=scope#uploads`);
+  // Stay on the scope section when the owner never allows part of it, so the
+  // note on what to remove is the first thing seen.
+  const blocked = await blockedCombinations({
+    consenterId: request.consenterId,
+    requester,
+    selections,
+    assetTypeIds,
+  });
+  redirect(`${path}?saved=scope#${blocked.length ? "scope" : "uploads"}`);
 }
 
 export async function saveDetailsAction(formData: FormData) {
@@ -258,6 +268,15 @@ export async function submitRequestAction(formData: FormData) {
     fail(path, "Upload the exact assets (images/clips) you will use — required unless the only asset type is Name");
   if (request.thumbnailUsed && !request.files.some((f) => f.kind === "THUMBNAIL"))
     fail(path, "You indicated a thumbnail uses the consenter — upload it separately");
+  // Never take the non-refundable fees for a request the owner's public matrix
+  // would deny the moment it is paid.
+  const blocked = await blockedCombinations({
+    consenterId: request.consenterId,
+    requester,
+    selections,
+    assetTypeIds: request.assetTypeIds,
+  });
+  if (blocked.length) fail(path, blockedPayNote(request.consenter.displayName));
   if (formData.get("acceptTerms") !== "on")
     fail(path, "You must accept the terms, including the mandatory consent-link rule");
 
@@ -270,15 +289,52 @@ export async function submitRequestAction(formData: FormData) {
   redirect(checkoutUrl);
 }
 
+/**
+ * Discards a draft that was never sent: it is deleted with its files, so the
+ * owner never sees it. Unpaid checkout lines go with it.
+ */
+export async function discardDraftAction(formData: FormData) {
+  const id = String(formData.get("id"));
+  const { session, request } = await ownedRequest(id);
+  if (request.status !== "DRAFT") redirect(`/r-panel/requests/${id}`);
+  const [paid, reports] = await Promise.all([
+    db.payment.count({ where: { requestId: id, status: { not: "PENDING" } } }),
+    db.report.count({ where: { requestId: id } }),
+  ]);
+  if (paid || reports) {
+    // Records point at it, so it can't be deleted; close it instead. It was
+    // never submitted, so the owner's side does not list it.
+    await db.consentRequest.update({ where: { id }, data: { status: "WITHDRAWN" } });
+    await syncConsentPrice(id);
+  } else {
+    await db.$transaction([
+      db.storedFile.deleteMany({ where: { requestId: id } }),
+      db.payment.deleteMany({ where: { requestId: id, status: "PENDING" } }),
+      db.consentRequest.delete({ where: { id } }),
+    ]);
+  }
+  await audit({
+    actorId: session.userId,
+    actorName: session.user.name,
+    action: "request_draft_discarded",
+    module: "requests",
+    targetId: id,
+  });
+  redirect("/r-panel/requests?tab=Drafts&discarded=1");
+}
+
 export async function withdrawRequestAction(formData: FormData) {
   const id = String(formData.get("id"));
   const { session, request } = await ownedRequest(id);
-  if (!["DRAFT", "SUBMITTED", "PENDING", "CHANGES_REQUESTED"].includes(request.status))
+  // An unsent draft is discarded (discardDraftAction), never withdrawn.
+  if (!["SUBMITTED", "PENDING", "CHANGES_REQUESTED"].includes(request.status))
     fail(`/r-panel/requests/${id}`, "This request can no longer be withdrawn");
   await db.consentRequest.update({ where: { id }, data: { status: "WITHDRAWN" } });
   await db.requestEvent.create({
     data: { requestId: id, type: "withdrawn", actorName: session.user.name, actorSide: "requester" },
   });
+  // Withdrawn before a yes: the held ask price is refunded.
+  await syncConsentPrice(id);
   redirect(`/r-panel/requests/${id}`);
 }
 

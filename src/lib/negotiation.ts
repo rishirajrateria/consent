@@ -27,3 +27,6 @@ export function canSendOffer(offers: OfferLike[], side: Side): boolean {
 
 export const COUNTERS_USED_UP =
   "You've used all 3 of your counter-offers. Accept the latest offer or end this request. To keep negotiating, a new request needs to be raised.";
+
+/** Shown when the offer someone answered was replaced while they were deciding. */
+export const FEE_CHANGED = "The fee changed while you were deciding. Check the latest offer and answer again.";

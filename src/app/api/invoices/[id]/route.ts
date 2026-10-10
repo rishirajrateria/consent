@@ -33,7 +33,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   sectionTitle(doc, "Notes");
   para(
     doc,
-    "Consent collects platform fees from requesters only. Consent is not a payment intermediary between consenters and requesters. Per-request fees are non-refundable in any outcome."
+    "Consent collects platform fees from requesters only. Consent is not a payment intermediary between consenters and requesters. Per-request platform fees are non-refundable in any outcome. A consent price is held until the owner answers and is refunded unless they say yes."
   );
   const buf = await pdfToBuffer(doc);
   return new NextResponse(new Uint8Array(buf), {

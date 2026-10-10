@@ -17,7 +17,7 @@ export default async function PricingPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees only — fees between parties settle directly, theirs alone." />
+      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees, plus an owner's consent price if they set one. Deal fees settle directly between the parties." />
       <div className="grid gap-4 sm:grid-cols-2">
         <Card strong className="space-y-2 p-7">
           <SectionTitle title="Consenters" />
@@ -46,13 +46,14 @@ export default async function PricingPage() {
       </div>
       <Alert>
         <strong>Owners can also set a consent price</strong> — what it costs just to ask them. It is
-        paid in-app at submission, credited to the owner, and settled weekly. It filters out careless
-        asks; it buys the ask, not the answer. Any usage fee agreed after approval is settled
-        directly between the parties — that money never moves through Consent.
+        paid in-app at submission and held until the owner answers. On a yes it goes to the owner,
+        paid out weekly; on a no, or if the request ends without a yes, it is refunded. It filters out
+        careless asks. Any usage fee agreed after approval is settled directly between the parties;
+        that money never moves through Consent.
       </Alert>
       <Alert>
-        <strong>Per-request fees and consent prices are non-refundable</strong> in every outcome —
-        approved, denied, closed, withdrawn or unanswered. Lapsed subscriptions keep read access to
+        <strong>The per-request platform fee is non-refundable</strong> in every outcome: approved,
+        denied, closed, withdrawn or unanswered. Consent prices are refunded unless the owner says yes. Lapsed subscriptions keep read access to
         past grants and certificates.
       </Alert>
       {note && (

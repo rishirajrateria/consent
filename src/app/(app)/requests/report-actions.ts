@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { storeUpload } from "@/lib/storage";
-import { resolveSide } from "./shared-actions";
+import { resolveSide, assertCanAct } from "./shared-actions";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 
 function panelPath(side: "consenter" | "requester", id: string) {
@@ -12,8 +12,9 @@ function panelPath(side: "consenter" | "requester", id: string) {
 
 export async function fileReportAction(formData: FormData) {
   const id = String(formData.get("id"));
-  const { session, request, side } = await resolveSide(id);
+  const { session, request, side, requesterMember } = await resolveSide(id);
   const path = panelPath(side, id);
+  await assertCanAct(side, requesterMember, path);
   const reason = String(formData.get("reason") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!reason || description.length < 20)
@@ -55,8 +56,9 @@ export async function respondReportAction(formData: FormData) {
   const reportId = String(formData.get("reportId"));
   const report = await db.report.findUnique({ where: { id: reportId }, include: { request: true } });
   if (!report) redirect("/dashboard");
-  const { session, side } = await resolveSide(report.requestId);
+  const { session, side, requesterMember } = await resolveSide(report.requestId);
   const path = panelPath(side, report.requestId);
+  await assertCanAct(side, requesterMember, path);
   if (report.bySide === side) redirect(`${path}?error=${encodeURIComponent("You filed this report")}`);
   const response = String(formData.get("response") ?? "").trim();
   if (!response) redirect(`${path}?error=${encodeURIComponent("Write a response")}`);

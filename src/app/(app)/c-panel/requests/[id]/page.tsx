@@ -14,8 +14,9 @@ import { DecisionPanel } from "./decision-panel";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
-import { fmtDateTime, titleCase } from "@/lib/utils";
+import { fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
 import { ChannelLinks } from "@/components/channel-links";
+import { canSendOffer } from "@/lib/negotiation";
 import type { Selection } from "@/lib/rules";
 import { Timer } from "lucide-react";
 
@@ -43,6 +44,20 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
   if (!request || request.consenterId !== consenter.id) notFound();
 
   const canDecide = member.role === "OWNER" || member.canApprove;
+  const canNegotiate = member.role === "OWNER" || member.canNegotiate;
+  // A new fee counts as a counter-offer once there are offers; each side has 3.
+  const canSetFee = canNegotiate && canSendOffer(request.offers, "consenter");
+  // Offers are ordered newest first; only the latest one can still be open.
+  const latestOffer = request.offers[0];
+  const openOffer =
+    latestOffer?.status === "OPEN"
+      ? {
+          id: latestOffer.id,
+          label: fmtMoney(latestOffer.amount.toString(), latestOffer.currency),
+          note: latestOffer.scopeNote,
+          fromRequester: latestOffer.bySide === "requester",
+        }
+      : null;
   const decidable = ["PENDING", "IN_NEGOTIATION", "CHANGES_REQUESTED"].includes(request.status);
   const selections = request.selections as Selection[];
   const denialReasons = await db.denialReason.findMany({ where: { active: true } });
@@ -99,7 +114,7 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       <ReportPanel request={request} side="consenter" />
 
       {/* ── Decisions and actions ── */}
-      <NegotiationCard request={request} side="consenter" />
+      <NegotiationCard request={request} side="consenter" canAct={canNegotiate} canApprove={canDecide} />
 
       {request.status === "AGREEMENT_MODE_PENDING" && (
         <Card strong className="space-y-3">
@@ -119,7 +134,9 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
         </Card>
       )}
 
-      {request.status === "LEGAL_AGREEMENT_PENDING" && <AgreementPanel request={request} side="consenter" />}
+      {request.status === "LEGAL_AGREEMENT_PENDING" && (
+        <AgreementPanel request={request} side="consenter" canAct={canDecide} />
+      )}
 
       {decidable && canDecide && (
         <DecisionPanel
@@ -129,6 +146,9 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
           thumbnailUsed={request.thumbnailUsed}
           isPaid={request.isPaid}
           inNegotiation={request.status === "IN_NEGOTIATION"}
+          openOffer={openOffer}
+          canNegotiate={canNegotiate}
+          canSetFee={canSetFee}
           proposeLegalByDefault={request.isPaid && consenter.defaultRequireLegalAgreementForPaid}
           denialReasons={denialReasons.map((d) => ({ id: d.id, label: d.label }))}
         />

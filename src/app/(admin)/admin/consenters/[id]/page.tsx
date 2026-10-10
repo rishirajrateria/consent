@@ -1,9 +1,10 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, hasAdminPerm } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { PageHeader, Card, StatusBadge, KV, Field, Textarea, Input, Select, SectionTitle, Alert } from "@/components/ui";
-import { SubmitButton } from "@/components/form";
+import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { ErrorNote, SuccessNote } from "@/components/error-note";
 import {
   decideConsenterAction,
@@ -13,11 +14,14 @@ import {
 } from "../actions";
 import { fmtDateTime, titleCase, fmtBytes } from "@/lib/utils";
 import { FileText } from "lucide-react";
+import { NoPermission } from "../../no-permission";
 
 export const metadata = { title: "Verify consenter" };
 
 export default async function ConsenterDetail({ params, searchParams }: PageProps<"/admin/consenters/[id]">) {
-  await requireAdmin("consenters", "view");
+  const session = await requireAdmin("consenters", "view");
+  const canDecide = hasAdminPerm(session.user.adminRole, "consenters", "approve");
+  const canEdit = hasAdminPerm(session.user.adminRole, "consenters", "edit");
   const { id } = await params;
   const sp = await searchParams;
   const c = await db.consenterProfile.findUnique({
@@ -30,6 +34,13 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
     },
   });
   if (!c) notFound();
+  // Internal notes are kept in the audit log, never on the profile (the applicant sees adminNotes).
+  const history = await db.auditLog.findMany({
+    where: { module: "consenters", targetId: c.id },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  });
+  const meetingPassed = c.meetings.some((m) => m.outcome === "passed");
 
   // duplicate matches for context
   const dupMatches = c.duplicateFlag
@@ -69,13 +80,17 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
               <StatusBadge status={d.status} />
             </div>
           ))}
-          <form action={clearDuplicateFlagAction} className="flex items-end gap-2">
-            <input type="hidden" name="id" value={c.id} />
-            <Field label="Reason to clear" required>
-              <Input name="reason" required placeholder="e.g. different person, name collision confirmed via documents" />
-            </Field>
-            <SubmitButton variant="secondary">Clear flag</SubmitButton>
-          </form>
+          {canDecide ? (
+            <form action={clearDuplicateFlagAction} className="flex items-end gap-2">
+              <input type="hidden" name="id" value={c.id} />
+              <Field label="Reason to clear" required>
+                <Input name="reason" required placeholder="e.g. different person, name collision confirmed via documents" />
+              </Field>
+              <SubmitButton variant="secondary">Clear flag</SubmitButton>
+            </form>
+          ) : (
+            <NoPermission to="clear the flag" perm="approve" module="consenters" />
+          )}
         </Card>
       )}
 
@@ -131,7 +146,7 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
               {m.location && <div className="text-ink-soft">{m.location}</div>}
               {m.officer && <div className="text-xs text-ink-faint">Officer: {m.officer.name}</div>}
               {m.notes && <div className="text-xs text-ink-soft">{m.notes}</div>}
-              {!m.outcome && (
+              {!m.outcome && canEdit && (
                 <form action={recordMeetingOutcomeAction} className="space-y-2 border-t hairline pt-2">
                   <input type="hidden" name="meetingId" value={m.id} />
                   <Textarea name="notes" placeholder="Meeting notes…" className="min-h-16" />
@@ -143,43 +158,82 @@ export default async function ConsenterDetail({ params, searchParams }: PageProp
               )}
             </div>
           ))}
-          <form action={scheduleMeetingAction} className="space-y-3 border-t hairline pt-3">
-            <input type="hidden" name="id" value={c.id} />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Date & time" required>
-                <Input name="scheduledAt" type="datetime-local" required />
+          {canEdit ? (
+            <form action={scheduleMeetingAction} className="space-y-3 border-t hairline pt-3">
+              <input type="hidden" name="id" value={c.id} />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Date & time" required>
+                  <Input name="scheduledAt" type="datetime-local" required />
+                </Field>
+                <Field label="Mode" required>
+                  <Select name="mode" defaultValue="VIDEO">
+                    <option value="VIDEO">Video call</option>
+                    <option value="IN_PERSON">In person</option>
+                  </Select>
+                </Field>
+              </div>
+              <Field label="Meeting link" hint="Google Meet / Zoom URL for video calls.">
+                <Input name="link" type="url" placeholder="https://meet.google.com/…" />
               </Field>
-              <Field label="Mode" required>
-                <Select name="mode" defaultValue="VIDEO">
-                  <option value="VIDEO">Video call</option>
-                  <option value="IN_PERSON">In person</option>
-                </Select>
+              <Field label="Location" hint="For in-person meetings.">
+                <Input name="location" placeholder="Office address" />
               </Field>
-            </div>
-            <Field label="Meeting link" hint="Google Meet / Zoom URL for video calls.">
-              <Input name="link" type="url" placeholder="https://meet.google.com/…" />
-            </Field>
-            <Field label="Location" hint="For in-person meetings.">
-              <Input name="location" placeholder="Office address" />
-            </Field>
-            <SubmitButton variant="secondary">Schedule meeting</SubmitButton>
-          </form>
+              <SubmitButton variant="secondary">Schedule meeting</SubmitButton>
+            </form>
+          ) : (
+            <NoPermission to="schedule or record meetings" perm="edit" module="consenters" />
+          )}
         </Card>
 
         <Card className="space-y-4">
           <SectionTitle title="Decision" desc="Only verified profiles become searchable and can receive requests." />
-          <form action={decideConsenterAction} className="space-y-3">
-            <input type="hidden" name="id" value={c.id} />
-            <Field label="Message / notes">
-              <Textarea name="note" placeholder="Notes to the applicant or internal reason." />
-            </Field>
-            <div className="flex flex-wrap gap-2">
-              <SubmitButton name="decision" value="verify">Mark verified</SubmitButton>
-              <SubmitButton name="decision" value="more_info" variant="secondary">Ask for info</SubmitButton>
-              <SubmitButton name="decision" value="under_review" variant="secondary">Under review</SubmitButton>
-              <SubmitButton name="decision" value="reject" variant="danger">Reject</SubmitButton>
-            </div>
-          </form>
+          {history.length > 0 && (
+            <ul className="space-y-1 text-xs text-ink-faint" aria-label="Team history">
+              <li className="font-medium uppercase tracking-wider">Team history</li>
+              {history.map((h) => (
+                <li key={h.id}>
+                  {fmtDateTime(h.createdAt)} · {h.actorName} · {titleCase(h.action.replace(/^consenter_/, ""))}
+                  {h.reason ? ` · ${h.reason}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {c.status === "APPROVED" ? (
+            <p className="text-sm text-ink-soft">
+              Verified {c.verifiedAt ? fmtDateTime(c.verifiedAt) : ""}. To send this profile back to review, use{" "}
+              <Link href={`/admin/users?q=${encodeURIComponent(c.members.find((m) => m.role === "OWNER")?.user.email ?? c.displayName)}`} className="underline underline-offset-4">
+                Users
+              </Link>
+              .
+            </p>
+          ) : canDecide ? (
+            <form action={decideConsenterAction} className="space-y-3">
+              <input type="hidden" name="id" value={c.id} />
+              <Field label="Message to the applicant (they will see this)" hint="Required for Ask for info and Reject.">
+                <Textarea name="note" placeholder="e.g. Please upload a clearer scan of your passport." />
+              </Field>
+              <Field label="Internal note (team only)" hint="Kept in the audit log. The applicant never sees it.">
+                <Textarea name="internalNote" className="min-h-14" placeholder="e.g. Passport photo looks edited; check at the meeting." />
+              </Field>
+              {(!meetingPassed || c.duplicateFlag) && (
+                <p className="text-xs text-ink-faint">
+                  To mark verified, first {!meetingPassed ? "hold the verification meeting and mark it passed" : ""}
+                  {!meetingPassed && c.duplicateFlag ? ", and " : ""}
+                  {c.duplicateFlag ? "clear the duplicate flag" : ""}.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <SubmitButton name="decision" value="under_review" variant="secondary">Under review</SubmitButton>
+                <SubmitButton name="decision" value="more_info" variant="secondary">Ask for info</SubmitButton>
+                <ConfirmSubmit confirm="Reject this verification? The applicant sees your message." name="decision" value="reject">
+                  Reject
+                </ConfirmSubmit>
+                <SubmitButton name="decision" value="verify">Mark verified</SubmitButton>
+              </div>
+            </form>
+          ) : (
+            <NoPermission to="decide" perm="approve" module="consenters" />
+          )}
         </Card>
       </div>
     </div>

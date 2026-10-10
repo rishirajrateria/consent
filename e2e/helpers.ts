@@ -114,8 +114,8 @@ async function uploadDraftFile(page: Page, kind: "ASSET" | "RAW_CONTENT" | "THUM
     buffer: Buffer.from(`E2E ${kind} payload ${name}`),
   });
   await form.locator('button[type="submit"]').click();
-  // the page re-renders with the uploaded file listed
-  await expect(page.getByText(name)).toBeVisible();
+  // the page re-renders with the uploaded file listed (in Uploads and again in the review summary)
+  await expect(page.getByText(name).first()).toBeVisible();
 }
 
 /**
@@ -164,7 +164,12 @@ export async function submitBasicRequest(page: Page, spec: RequestSpec): Promise
   // 3. details
   await page.fill('textarea[name="context"]', spec.context ?? DEFAULT_CONTEXT);
   await page.fill('textarea[name="creativePlan"]', spec.plan ?? DEFAULT_PLAN);
-  await page.selectOption('select[name="intentCategoryId"]', { label: spec.intent });
+  // Intent options show the owner's price when they charge, e.g. "Commentary — $10.00".
+  const intentValue = await page
+    .locator('select[name="intentCategoryId"] option', { hasText: new RegExp(`^${spec.intent}( —|$)`) })
+    .first()
+    .getAttribute("value");
+  await page.selectOption('select[name="intentCategoryId"]', intentValue!);
   await page.getByRole("button", { name: "Save details" }).click();
   await page.waitForURL(/saved=details/);
 

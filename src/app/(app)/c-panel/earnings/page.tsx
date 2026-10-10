@@ -9,6 +9,12 @@ export const metadata = { title: "Earnings & payouts" };
 
 const WEEK = 7 * 86400_000;
 
+/** Payouts run weekly: at most once every 7 days, counted from the last one. */
+function nextPayoutAfter(last: Date | undefined) {
+  const now = Date.now();
+  return new Date(Math.max(now, last ? last.getTime() + WEEK : now));
+}
+
 /** Sum amounts per currency, e.g. "$260.00" or "$260.00 + ₹299.00". */
 function total(rows: { amount: { toString(): string }; currency: string }[]) {
   const by = new Map<string, number>();
@@ -17,7 +23,7 @@ function total(rows: { amount: { toString(): string }; currency: string }[]) {
 }
 
 export default async function EarningsPage() {
-  const { consenter } = await requireConsenter();
+  const { consenter, member } = await requireConsenter();
   const [earnings, settlements] = await Promise.all([
     db.earningEntry.findMany({
       where: { consenterId: consenter.id },
@@ -32,9 +38,7 @@ export default async function EarningsPage() {
     }),
   ]);
 
-  // Payouts run weekly: at most once every 7 days, starting from the last one.
-  const last = settlements[0]?.createdAt;
-  const nextPayout = new Date(Math.max(Date.now(), last ? last.getTime() + WEEK : Date.now()));
+  const nextPayout = nextPayoutAfter(settlements[0]?.createdAt);
   const held = earnings.filter((e) => e.status === "HELD");
   const yours = earnings.filter((e) => e.status === "PENDING");
 
@@ -72,13 +76,16 @@ export default async function EarningsPage() {
         </Card>
       </div>
 
-      {!consenter.payoutDetails && (
-        <Alert tone="warn">
-          Add your payout details in{" "}
-          <Link href="/c-panel/settings" className="underline underline-offset-4">settings</Link> so
-          your weekly payouts know where to go.
-        </Alert>
-      )}
+      {!consenter.payoutDetails &&
+        (member.role === "OWNER" ? (
+          <Alert tone="warn">
+            Add your payout details in{" "}
+            <Link href="/c-panel/settings" className="underline underline-offset-4">settings</Link> so
+            your weekly payouts know where to go.
+          </Alert>
+        ) : (
+          <Alert tone="warn">No payout details yet. Ask the profile owner to add them.</Alert>
+        ))}
 
       <Card className="space-y-2">
         <SectionTitle title="Every ask" desc="One line per paid ask, and where its money stands." />

@@ -1,10 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { Card, KV, PageHeader, Alert, Divider } from "@/components/ui";
+import { Card, KV, PageHeader, Alert, Divider, ButtonLink } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
-import { settlePayment, pendingPaymentsForRequest } from "@/lib/payments";
+import { settlePayment, pendingPaymentsForRequest, consentPriceFor, couponOpen } from "@/lib/payments";
 import { audit } from "@/lib/audit";
+import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
+import type { Selection } from "@/lib/rules";
+import type { Payment } from "@prisma/client";
 import { fmtMoney, titleCase } from "@/lib/utils";
 import { CreditCard } from "lucide-react";
 
@@ -29,11 +32,18 @@ export default async function MockCheckout({
   const returnTo = typeof sp.return === "string" ? sp.return : "/r-panel";
 
   if (payment.status === "PAID") redirect(returnTo);
+  const staleHref = await staleRequestHref(payment.requestId);
+  if (staleHref) redirect(staleHref);
 
   // A submission checkout covers every pending payment on the request:
   // the platform fee plus the consenter's consent price, if set.
   const lines = payment.requestId ? await pendingPaymentsForRequest(payment.requestId) : [payment];
   const consentLine = lines.find((l) => l.purpose === "CONSENT_PRICE");
+  // A way back that doesn't pay. Unpaid lines are reused when the request is
+  // submitted again, so leaving never adds a second charge.
+  const [backHref, backLabel] = backLink(payment);
+  // Never show a discount that can no longer be paid at.
+  if (await spentCoupon(lines)) redirect(`${backHref}?error=${encodeURIComponent(COUPON_GONE)}`);
 
   async function confirmAction() {
     "use server";
@@ -43,9 +53,19 @@ export default async function MockCheckout({
       where: { requesterId_userId: { requesterId: p.requesterId, userId: s.userId } },
     });
     if (!m) redirect("/dashboard");
+    if (p.status === "PAID") redirect(returnTo);
+    const stale = await staleRequestHref(p.requestId);
+    if (stale) redirect(stale);
     const toSettle = p.requestId
       ? await db.payment.findMany({ where: { requestId: p.requestId, status: "PENDING" } })
       : [p];
+    // The coupon may have run out, expired or been switched off since checkout
+    // opened: drop the discounted line so it can't be paid, and start again.
+    const spent = await spentCoupon(toSettle);
+    if (spent) {
+      await db.payment.deleteMany({ where: { id: spent.id, status: "PENDING" } });
+      redirect(`${backLink(p)[0]}?error=${encodeURIComponent(COUPON_GONE)}`);
+    }
     // Settle the consent price first so the earning exists when the
     // platform-fee settlement flips the request to Submitted.
     for (const row of toSettle.sort((a) => (a.purpose === "CONSENT_PRICE" ? -1 : 1))) {
@@ -73,13 +93,20 @@ export default async function MockCheckout({
         <div className="flex items-center gap-2 text-sm font-medium">
           <CreditCard className="size-4" aria-hidden /> {payment.requester.displayName}
         </div>
+        {payment.request && (
+          <p className="text-sm text-ink-soft">
+            Request #{payment.request.number} to {payment.request.consenter.displayName}
+          </p>
+        )}
         {lines.map((l) => (
           <KV
             key={l.id}
             k={
               l.purpose === "CONSENT_PRICE"
                 ? `Consent price → ${payment.request?.consenter.displayName ?? "consenter"}`
-                : titleCase(l.purpose)
+                : l.purpose === "PER_REQUEST"
+                  ? "Platform fee"
+                  : titleCase(l.purpose)
             }
             v={fmtMoney(l.amount.toString(), l.currency)}
           />
@@ -90,10 +117,10 @@ export default async function MockCheckout({
           <>
             <Divider />
             <p className="text-xs text-ink-faint">
-              The consent price is set by {payment.request?.consenter.displayName} and is credited to
-              them — settled weekly by Consent. It buys the ask, not the answer, and is
-              non-refundable. Any usage fee agreed after approval is settled directly between you,
-              never through Consent.
+              The consent price is set by {payment.request?.consenter.displayName}. Consent holds it
+              until they answer: if they say yes it goes to them; if they decline, or the request ends
+              without a yes, it&apos;s refunded to you. The platform fee is never refunded. Any usage fee
+              agreed after approval is settled directly between you, never through Consent.
             </p>
           </>
         )}
@@ -105,7 +132,66 @@ export default async function MockCheckout({
               .join(" + ")}
           </SubmitButton>
         </form>
+        <ButtonLink href={backHref} variant="ghost" className="min-h-10 w-full">
+          {backLabel}
+        </ButtonLink>
       </Card>
     </div>
   );
+}
+
+const COUPON_GONE = "This coupon can no longer be used. Start again to pay the full price.";
+
+/** Where "Back" goes: the draft being paid for, or the page that opened this checkout. */
+function backLink(p: Pick<Payment, "requestId" | "purpose">): [string, string] {
+  return p.requestId
+    ? [`/r-panel/requests/${p.requestId}/edit`, "Back to request"]
+    : p.purpose === "ONBOARDING"
+      ? ["/onboarding/requester", "Back"]
+      : ["/r-panel/billing", "Back to billing"];
+}
+
+/** The first line whose coupon can no longer be redeemed, if any. */
+async function spentCoupon(rows: Pick<Payment, "id" | "couponCode">[]) {
+  for (const row of rows) {
+    if (!row.couponCode) continue;
+    const coupon = await db.coupon.findUnique({ where: { code: row.couponCode } });
+    if (!couponOpen(coupon)) return row;
+  }
+  return null;
+}
+
+/**
+ * An old checkout link can be reopened after the draft was changed. Never take
+ * money for anything but what the draft now says: send the requester back when
+ * the owner's public matrix would deny it once paid, or when the consent-price
+ * line no longer matches the price for its intent (or the owner's price moved).
+ * Pressing "Pay & submit" again rebuilds the lines.
+ */
+async function staleRequestHref(requestId: string | null) {
+  if (!requestId) return null;
+  const request = await db.consentRequest.findUnique({
+    where: { id: requestId },
+    include: { requester: true, consenter: { include: { priceTiers: true } } },
+  });
+  if (!request || request.status !== "DRAFT") return null;
+  const edit = `/r-panel/requests/${request.id}/edit`;
+  const blocked = await blockedCombinations({
+    consenterId: request.consenterId,
+    requester: request.requester,
+    selections: request.selections as Selection[],
+    assetTypeIds: request.assetTypeIds,
+  });
+  if (blocked.length) return `${edit}?error=${encodeURIComponent(blockedPayNote(request.consenter.displayName))}#scope`;
+
+  const ask = consentPriceFor(request.consenter, request.intentCategoryId);
+  const asks = await db.payment.findMany({
+    where: { requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
+  });
+  const stale = ask
+    ? asks.length !== 1 ||
+      !asks[0].amount.eq(ask) ||
+      asks[0].currency !== request.consenter.consentPriceCurrency
+    : asks.length > 0;
+  return stale ? `${edit}?changed=1#review` : null;
 }

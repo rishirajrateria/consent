@@ -67,8 +67,8 @@ in DECISIONS.md, and continue").
 
 21. **Consent price (owner's explicit amendment to §1/§9).** Each consenter can set a per-request
     "consent price" — what it costs a requester just to ask. Unlike deal fees, this IS collected
-    in-app (alongside the platform fee, in one checkout), credited to the consenter as an
-    `EarningEntry`, and paid out by a weekly settlement sweep (`Settlement` batches, one per
+    in-app (alongside the platform fee, in one checkout), held as an `EarningEntry` (see #25f for
+    when it is released or refunded), and paid out by a weekly settlement sweep (`Settlement` batches, one per
     consenter+currency, at most every 7 days). Rules: the price buys the ask, not the answer
     (non-refundable like all submission fees); an unanswered request that auto-expires REVERSES the
     earning — no reward for silence; a request withdrawn after submission still pays out (the
@@ -130,6 +130,20 @@ in DECISIONS.md, and continue").
     latest offer or end the request; to keep negotiating, a new request must be raised (closed
     requests link straight to a new one). Enforced in the server actions, shown on both sides as
     "Counter-offers left: you N of 3".
+
+25f. **Ask price is held, not kept (owner amendment, supersedes the "buys the ask" rule in #21).**
+    The consent price is collected in-app at submission and held (`EarningEntry` HELD). It becomes
+    the owner's the moment they say yes (approval, an automatic yes from their terms, or an agreed
+    fee: DEAL_AGREED and every later approved state) and goes out in the weekly payout. Any ending
+    without a yes refunds it to the requester (DENIED, CLOSED, WITHDRAWN, EXPIRED_NO_RESPONSE,
+    including withdrawals and walk-aways by either side). Once released it stays with the owner even
+    if the deal later falls apart. The per-request platform fee is never refunded. One function,
+    `syncConsentPrice` (`src/lib/escrow.ts`), runs after every decision and in the job sweep, so a
+    missed call is caught on the next tick.
+25g. **Logic audit (owner request).** A six-area audit for back-to-front flows confirmed 56 issues
+    (pay before learning a request was impossible, decide before seeing the evidence, competing
+    buttons that lose typed input, dead ends, permission gaps, destructive actions without
+    confirmation). All were fixed; see the commit history for the per-area detail.
 
 26. **Known remaining gaps (deliberate, in priority order for production):** Playwright e2e suite
     (7 spec flows); real provider adapters (Stripe/Razorpay/Resend/Twilio/S3/DocuSign) behind the

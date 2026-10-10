@@ -2,6 +2,7 @@ import { db } from "./db";
 import { paymentProviderFor } from "./providers";
 import type { PaymentPurpose } from "@prisma/client";
 import { Prisma } from "@prisma/client";
+import { syncConsentPrice } from "./escrow";
 
 export async function priceFor(country: string) {
   const row =
@@ -9,6 +10,39 @@ export async function priceFor(country: string) {
     (await db.priceConfig.findUnique({ where: { country: "DEFAULT" } }));
   if (!row) throw new Error("No pricing configured");
   return row;
+}
+
+/** Adds tax the same way checkout does, so a price shown before paying matches the charge. */
+export function withTax(amount: number, taxRate: { toString(): string } | null | undefined) {
+  const tax = taxRate ? (amount * Number(taxRate)) / 100 : 0;
+  return { tax, total: amount + tax };
+}
+
+/**
+ * The consenter's consent price for an intent: a per-intent tier wins over the
+ * base price (e.g. News free, Promotion $250). Null when asking is free.
+ */
+export function consentPriceFor<T extends { toString(): string }>(
+  consenter: { consentPrice: T | null; priceTiers: { intentCategoryId: string; amount: T }[] },
+  intentCategoryId: string | null | undefined
+): T | null {
+  const tier = intentCategoryId
+    ? consenter.priceTiers.find((t) => t.intentCategoryId === intentCategoryId)
+    : undefined;
+  const ask = tier ? tier.amount : consenter.consentPrice;
+  return ask != null && Number(ask) > 0 ? ask : null;
+}
+
+/** True while a coupon can still be redeemed: switched on, not expired, uses left. */
+export function couponOpen(
+  coupon: { active: boolean; expiresAt: Date | null; maxUses: number | null; usedCount: number } | null
+) {
+  return (
+    !!coupon &&
+    coupon.active &&
+    (!coupon.expiresAt || coupon.expiresAt > new Date()) &&
+    (coupon.maxUses == null || coupon.usedCount < coupon.maxUses)
+  );
 }
 
 /** Creates a platform-fee payment and a provider checkout URL (mock in dev). */
@@ -32,20 +66,13 @@ export async function createPlatformPayment(opts: {
   let couponCode: string | undefined;
   if (opts.couponCode) {
     const coupon = await db.coupon.findUnique({ where: { code: opts.couponCode.toUpperCase() } });
-    const valid =
-      coupon &&
-      coupon.active &&
-      (!coupon.expiresAt || coupon.expiresAt > new Date()) &&
-      (coupon.maxUses == null || coupon.usedCount < coupon.maxUses);
-    if (valid) {
+    if (coupon && couponOpen(coupon)) {
       discount = (amount * coupon.percentOff) / 100;
       amount -= discount;
-      couponCode = coupon.code;
-      await db.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
+      couponCode = coupon.code; // counted as used only once paid (settlePayment)
     }
   }
-  const tax = price.taxRate ? (amount * Number(price.taxRate)) / 100 : 0;
-  const total = amount + tax;
+  const { tax, total } = withTax(amount, price.taxRate);
 
   // Consenter-set consent price: collected in-app alongside the platform fee,
   // credited to the consenter's balance and settled weekly. Deal fees after
@@ -55,19 +82,27 @@ export async function createPlatformPayment(opts: {
       where: { id: opts.requestId },
       include: { consenter: { include: { priceTiers: true } } },
     });
-    // Per-intent tier wins over the base price (e.g. News free, Promotion $250).
-    const tier = request?.intentCategoryId
-      ? request.consenter.priceTiers.find((t) => t.intentCategoryId === request.intentCategoryId)
-      : undefined;
-    const ask = tier ? tier.amount : request?.consenter.consentPrice;
-    if (request && ask && Number(ask) > 0) {
-      const existing = await db.payment.findFirst({
-        where: { requestId: opts.requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
-      });
+    const ask = request ? consentPriceFor(request.consenter, request.intentCategoryId) : null;
+    const unpaidAsks = await db.payment.findMany({
+      where: { requestId: opts.requestId, purpose: "CONSENT_PRICE", status: "PENDING" },
+      orderBy: { createdAt: "desc" },
+    });
+    // Unpaid lines left by an abandoned checkout must not be charged again:
+    // keep one at most, and none once asking is free (e.g. the intent changed).
+    const existing = ask ? unpaidAsks[0] : undefined;
+    const drop = unpaidAsks.filter((p) => p !== existing).map((p) => p.id);
+    if (drop.length) await db.payment.deleteMany({ where: { id: { in: drop }, status: "PENDING" } });
+    if (request && ask) {
       if (existing) {
         // The intent (and so the tier) may have changed since an abandoned checkout.
-        if (existing.amount.toString() !== ask.toString()) {
-          await db.payment.update({ where: { id: existing.id }, data: { amount: ask } });
+        if (
+          existing.amount.toString() !== ask.toString() ||
+          existing.currency !== request.consenter.consentPriceCurrency
+        ) {
+          await db.payment.update({
+            where: { id: existing.id },
+            data: { amount: ask, currency: request.consenter.consentPriceCurrency },
+          });
         }
       } else {
         await db.payment.create({
@@ -84,20 +119,30 @@ export async function createPlatformPayment(opts: {
     }
   }
 
-  const payment = await db.payment.create({
-    data: {
-      requesterId: opts.requesterId,
-      purpose: opts.purpose,
-      amount: new Prisma.Decimal(total.toFixed(2)),
-      currency: price.currency,
-      provider: paymentProviderFor(requester.country).name,
-      couponCode,
-      discount: discount ? new Prisma.Decimal(discount.toFixed(2)) : undefined,
-      tax: tax ? new Prisma.Decimal(tax.toFixed(2)) : undefined,
-      taxLabel: price.taxLabel ?? undefined,
-      requestId: opts.requestId,
-    },
-  });
+  const fields = {
+    amount: new Prisma.Decimal(total.toFixed(2)),
+    currency: price.currency,
+    provider: paymentProviderFor(requester.country).name,
+    couponCode: couponCode ?? null,
+    discount: discount ? new Prisma.Decimal(discount.toFixed(2)) : null,
+    tax: tax ? new Prisma.Decimal(tax.toFixed(2)) : null,
+    taxLabel: price.taxLabel ?? null,
+  };
+  // Submitting again after leaving checkout reuses the unpaid fee line for the
+  // request instead of adding a second one that checkout would also charge.
+  const [unpaid, ...dupes] = opts.requestId
+    ? await db.payment.findMany({
+        where: { requestId: opts.requestId, purpose: opts.purpose, status: "PENDING" },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+  if (dupes.length)
+    await db.payment.deleteMany({ where: { id: { in: dupes.map((p) => p.id) }, status: "PENDING" } });
+  const payment = unpaid
+    ? await db.payment.update({ where: { id: unpaid.id }, data: fields })
+    : await db.payment.create({
+        data: { ...fields, requesterId: opts.requesterId, purpose: opts.purpose, requestId: opts.requestId },
+      });
 
   const provider = paymentProviderFor(requester.country);
   const { checkoutUrl, providerRef } = await provider.createCheckout({
@@ -123,6 +168,17 @@ export async function settlePayment(paymentId: string) {
     where: { id: paymentId },
     data: { status: "PAID", paidAt: new Date(), invoiceNumber },
   });
+  // A coupon is used up only by a completed payment, never by an abandoned
+  // checkout. Checkout re-checks it before paying; the count never passes maxUses.
+  if (payment.couponCode) {
+    await db.coupon.updateMany({
+      where: {
+        code: payment.couponCode,
+        OR: [{ maxUses: null }, { usedCount: { lt: db.coupon.fields.maxUses } }],
+      },
+      data: { usedCount: { increment: 1 } },
+    });
+  }
   if (payment.purpose === "ONBOARDING") {
     await db.requesterProfile.update({
       where: { id: payment.requesterId },
@@ -156,6 +212,9 @@ export async function settlePayment(paymentId: string) {
       });
     }
   }
+  // The ask price is held until the owner answers; if the request already has
+  // an answer (auto-approved or auto-declined on payment), settle it now.
+  if (payment.requestId) await syncConsentPrice(payment.requestId);
   return updated;
 }
 

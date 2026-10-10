@@ -33,10 +33,14 @@ export function TipOffForm({
     if (!rateLimit("tipoff", ip, 3, 60 * 60_000))
       redirect(`${back}?tiperror=${encodeURIComponent("Too many reports from this connection — try again later")}#tipoff`);
     const description = String(formData.get("description") ?? "").trim();
+    // Keep links typed without "https://" (e.g. "tiktok.com/@brand/video/1")
+    // instead of silently dropping them.
     const links = String(formData.get("links") ?? "")
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => /^https?:\/\//.test(l))
+      .filter(Boolean)
+      .map((l) => (/^https?:\/\//i.test(l) ? l : /^[\w-]+(\.[\w-]+)+(\/|$)/.test(l) ? `https://${l}` : null))
+      .filter((l): l is string => !!l)
       .slice(0, 10);
     if (description.length < 20 || links.length === 0)
       redirect(`${back}?tiperror=${encodeURIComponent("Add at least one link and a short description (min 20 characters)")}#tipoff`);
@@ -68,7 +72,7 @@ export function TipOffForm({
       <ErrorNote error={error} />
       <form action={tipOffAction} className="space-y-3">
         <Field label="Where did you see it?" required hint="Links, one per line.">
-          <Textarea name="links" required className="min-h-14" placeholder="https://…" />
+          <Textarea name="links" required className="min-h-14" placeholder="tiktok.com/… or https://…" />
         </Field>
         <Field label="What did you see?" required>
           <Textarea name="description" required minLength={20} className="min-h-16" placeholder="e.g. An ad using their face with no consent link anywhere." />

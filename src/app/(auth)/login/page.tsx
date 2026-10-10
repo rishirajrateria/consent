@@ -3,11 +3,14 @@ import { loginAction } from "../actions";
 import { Card, Field, Input } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { ErrorNote } from "@/components/error-note";
+import { safeNext } from "@/lib/auth";
 
 export const metadata = { title: "Sign in" };
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const sp = await searchParams;
+  // Where the person was headed (an invite, a profile) before signing in.
+  const next = safeNext(sp.next);
   return (
     <Card strong className="fade-up space-y-5">
       <div>
@@ -16,6 +19,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
       </div>
       <ErrorNote error={sp.error as string | undefined} />
       <form action={loginAction} className="space-y-4">
+        {next && <input type="hidden" name="next" value={next} />}
         <Field label="Email" required>
           <Input name="email" type="email" autoComplete="email" required placeholder="you@example.com" />
         </Field>
@@ -26,7 +30,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
       </form>
       <p className="text-center text-sm text-ink-soft">
         New here?{" "}
-        <Link href="/signup" className="font-medium text-ink underline underline-offset-4">
+        <Link href={next ? `/signup?next=${encodeURIComponent(next)}` : "/signup"} className="font-medium text-ink underline underline-offset-4">
           Create an account
         </Link>
       </p>

@@ -99,6 +99,8 @@ export function statusLabel(s: string): string {
     IGNORED: "Ignored",
     PAID: "Paid",
     FORFEITED: "Forfeited",
+    REFUNDED: "Refunded",
+    HELD: "Held",
   };
   return map[s] ?? titleCase(s);
 }

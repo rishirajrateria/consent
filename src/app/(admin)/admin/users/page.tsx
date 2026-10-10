@@ -1,9 +1,13 @@
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { requireAdmin, hasAdminPerm } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, Input, StatusBadge, EmptyState } from "@/components/ui";
 import { SubmitButton, ConfirmSubmit } from "@/components/form";
 import { audit } from "@/lib/audit";
+import { notifyConsenterTeam } from "@/lib/notify";
+import { ErrorNote, SuccessNote } from "@/components/error-note";
+import { NoPermission } from "../no-permission";
 import { fmtDate } from "@/lib/utils";
 import { Search, UserRound } from "lucide-react";
 
@@ -15,10 +19,21 @@ async function userAction(formData: FormData) {
   const id = String(formData.get("id"));
   const op = String(formData.get("op"));
   const reason = String(formData.get("reason") ?? "").trim() || null;
+  const q = String(formData.get("q") ?? "");
+  const back = (key: "error" | "done", msg: string) =>
+    redirect(`/admin/users?${new URLSearchParams({ ...(q ? { q } : {}), [key]: msg })}`);
   const user = await db.user.findUnique({ where: { id } });
-  if (!user) return;
-  if ((op === "suspend" || op === "ban") && !reason) return; // sensitive actions require a reason
-  if (op === "suspend") await db.user.update({ where: { id }, data: { isSuspended: true } });
+  if (!user) return back("error", "That account no longer exists.");
+  // Sensitive actions require a reason, and it is logged in the audit trail.
+  if ((op === "suspend" || op === "ban" || op === "reverify") && !reason)
+    back("error", "Add a reason to suspend, ban or force re-verification.");
+  if ((op === "suspend" || op === "ban") && id === session.userId)
+    back("error", "You can't suspend or ban your own account.");
+  if (op === "suspend") {
+    await db.user.update({ where: { id }, data: { isSuspended: true } });
+    // Sign-in already refuses suspended users; ending sessions stops the ones already signed in.
+    await db.session.deleteMany({ where: { userId: id } });
+  }
   if (op === "unsuspend") await db.user.update({ where: { id }, data: { isSuspended: false } });
   if (op === "ban") {
     await db.user.update({ where: { id }, data: { isBanned: true } });
@@ -26,11 +41,20 @@ async function userAction(formData: FormData) {
   }
   if (op === "unban") await db.user.update({ where: { id }, data: { isBanned: false } });
   if (op === "reverify") {
-    await db.consenterMember.findMany({ where: { userId: id, role: "OWNER" } }).then(async (members) => {
-      for (const m of members) {
-        await db.consenterProfile.update({ where: { id: m.consenterId }, data: { status: "UNDER_REVIEW" } });
-      }
+    const owned = await db.consenterMember.findMany({
+      where: { userId: id, role: "OWNER", consenter: { status: "APPROVED" } },
+      include: { consenter: true },
     });
+    if (owned.length === 0) back("error", `${user.name} owns no verified consenter profile.`);
+    for (const m of owned) {
+      await db.consenterProfile.update({ where: { id: m.consenterId }, data: { status: "UNDER_REVIEW" } });
+      await notifyConsenterTeam(m.consenterId, {
+        title: "Your profile needs to be verified again",
+        body: `${m.consenter.displayName} is hidden from search and can't receive new requests until it's verified again. Reason: ${reason}`,
+        href: "/onboarding/consenter",
+        critical: true,
+      });
+    }
   }
   await audit({
     actorId: session.userId,
@@ -41,10 +65,19 @@ async function userAction(formData: FormData) {
     reason,
   });
   revalidatePath("/admin/users");
+  const done: Record<string, string> = {
+    suspend: `${user.name} is suspended and signed out.`,
+    unsuspend: `${user.name} can sign in again.`,
+    ban: `${user.name} is banned and signed out.`,
+    unban: `${user.name} is no longer banned.`,
+    reverify: `${user.name}'s consenter profiles are back in review. The team was told why.`,
+  };
+  if (done[op]) back("done", done[op]);
 }
 
 export default async function AdminUsers({ searchParams }: PageProps<"/admin/users">) {
-  await requireAdmin("users", "view");
+  const session = await requireAdmin("users", "view");
+  const canEdit = hasAdminPerm(session.user.adminRole, "users", "edit");
   const sp = await searchParams;
   const q = typeof sp.q === "string" ? sp.q : "";
   const users = await db.user.findMany({
@@ -63,6 +96,8 @@ export default async function AdminUsers({ searchParams }: PageProps<"/admin/use
   return (
     <div className="space-y-6">
       <PageHeader kicker="Admin" title="Users & profiles" desc="Bans and suspensions require a reason and are logged in the immutable audit trail." />
+      <ErrorNote error={sp.error} />
+      {typeof sp.done === "string" && <SuccessNote msg={sp.done} />}
       <form method="GET" className="relative max-w-md">
         <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-ink-faint" aria-hidden />
         <Input name="q" defaultValue={q} placeholder="Search name, email, phone…" className="pl-10" aria-label="Search users" />
@@ -92,21 +127,39 @@ export default async function AdminUsers({ searchParams }: PageProps<"/admin/use
                 </div>
                 {u.isBanned ? <StatusBadge status="REJECTED" /> : u.isSuspended ? <StatusBadge status="EXPIRED" /> : <StatusBadge status="ACTIVE" />}
               </div>
-              <form action={userAction} className="flex flex-wrap items-center gap-2 border-t hairline pt-2">
-                <input type="hidden" name="id" value={u.id} />
-                <Input name="reason" placeholder="Reason (required for ban/suspend)" className="max-w-64 py-1.5 text-xs" aria-label="Reason" />
-                {u.isSuspended ? (
-                  <SubmitButton name="op" value="unsuspend" variant="secondary" size="sm">Unsuspend</SubmitButton>
-                ) : (
-                  <SubmitButton name="op" value="suspend" variant="secondary" size="sm">Suspend</SubmitButton>
-                )}
-                {u.isBanned ? (
-                  <SubmitButton name="op" value="unban" variant="secondary" size="sm">Unban</SubmitButton>
-                ) : (
-                  <ConfirmSubmit confirm={`Ban ${u.name}? All their sessions end immediately.`} name="op" value="ban" size="sm">Ban</ConfirmSubmit>
-                )}
-                <SubmitButton name="op" value="reverify" variant="ghost" size="sm">Force re-verification</SubmitButton>
-              </form>
+              {canEdit ? (
+                <form action={userAction} className="flex flex-wrap items-center gap-2 border-t hairline pt-2">
+                  <input type="hidden" name="id" value={u.id} />
+                  <input type="hidden" name="q" value={q} />
+                  <Input name="reason" placeholder="Reason (needed to suspend, ban or re-verify)" className="max-w-72 py-1.5 text-xs" aria-label="Reason" />
+                  {u.isSuspended ? (
+                    <SubmitButton name="op" value="unsuspend" variant="secondary" size="sm" className="min-h-10">Unsuspend</SubmitButton>
+                  ) : (
+                    <ConfirmSubmit confirm={`Suspend ${u.name}? They are signed out now.`} name="op" value="suspend" variant="secondary" size="sm" className="min-h-10">
+                      Suspend
+                    </ConfirmSubmit>
+                  )}
+                  {u.isBanned ? (
+                    <SubmitButton name="op" value="unban" variant="secondary" size="sm" className="min-h-10">Unban</SubmitButton>
+                  ) : (
+                    <ConfirmSubmit confirm={`Ban ${u.name}? All their sessions end immediately.`} name="op" value="ban" size="sm" className="min-h-10">Ban</ConfirmSubmit>
+                  )}
+                  {u.consenterMembers.some((m) => m.role === "OWNER" && m.consenter.status === "APPROVED") && (
+                    <ConfirmSubmit
+                      confirm={`Send ${u.name}'s consenter profiles back to review? They leave search until verified again, and are told your reason.`}
+                      name="op"
+                      value="reverify"
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-10"
+                    >
+                      Force re-verification
+                    </ConfirmSubmit>
+                  )}
+                </form>
+              ) : (
+                <NoPermission to="suspend, ban or re-verify" perm="edit" module="users" />
+              )}
             </Card>
           ))}
         </div>

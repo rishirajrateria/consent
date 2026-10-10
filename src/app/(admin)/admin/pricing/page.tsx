@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, hasAdminPerm } from "@/lib/auth";
+import { ViewOnlyPage } from "../no-permission";
 import { db } from "@/lib/db";
 import { PageHeader, Card, Input, SectionTitle, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
@@ -68,7 +69,8 @@ async function couponAction(formData: FormData) {
 }
 
 export default async function AdminPricing() {
-  await requireAdmin("pricing", "view");
+  const session = await requireAdmin("pricing", "view");
+  const canEdit = hasAdminPerm(session.user.adminRole, "pricing", "edit");
   const [prices, coupons] = await Promise.all([
     db.priceConfig.findMany({ orderBy: { country: "asc" } }),
     db.coupon.findMany({ orderBy: { code: "asc" } }),
@@ -77,53 +79,57 @@ export default async function AdminPricing() {
   return (
     <div className="space-y-6">
       <PageHeader kicker="Admin" title="Pricing & coupons" desc="Per-country platform fees. Consenters never pay; per-request fees are never refunded (goodwill credits via coupons)." />
+      {!canEdit && <ViewOnlyPage module="pricing" />}
 
-      <Card className="space-y-4">
-        <SectionTitle title="Price configurations" desc="DEFAULT applies to countries without a specific row." />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="border-b hairline text-left text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
-                <th className="py-2 pr-2">Country</th><th className="pr-2">Currency</th><th className="pr-2">Onboarding</th>
-                <th className="pr-2">Yearly</th><th className="pr-2">Per request</th><th className="pr-2">Tax</th><th />
-              </tr>
-            </thead>
-            <tbody>
-              {prices.map((p) => (
-                <tr key={p.id} className="border-b hairline last:border-b-0">
-                  <PriceRow p={p} />
+      {/* View-only roles see the values but can't type into a form the server will refuse. */}
+      <fieldset disabled={!canEdit} className="min-w-0 space-y-6">
+        <Card className="space-y-4">
+          <SectionTitle title="Price configurations" desc="DEFAULT applies to countries without a specific row." />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="border-b hairline text-left text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
+                  <th className="py-2 pr-2">Country</th><th className="pr-2">Currency</th><th className="pr-2">Onboarding</th>
+                  <th className="pr-2">Yearly</th><th className="pr-2">Per request</th><th className="pr-2">Tax</th><th />
                 </tr>
-              ))}
-              <tr>
-                <PriceRow />
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </thead>
+              <tbody>
+                {prices.map((p) => (
+                  <tr key={p.id} className="border-b hairline last:border-b-0">
+                    <PriceRow p={p} />
+                  </tr>
+                ))}
+                <tr>
+                  <PriceRow />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
-      <Card className="space-y-3">
-        <SectionTitle title="Coupons & goodwill credits" />
-        {coupons.map((c) => (
-          <form key={c.id} action={couponAction} className="flex flex-wrap items-center gap-2 border-t hairline py-2 text-sm first:border-t-0">
-            <input type="hidden" name="id" value={c.id} />
-            <span className="font-mono font-semibold">{c.code}</span>
-            <span>{c.percentOff}% off</span>
-            <span className="text-xs text-ink-faint">
-              used {c.usedCount}{c.maxUses ? `/${c.maxUses}` : ""}{c.expiresAt ? ` · expires ${fmtDate(c.expiresAt)}` : ""}
-            </span>
-            <StatusBadge status={c.active ? "ACTIVE" : "CLOSED"} className="ml-auto" />
-            <SubmitButton name="op" value="toggle" variant="ghost" size="sm">{c.active ? "Disable" : "Enable"}</SubmitButton>
+        <Card className="space-y-3">
+          <SectionTitle title="Coupons & goodwill credits" />
+          {coupons.map((c) => (
+            <form key={c.id} action={couponAction} className="flex flex-wrap items-center gap-2 border-t hairline py-2 text-sm first:border-t-0">
+              <input type="hidden" name="id" value={c.id} />
+              <span className="font-mono font-semibold">{c.code}</span>
+              <span>{c.percentOff}% off</span>
+              <span className="text-xs text-ink-faint">
+                used {c.usedCount}{c.maxUses ? `/${c.maxUses}` : ""}{c.expiresAt ? ` · expires ${fmtDate(c.expiresAt)}` : ""}
+              </span>
+              <StatusBadge status={c.active ? "ACTIVE" : "CLOSED"} className="ml-auto" />
+              <SubmitButton name="op" value="toggle" variant="ghost" size="sm">{c.active ? "Disable" : "Enable"}</SubmitButton>
+            </form>
+          ))}
+          <form action={couponAction} className="flex flex-wrap items-end gap-2 border-t hairline pt-3">
+            <Input name="code" placeholder="CODE" className="w-32 uppercase" aria-label="Coupon code" required />
+            <Input name="percentOff" type="number" min={1} max={100} placeholder="% off" className="w-24" aria-label="Percent off" required />
+            <Input name="maxUses" type="number" min={1} placeholder="Max uses" className="w-28" aria-label="Max uses" />
+            <Input name="expiresAt" type="date" className="w-40" aria-label="Expires" />
+            <SubmitButton name="op" value="add" variant="secondary" size="sm">Add coupon</SubmitButton>
           </form>
-        ))}
-        <form action={couponAction} className="flex flex-wrap items-end gap-2 border-t hairline pt-3">
-          <Input name="code" placeholder="CODE" className="w-32 uppercase" aria-label="Coupon code" required />
-          <Input name="percentOff" type="number" min={1} max={100} placeholder="% off" className="w-24" aria-label="Percent off" required />
-          <Input name="maxUses" type="number" min={1} placeholder="Max uses" className="w-28" aria-label="Max uses" />
-          <Input name="expiresAt" type="date" className="w-40" aria-label="Expires" />
-          <SubmitButton name="op" value="add" variant="secondary" size="sm">Add coupon</SubmitButton>
-        </form>
-      </Card>
+        </Card>
+      </fieldset>
     </div>
   );
 }
