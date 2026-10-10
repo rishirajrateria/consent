@@ -40,6 +40,25 @@ export type MeetingInput = {
   note?: string | null;
 };
 
+/**
+ * Read meeting fields posted by <MeetingFields prefix="meeting_" /> (date,
+ * time, duration, mode, link, location, note and the browser's time zone).
+ */
+export function readMeetingInput(formData: FormData, prefix = "meeting_"): MeetingInput {
+  const get = (k: string) => String(formData.get(prefix + k) ?? "").trim();
+  const mode = get("mode");
+  return {
+    date: get("date"),
+    time: get("time"),
+    timeZone: get("tz") || "UTC",
+    durationMin: Number(get("duration")) || 30,
+    mode: mode === "PHONE" || mode === "IN_PERSON" ? mode : "VIDEO",
+    link: get("link") || null,
+    location: get("location") || null,
+    note: get("note") || null,
+  };
+}
+
 /** Convert a wall-clock time in an IANA zone to the exact instant. */
 export function zonedToUtc(date: string, time: string, timeZone: string): Date {
   const [y, mo, d] = date.split("-").map(Number);
