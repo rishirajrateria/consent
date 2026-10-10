@@ -29,18 +29,19 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions           Session[]
-  otpCodes           OtpCode[]
-  adminRoleId        String?
-  adminRole          AdminRole?          @relation(fields: [adminRoleId], references: [id])
-  consenterMembers   ConsenterMember[]
-  requesterMembers   RequesterMember[]
-  notifications      Notification[]
-  auditLogs          AuditLog[]
-  notifPrefs         NotificationPref?
-  decisions          ConsentRequest[]    @relation("decidedBy")
-  messages            RequestMessage[]
-  offers              NegotiationOffer[]
+  sessions             Session[]
+  otpCodes             OtpCode[]
+  adminRoleId          String?
+  adminRole            AdminRole?            @relation(fields: [adminRoleId], references: [id])
+  consenterMembers     ConsenterMember[]
+  requesterMembers     RequesterMember[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  notifPrefs           NotificationPref?
+  decisions            ConsentRequest[]      @relation("decidedBy")
+  messages             RequestMessage[]
+  offers               NegotiationOffer[]
+  requestMeetings      RequestMeeting[]
   signatures           AgreementSignature[]
   uploadedFiles        StoredFile[]
   verificationMeetings VerificationMeeting[] @relation("officer")
@@ -52,17 +53,17 @@ model User {
 // Multiple invites for the same name measure demand; claimed when the
 // entity signs up and creates a consenter profile.
 model AppInvite {
-  id             String    @id @default(cuid())
-  targetName     String
-  normalizedName String
-  email          String?
-  handle         String?
-  note           String?
-  invitedById    String
-  invitedBy      User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
-  claimedAt      DateTime?
+  id                   String    @id @default(cuid())
+  targetName           String
+  normalizedName       String
+  email                String?
+  handle               String?
+  note                 String?
+  invitedById          String
+  invitedBy            User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+  claimedAt            DateTime?
   claimedByConsenterId String?
-  createdAt      DateTime  @default(now())
+  createdAt            DateTime  @default(now())
 
   @@unique([invitedById, normalizedName])
   @@index([normalizedName])
@@ -70,16 +71,16 @@ model AppInvite {
 }
 
 model Session {
-  id         String   @id // token hash
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt  DateTime
-  totpPassed Boolean  @default(false)
+  id            String   @id // token hash
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt     DateTime
+  totpPassed    Boolean  @default(false)
   // active profile context: "consenter:<id>" | "requester:<id>" | "admin" | null
   activeProfile String?
-  createdAt  DateTime @default(now())
-  ip         String?
-  userAgent  String?
+  createdAt     DateTime @default(now())
+  ip            String?
+  userAgent     String?
 }
 
 enum OtpPurpose {
@@ -106,13 +107,13 @@ model OtpCode {
 // ─────────────────────────────────────────────────────────────
 
 model AdminRole {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  isSuperAdmin Boolean @default(false)
+  id           String   @id @default(cuid())
+  name         String   @unique
+  isSuperAdmin Boolean  @default(false)
   // permissions: { module: ["view","create","edit","approve","delete","export"] }
-  permissions Json     @default("{}")
-  users       User[]
-  createdAt   DateTime @default(now())
+  permissions  Json     @default("{}")
+  users        User[]
+  createdAt    DateTime @default(now())
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -141,59 +142,61 @@ enum VerificationStatus {
 }
 
 model ConsenterProfile {
-  id                 String              @id @default(cuid())
-  slug               String              @unique
-  displayName        String
-  legalName          String
-  normalizedLegalName String
-  entityType         ConsenterEntityType
-  aliases            String[]            @default([])
-  bio                String?
-  photoFileId        String?
-  country            String
-  category           String?
-  status             VerificationStatus  @default(DRAFT)
-  verifiedAt         DateTime?
-  documentNumberHash String? // for duplicate detection
-  duplicateFlag      Boolean             @default(false)
-  adminNotes         String?
+  id                                  String              @id @default(cuid())
+  slug                                String              @unique
+  displayName                         String
+  legalName                           String
+  normalizedLegalName                 String
+  entityType                          ConsenterEntityType
+  aliases                             String[]            @default([])
+  bio                                 String?
+  photoFileId                         String?
+  country                             String
+  category                            String?
+  status                              VerificationStatus  @default(DRAFT)
+  verifiedAt                          DateTime?
+  documentNumberHash                  String? // for duplicate detection
+  duplicateFlag                       Boolean             @default(false)
+  adminNotes                          String?
   // which contact details are revealed on deal agreed
-  shareEmail         Boolean             @default(true)
-  sharePhone         Boolean             @default(false)
-  shareManager       Boolean             @default(false)
-  managerContact     String?
-  contactEmail       String?
-  contactPhone       String?
+  shareEmail                          Boolean             @default(true)
+  sharePhone                          Boolean             @default(false)
+  shareManager                        Boolean             @default(false)
+  managerContact                      String?
+  contactEmail                        String?
+  contactPhone                        String?
+  contactAddress                      String?
+  shareAddress                        Boolean             @default(false)
   // defaults
-  defaultRequireLegalAgreementForPaid Boolean @default(false)
+  defaultRequireLegalAgreementForPaid Boolean             @default(false)
   // Consent price: what a requester pays IN-APP just to ask (spam deterrent).
   // Credited to this consenter's balance and settled weekly. null/0 = free to ask.
-  consentPrice         Decimal? @db.Decimal(14, 2)
-  consentPriceCurrency String   @default("USD")
-  payoutDetails        String? // where weekly settlements are paid (bank/UPI/PayPal note)
+  consentPrice                        Decimal?            @db.Decimal(14, 2)
+  consentPriceCurrency                String              @default("USD")
+  payoutDetails                       String? // where weekly settlements are paid (bank/UPI/PayPal note)
   // Request limits the owner chooses (null = no limit). New requests are paused
   // while any limit is reached.
-  maxOpenRequests      Int? // requests waiting for their first answer, at once
-  dailyRequestLimit    Int? // new requests in any 24 hours
-  weeklyRequestLimit   Int? // new requests in any 7 days
-  monthlyRequestLimit  Int? // new requests in any 30 days
-  score              Int                 @default(500)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  maxOpenRequests                     Int? // requests waiting for their first answer, at once
+  dailyRequestLimit                   Int? // new requests in any 24 hours
+  weeklyRequestLimit                  Int? // new requests in any 7 days
+  monthlyRequestLimit                 Int? // new requests in any 30 days
+  score                               Int                 @default(500)
+  createdAt                           DateTime            @default(now())
+  updatedAt                           DateTime            @updatedAt
 
-  members          ConsenterMember[]
-  documents        StoredFile[]          @relation("consenterDocs")
-  socialAccounts   SocialAccount[]
-  matrixEntries    ConsentMatrixEntry[]
-  standingRules    StandingRule[]
-  blacklist        ListEntry[]           @relation("blacklistOf")
-  requests         ConsentRequest[]
-  meetings         VerificationMeeting[]
-  scoreLogs        ScoreLog[]            @relation("consenterScore")
-  earnings         EarningEntry[]
-  settlements      Settlement[]
-  priceTiers       ConsentPriceTier[]
-  tipOffs          PublicTipOff[]
+  members        ConsenterMember[]
+  documents      StoredFile[]          @relation("consenterDocs")
+  socialAccounts SocialAccount[]
+  matrixEntries  ConsentMatrixEntry[]
+  standingRules  StandingRule[]
+  blacklist      ListEntry[]           @relation("blacklistOf")
+  requests       ConsentRequest[]
+  meetings       VerificationMeeting[]
+  scoreLogs      ScoreLog[]            @relation("consenterScore")
+  earnings       EarningEntry[]
+  settlements    Settlement[]
+  priceTiers     ConsentPriceTier[]
+  tipOffs        PublicTipOff[]
 
   @@index([normalizedLegalName])
   @@index([status])
@@ -247,31 +250,33 @@ enum RequesterType {
 }
 
 model RequesterProfile {
-  id            String             @id @default(cuid())
-  slug          String             @unique
-  displayName   String
-  legalName     String
-  type          RequesterType
-  country       String
-  description   String?
-  categories    String[]           @default([])
-  channels      Json               @default("[]") // [{platform, url, followers}]
-  signatoryName String?
-  status        VerificationStatus @default(DRAFT)
-  approvedAt    DateTime?
-  adminNotes    String?
-  shareEmail    Boolean            @default(true)
-  sharePhone    Boolean            @default(false)
-  shareManager  Boolean            @default(false)
-  managerContact String?
-  contactEmail  String?
-  contactPhone  String?
-  score         Int                @default(500)
+  id                  String             @id @default(cuid())
+  slug                String             @unique
+  displayName         String
+  legalName           String
+  type                RequesterType
+  country             String
+  description         String?
+  categories          String[]           @default([])
+  channels            Json               @default("[]") // [{platform, url, followers}]
+  signatoryName       String?
+  status              VerificationStatus @default(DRAFT)
+  approvedAt          DateTime?
+  adminNotes          String?
+  shareEmail          Boolean            @default(true)
+  sharePhone          Boolean            @default(false)
+  shareManager        Boolean            @default(false)
+  managerContact      String?
+  contactEmail        String?
+  contactPhone        String?
+  contactAddress      String?
+  shareAddress        Boolean            @default(false)
+  score               Int                @default(500)
   // subscription
   onboardingFeePaidAt DateTime?
   subscriptionEndsAt  DateTime?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   members        RequesterMember[]
   documents      StoredFile[]      @relation("requesterDocs")
@@ -293,18 +298,18 @@ enum TeamRole {
 }
 
 model ConsenterMember {
-  id          String           @id @default(cuid())
-  consenterId String
-  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
-  userId      String
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role        TeamRole
-  canApprove   Boolean @default(false)
-  canNegotiate Boolean @default(false)
-  canEditRules Boolean @default(false)
-  canExport    Boolean @default(false)
-  canManageTeam Boolean @default(false)
-  createdAt   DateTime         @default(now())
+  id            String           @id @default(cuid())
+  consenterId   String
+  consenter     ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role          TeamRole
+  canApprove    Boolean          @default(false)
+  canNegotiate  Boolean          @default(false)
+  canEditRules  Boolean          @default(false)
+  canExport     Boolean          @default(false)
+  canManageTeam Boolean          @default(false)
+  createdAt     DateTime         @default(now())
 
   @@unique([consenterId, userId])
 }
@@ -322,31 +327,31 @@ model RequesterMember {
 }
 
 model TeamInvite {
-  id        String   @id @default(cuid())
-  profileKind String // "consenter" | "requester"
-  profileId String
-  email     String
-  role      TeamRole
-  canApprove   Boolean @default(false)
-  canNegotiate Boolean @default(false)
-  canEditRules Boolean @default(false)
-  canExport    Boolean @default(false)
-  canManageTeam Boolean @default(false)
-  token     String   @unique
-  expiresAt DateTime
-  acceptedAt DateTime?
-  createdAt DateTime @default(now())
+  id            String    @id @default(cuid())
+  profileKind   String // "consenter" | "requester"
+  profileId     String
+  email         String
+  role          TeamRole
+  canApprove    Boolean   @default(false)
+  canNegotiate  Boolean   @default(false)
+  canEditRules  Boolean   @default(false)
+  canExport     Boolean   @default(false)
+  canManageTeam Boolean   @default(false)
+  token         String    @unique
+  expiresAt     DateTime
+  acceptedAt    DateTime?
+  createdAt     DateTime  @default(now())
 }
 
 model SocialAccount {
-  id          String  @id @default(cuid())
+  id           String    @id @default(cuid())
   platformName String
-  handle      String
-  url         String?
-  followers   Int?
-  verifiedVia String // "oauth" | "manual"
-  proofFileId String?
-  verifiedAt  DateTime?
+  handle       String
+  url          String?
+  followers    Int?
+  verifiedVia  String // "oauth" | "manual"
+  proofFileId  String?
+  verifiedAt   DateTime?
 
   consenterId String?
   consenter   ConsenterProfile? @relation(fields: [consenterId], references: [id], onDelete: Cascade)
@@ -358,6 +363,42 @@ model SocialAccount {
 enum MeetingMode {
   VIDEO
   IN_PERSON
+}
+
+// ── Meetings between the two sides of a request ──────────────
+enum CallMode {
+  VIDEO
+  PHONE
+  IN_PERSON
+}
+
+enum RequestMeetingStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+model RequestMeeting {
+  id            String               @id @default(cuid())
+  requestId     String
+  request       ConsentRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  startsAt      DateTime
+  endsAt        DateTime
+  timeZone      String // IANA zone of the person who scheduled it, e.g. "Asia/Kolkata"
+  mode          CallMode
+  link          String? // video link, or the number to call
+  location      String? // in person
+  note          String?
+  createdById   String
+  createdBy     User                 @relation(fields: [createdById], references: [id])
+  createdBySide String // "consenter" | "requester"
+  status        RequestMeetingStatus @default(SCHEDULED)
+  sequence      Int                  @default(0) // bumped on every change so calendars update the same event
+  calendarRef   String? // calendar provider reference(s)
+  cancelledAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([requestId])
 }
 
 model VerificationMeeting {
@@ -380,11 +421,11 @@ model VerificationMeeting {
 // ─────────────────────────────────────────────────────────────
 
 model Platform {
-  id       String   @id @default(cuid())
-  name     String   @unique
-  sortOrder Int     @default(0)
-  active   Boolean  @default(true)
-  formats  Format[]
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  formats   Format[]
 }
 
 model Format {
@@ -399,10 +440,10 @@ model Format {
 }
 
 model AssetType {
-  id     String  @id @default(cuid())
-  name   String  @unique
-  active Boolean @default(true)
-  sortOrder Int  @default(0)
+  id        String  @id @default(cuid())
+  name      String  @unique
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
 }
 
 model IntentCategory {
@@ -429,16 +470,16 @@ enum MatrixPolicy {
 }
 
 model ConsentMatrixEntry {
-  id             String           @id @default(cuid())
-  consenterId    String
-  consenter      ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
-  platformId     String
-  formatId       String
-  assetTypeId    String
-  policy         MatrixPolicy     @default(ASK)
-  maxDurationSec Int?
-  thumbnailAllowed Boolean        @default(true)
-  paidDefault    Boolean          @default(false)
+  id               String           @id @default(cuid())
+  consenterId      String
+  consenter        ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  platformId       String
+  formatId         String
+  assetTypeId      String
+  policy           MatrixPolicy     @default(ASK)
+  maxDurationSec   Int?
+  thumbnailAllowed Boolean          @default(true)
+  paidDefault      Boolean          @default(false)
 
   @@unique([consenterId, platformId, formatId, assetTypeId])
 }
@@ -450,20 +491,20 @@ enum RuleAction {
 }
 
 model StandingRule {
-  id          String           @id @default(cuid())
-  consenterId String
-  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
-  name        String
-  priority    Int
-  active      Boolean          @default(true)
+  id            String           @id @default(cuid())
+  consenterId   String
+  consenter     ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  name          String
+  priority      Int
+  active        Boolean          @default(true)
   // conditions: {platformIds?, formatIds?, assetTypeIds?, maxDurationSec?, requesterTypes?, minScore?, categories?, whitelistOnly?}
-  conditions  Json
-  action      RuleAction
+  conditions    Json
+  action        RuleAction
   routeToUserId String?
-  createdById String
+  createdById   String
   createdByName String
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 }
 
 enum ListKind {
@@ -500,25 +541,25 @@ enum FileKind {
 }
 
 model StoredFile {
-  id          String   @id @default(cuid())
-  kind        FileKind
-  name        String
-  mime        String
-  size        Int
-  sha256      String
-  storageKey  String
-  version     Int      @default(1)
-  uploadedById String?
-  uploadedBy  User?    @relation(fields: [uploadedById], references: [id])
-  requestId   String?
-  request     ConsentRequest? @relation(fields: [requestId], references: [id])
-  replacesId  String? // previous version
-  approvedInGrant Boolean @default(false)
-  consenterDocOf String?
-  consenterDoc   ConsenterProfile? @relation("consenterDocs", fields: [consenterDocOf], references: [id])
-  requesterDocOf String?
-  requesterDoc   RequesterProfile? @relation("requesterDocs", fields: [requesterDocOf], references: [id])
-  createdAt   DateTime @default(now())
+  id              String            @id @default(cuid())
+  kind            FileKind
+  name            String
+  mime            String
+  size            Int
+  sha256          String
+  storageKey      String
+  version         Int               @default(1)
+  uploadedById    String?
+  uploadedBy      User?             @relation(fields: [uploadedById], references: [id])
+  requestId       String?
+  request         ConsentRequest?   @relation(fields: [requestId], references: [id])
+  replacesId      String? // previous version
+  approvedInGrant Boolean           @default(false)
+  consenterDocOf  String?
+  consenterDoc    ConsenterProfile? @relation("consenterDocs", fields: [consenterDocOf], references: [id])
+  requesterDocOf  String?
+  requesterDoc    RequesterProfile? @relation("requesterDocs", fields: [requesterDocOf], references: [id])
+  createdAt       DateTime          @default(now())
 
   @@index([requestId])
   @@index([sha256])
@@ -566,48 +607,48 @@ model ConsentRequest {
   status      RequestStatus    @default(DRAFT)
 
   // scope
-  selections  Json // [{platformId, platformName, formatId, formatName, durationSec?}]
-  assetTypeIds String[]
-  assetTypeNames String[]
-  thumbnailUsed Boolean @default(false)
-  context     String
-  creativePlan String
-  intentCategoryId String?
+  selections         Json // [{platformId, platformName, formatId, formatName, durationSec?}]
+  assetTypeIds       String[]
+  assetTypeNames     String[]
+  thumbnailUsed      Boolean      @default(false)
+  context            String
+  creativePlan       String
+  intentCategoryId   String?
   intentCategoryName String?
-  validityKind ValidityKind
-  validFrom   DateTime?
-  validUntil  DateTime?
-  plannedPublishAt DateTime?
+  validityKind       ValidityKind
+  validFrom          DateTime?
+  validUntil         DateTime?
+  plannedPublishAt   DateTime?
 
   // conditions applied by consenter on approval
-  conditionsNote String?
+  conditionsNote     String?
   approvedSelections Json? // possibly reduced scope
-  approvedThumbnail Boolean?
+  approvedThumbnail  Boolean?
 
   // payment/fee between parties
-  isPaid      Boolean @default(false)
-  agreedAmount Decimal? @db.Decimal(14, 2)
+  isPaid         Boolean  @default(false)
+  agreedAmount   Decimal? @db.Decimal(14, 2)
   agreedCurrency String?
 
   // agreement mode
-  agreementMode AgreementMode?
+  agreementMode           AgreementMode?
   agreementModeProposedBy String? // "consenter"|"requester"
 
   // lifecycle
-  submittedAt DateTime?
-  decidedAt   DateTime?
-  decidedById String?
-  decidedBy   User?   @relation("decidedBy", fields: [decidedById], references: [id])
-  decidedByRuleId String?
+  submittedAt       DateTime?
+  decidedAt         DateTime?
+  decidedById       String?
+  decidedBy         User?     @relation("decidedBy", fields: [decidedById], references: [id])
+  decidedByRuleId   String?
   decidedByRuleName String?
-  denialReason String?
-  slaExpiresAt DateTime?
-  reminder50Sent Boolean @default(false)
-  reminder90Sent Boolean @default(false)
-  remindedAt   DateTime? // last "about to expire" reminder; one per 7-day window
-  closedReason String?
-  contactsRevealed Boolean @default(false)
-  contactsSnapshot Json?
+  denialReason      String?
+  slaExpiresAt      DateTime?
+  reminder50Sent    Boolean   @default(false)
+  reminder90Sent    Boolean   @default(false)
+  remindedAt        DateTime? // last "about to expire" reminder; one per 7-day window
+  closedReason      String?
+  contactsRevealed  Boolean   @default(false)
+  contactsSnapshot  Json?
 
   files       StoredFile[]
   messages    RequestMessage[]
@@ -618,10 +659,11 @@ model ConsentRequest {
   earning     EarningEntry?
   reports     Report[]
   events      RequestEvent[]
+  meetings    RequestMeeting[]
   lastOfferAt DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([consenterId, status])
   @@index([requesterId, status])
@@ -641,15 +683,15 @@ model RequestEvent {
 }
 
 model RequestMessage {
-  id        String         @id @default(cuid())
-  requestId String
-  request   ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  senderId  String
-  sender    User           @relation(fields: [senderId], references: [id])
-  senderSide String // "consenter"|"requester"
-  body      String
+  id               String         @id @default(cuid())
+  requestId        String
+  request          ConsentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  senderId         String
+  sender           User           @relation(fields: [senderId], references: [id])
+  senderSide       String // "consenter"|"requester"
+  body             String
   attachmentFileId String?
-  createdAt DateTime       @default(now())
+  createdAt        DateTime       @default(now())
 }
 
 enum OfferStatus {
@@ -696,22 +738,22 @@ enum AgreementKind {
 }
 
 model Agreement {
-  id        String          @id @default(cuid())
-  requestId String          @unique
-  request   ConsentRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  kind      AgreementKind?
-  status    AgreementStatus @default(PROPOSED)
-  proposedBySide String
-  templateId String?
-  template  AgreementTemplate? @relation(fields: [templateId], references: [id])
-  body      String? // rendered agreement text
-  bodyVersion Int @default(1)
-  uploadedFileId String?
+  id                    String               @id @default(cuid())
+  requestId             String               @unique
+  request               ConsentRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  kind                  AgreementKind?
+  status                AgreementStatus      @default(PROPOSED)
+  proposedBySide        String
+  templateId            String?
+  template              AgreementTemplate?   @relation(fields: [templateId], references: [id])
+  body                  String? // rendered agreement text
+  bodyVersion           Int                  @default(1)
+  uploadedFileId        String?
   uploadConfirmedBySide String?
-  sha256    String?
-  signatures AgreementSignature[]
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  sha256                String?
+  signatures            AgreementSignature[]
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 }
 
 model AgreementSignature {
@@ -730,16 +772,16 @@ model AgreementSignature {
 }
 
 model AgreementTemplate {
-  id           String      @id @default(cuid())
-  name         String
-  jurisdiction String // country code or "GLOBAL"
-  body         String // with {{placeholders}}
-  optionalClauses Json     @default("[]")
-  disclaimer   String
-  active       Boolean     @default(true)
-  agreements   Agreement[]
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id              String      @id @default(cuid())
+  name            String
+  jurisdiction    String // country code or "GLOBAL"
+  body            String // with {{placeholders}}
+  optionalClauses Json        @default("[]")
+  disclaimer      String
+  active          Boolean     @default(true)
+  agreements      Agreement[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -753,27 +795,27 @@ enum GrantStatus {
 }
 
 model Grant {
-  id          String         @id @default(cuid())
-  publicId    String         @unique // short id for /v/{id}
-  requestId   String         @unique
-  request     ConsentRequest @relation(fields: [requestId], references: [id])
-  status      GrantStatus    @default(ACTIVE)
-  validityKind ValidityKind
-  validFrom   DateTime?
-  validUntil  DateTime?
-  expiryNotified Boolean     @default(false)
-  revokedAt   DateTime?
-  revokeReason String?
+  id             String            @id @default(cuid())
+  publicId       String            @unique // short id for /v/{id}
+  requestId      String            @unique
+  request        ConsentRequest    @relation(fields: [requestId], references: [id])
+  status         GrantStatus       @default(ACTIVE)
+  validityKind   ValidityKind
+  validFrom      DateTime?
+  validUntil     DateTime?
+  expiryNotified Boolean           @default(false)
+  revokedAt      DateTime?
+  revokeReason   String?
   // certificate
-  certificateId String       @unique
-  payload     Json // canonical certificate payload
-  signature   String // ed25519 over canonical JSON, base64
-  publicKey   String
-  issuedAt    DateTime       @default(now())
-  issuedByName String
-  takedowns   TakedownRequest[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  certificateId  String            @unique
+  payload        Json // canonical certificate payload
+  signature      String // ed25519 over canonical JSON, base64
+  publicKey      String
+  issuedAt       DateTime          @default(now())
+  issuedByName   String
+  takedowns      TakedownRequest[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 }
 
 enum TakedownStatus {
@@ -786,20 +828,20 @@ enum TakedownStatus {
 }
 
 model TakedownRequest {
-  id        String         @id @default(cuid())
-  grantId   String
-  grant     Grant          @relation(fields: [grantId], references: [id], onDelete: Cascade)
-  reason    String
-  liveLinks String[]
-  status    TakedownStatus @default(RAISED)
-  requesterNote String?
+  id                      String         @id @default(cuid())
+  grantId                 String
+  grant                   Grant          @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  reason                  String
+  liveLinks               String[]
+  status                  TakedownStatus @default(RAISED)
+  requesterNote           String?
   requesterEvidenceFileId String?
-  declineReason String?
-  respondBy DateTime
-  respondedAt DateTime?
-  confirmedAt DateTime?
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
+  declineReason           String?
+  respondBy               DateTime
+  respondedAt             DateTime?
+  confirmedAt             DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -822,28 +864,28 @@ enum PaymentStatus {
 }
 
 model Payment {
-  id          String           @id @default(cuid())
-  requesterId String
-  requester   RequesterProfile @relation(fields: [requesterId], references: [id])
-  purpose     PaymentPurpose
-  amount      Decimal          @db.Decimal(14, 2)
-  currency    String
-  provider    String // "mock" | "stripe" | "razorpay"
-  providerRef String?
-  status      PaymentStatus    @default(PENDING)
-  couponCode  String?
-  discount    Decimal?         @db.Decimal(14, 2)
-  tax         Decimal?         @db.Decimal(14, 2)
-  taxLabel    String?
-  requestId   String?
-  request     ConsentRequest?  @relation(fields: [requestId], references: [id])
-  invoiceNumber String?        @unique
-  paidAt      DateTime?
-  refundedAt  DateTime?
-  refundRef   String?
-  refundedAmount Decimal?      @db.Decimal(14, 2) // the part returned (80% of a consent request fee)
-  createdAt   DateTime         @default(now())
-  earning     EarningEntry?
+  id             String           @id @default(cuid())
+  requesterId    String
+  requester      RequesterProfile @relation(fields: [requesterId], references: [id])
+  purpose        PaymentPurpose
+  amount         Decimal          @db.Decimal(14, 2)
+  currency       String
+  provider       String // "mock" | "stripe" | "razorpay"
+  providerRef    String?
+  status         PaymentStatus    @default(PENDING)
+  couponCode     String?
+  discount       Decimal?         @db.Decimal(14, 2)
+  tax            Decimal?         @db.Decimal(14, 2)
+  taxLabel       String?
+  requestId      String?
+  request        ConsentRequest?  @relation(fields: [requestId], references: [id])
+  invoiceNumber  String?          @unique
+  paidAt         DateTime?
+  refundedAt     DateTime?
+  refundRef      String?
+  refundedAmount Decimal?         @db.Decimal(14, 2) // the part returned (80% of a consent request fee)
+  createdAt      DateTime         @default(now())
+  earning        EarningEntry?
 
   @@index([requestId])
 }
@@ -859,21 +901,21 @@ enum EarningStatus {
 }
 
 model EarningEntry {
-  id          String           @id @default(cuid())
-  consenterId String
-  consenter   ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
-  requestId   String           @unique
-  request     ConsentRequest   @relation(fields: [requestId], references: [id])
-  paymentId   String           @unique
-  payment     Payment          @relation(fields: [paymentId], references: [id])
-  amount      Decimal          @db.Decimal(14, 2) // the owner's share (80% of the fee), what a yes pays out
-  grossAmount Decimal?         @db.Decimal(14, 2) // the full consent request fee the requester paid
-  currency    String
-  status      EarningStatus    @default(HELD)
+  id             String           @id @default(cuid())
+  consenterId    String
+  consenter      ConsenterProfile @relation(fields: [consenterId], references: [id], onDelete: Cascade)
+  requestId      String           @unique
+  request        ConsentRequest   @relation(fields: [requestId], references: [id])
+  paymentId      String           @unique
+  payment        Payment          @relation(fields: [paymentId], references: [id])
+  amount         Decimal          @db.Decimal(14, 2) // the owner's share (80% of the fee), what a yes pays out
+  grossAmount    Decimal?         @db.Decimal(14, 2) // the full consent request fee the requester paid
+  currency       String
+  status         EarningStatus    @default(HELD)
   reversedReason String?
-  settlementId String?
-  settlement  Settlement?      @relation(fields: [settlementId], references: [id])
-  createdAt   DateTime         @default(now())
+  settlementId   String?
+  settlement     Settlement?      @relation(fields: [settlementId], references: [id])
+  createdAt      DateTime         @default(now())
 
   @@index([consenterId, status])
 }
@@ -894,26 +936,26 @@ model Settlement {
 }
 
 model PriceConfig {
-  id       String  @id @default(cuid())
-  country  String // ISO code or "DEFAULT"
-  currency String
-  onboardingFee Decimal @db.Decimal(14, 2)
-  yearlyFee     Decimal @db.Decimal(14, 2)
-  perRequestFee Decimal @db.Decimal(14, 2)
-  taxLabel String?
-  taxRate  Decimal? @db.Decimal(5, 2)
+  id            String   @id @default(cuid())
+  country       String // ISO code or "DEFAULT"
+  currency      String
+  onboardingFee Decimal  @db.Decimal(14, 2)
+  yearlyFee     Decimal  @db.Decimal(14, 2)
+  perRequestFee Decimal  @db.Decimal(14, 2)
+  taxLabel      String?
+  taxRate       Decimal? @db.Decimal(5, 2)
 
   @@unique([country])
 }
 
 model Coupon {
-  id        String   @id @default(cuid())
-  code      String   @unique
+  id         String    @id @default(cuid())
+  code       String    @unique
   percentOff Int
-  active    Boolean  @default(true)
-  expiresAt DateTime?
-  maxUses   Int?
-  usedCount Int      @default(0)
+  active     Boolean   @default(true)
+  expiresAt  DateTime?
+  maxUses    Int?
+  usedCount  Int       @default(0)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -928,34 +970,34 @@ enum ReportStatus {
 }
 
 model Report {
-  id          String         @id @default(cuid())
-  requestId   String
-  request     ConsentRequest @relation(fields: [requestId], references: [id])
-  bySide      String // reporter side
-  reason      String // category
-  description String
-  evidenceLinks String[]
+  id              String         @id @default(cuid())
+  requestId       String
+  request         ConsentRequest @relation(fields: [requestId], references: [id])
+  bySide          String // reporter side
+  reason          String // category
+  description     String
+  evidenceLinks   String[]
   evidenceFileIds String[]
-  status      ReportStatus   @default(OPEN)
-  response    String? // other party's response
-  adminNotes  String?
-  resolvedAt  DateTime?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  status          ReportStatus   @default(OPEN)
+  response        String? // other party's response
+  adminNotes      String?
+  resolvedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
 
 model ScoreLog {
-  id          String   @id @default(cuid())
-  consenterId String?
-  consenter   ConsenterProfile? @relation("consenterScore", fields: [consenterId], references: [id], onDelete: Cascade)
-  requesterId String?
-  requester   RequesterProfile? @relation("requesterScore", fields: [requesterId], references: [id], onDelete: Cascade)
-  oldScore    Int
-  newScore    Int
-  reason      String
+  id           String            @id @default(cuid())
+  consenterId  String?
+  consenter    ConsenterProfile? @relation("consenterScore", fields: [consenterId], references: [id], onDelete: Cascade)
+  requesterId  String?
+  requester    RequesterProfile? @relation("requesterScore", fields: [requesterId], references: [id], onDelete: Cascade)
+  oldScore     Int
+  newScore     Int
+  reason       String
   adjustedById String?
-  adjustedBy  User?    @relation("adjustedBy", fields: [adjustedById], references: [id])
-  createdAt   DateTime @default(now())
+  adjustedBy   User?             @relation("adjustedBy", fields: [adjustedById], references: [id])
+  createdAt    DateTime          @default(now())
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1001,21 +1043,21 @@ model Job {
 }
 
 model Notification {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String
   body      String
   href      String?
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId, readAt])
 }
 
 model NotificationPref {
-  userId String  @id
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String  @id
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   emailStateChanges Boolean @default(true)
   smsCritical       Boolean @default(true)
 }
@@ -1038,7 +1080,7 @@ model CmsPage {
 }
 
 model MessageTemplate {
-  key     String @id
+  key     String  @id
   channel String // "email"|"sms"
   subject String?
   body    String
