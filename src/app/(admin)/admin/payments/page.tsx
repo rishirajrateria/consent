@@ -1,8 +1,10 @@
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, StatusBadge, EmptyState, SectionTitle } from "@/components/ui";
-import { fmtDateTime, fmtMoney, titleCase, fmtDate } from "@/lib/utils";
+import { fmtDateTime, fmtMoney, fmtDate } from "@/lib/utils";
+import { OWNER_SHARE } from "@/lib/escrow";
 import { CreditCard } from "lucide-react";
+import { PURPOSE, refundLine } from "../payment-labels";
 
 export const metadata = { title: "Payments & invoices" };
 
@@ -29,7 +31,7 @@ export default async function AdminPayments() {
 
   return (
     <div className="space-y-6">
-      <PageHeader kicker="Admin · Finance" title="Payments & invoices" desc="Platform fees from requesters only — Consent never handles fees between the parties." />
+      <PageHeader kicker="Admin · Finance" title="Payments & invoices" desc="Platform fees and consent request fees, paid by requesters only. Fees agreed between the parties never move through Consent." />
 
       <Card className="space-y-2">
         <SectionTitle title="Subscription status" />
@@ -49,7 +51,7 @@ export default async function AdminPayments() {
       <Card className="space-y-2">
         <SectionTitle
           title="Weekly settlements"
-          desc="Consent-price earnings batched and paid out to consenters weekly. Usage fees between parties never move through Consent."
+          desc={`Owners' ${Math.round(OWNER_SHARE * 100)}% of consent request fees they said yes to, batched and paid out weekly on Fridays. Usage fees between parties never move through Consent.`}
         />
         {settlements.length === 0 && <p className="text-sm text-ink-faint">No settlements yet.</p>}
         {settlements.map((s) => (
@@ -70,7 +72,8 @@ export default async function AdminPayments() {
         {payments.map((p) => (
           <div key={p.id} className="flex flex-wrap items-center gap-2 border-t hairline py-2 text-sm first:border-t-0">
             <span className="font-medium">{p.requester.displayName}</span>
-            <span>{titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}</span>
+            <span>{PURPOSE[p.purpose]} · {fmtMoney(p.amount.toString(), p.currency)}</span>
+            {p.status === "REFUNDED" && <span className="text-xs text-ink-soft">{refundLine(p)}</span>}
             <span className="text-xs text-ink-faint">
               {p.provider} · {fmtDateTime(p.createdAt)}{p.invoiceNumber ? ` · ${p.invoiceNumber}` : ""}
               {p.couponCode ? ` · coupon ${p.couponCode}` : ""}

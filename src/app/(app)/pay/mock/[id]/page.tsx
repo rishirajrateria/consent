@@ -9,6 +9,7 @@ import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import type { Selection } from "@/lib/rules";
 import type { Payment } from "@prisma/client";
 import { fmtMoney, titleCase } from "@/lib/utils";
+import { splitConsentFee } from "@/lib/escrow";
 import { CreditCard } from "lucide-react";
 
 export const metadata = { title: "Checkout" };
@@ -36,9 +37,14 @@ export default async function MockCheckout({
   if (staleHref) redirect(staleHref);
 
   // A submission checkout covers every pending payment on the request:
-  // the platform fee plus the consenter's consent price, if set.
+  // the platform fee plus the consenter's consent request fee, if set.
   const lines = payment.requestId ? await pendingPaymentsForRequest(payment.requestId) : [payment];
   const consentLine = lines.find((l) => l.purpose === "CONSENT_PRICE");
+  const owner = payment.request?.consenter.displayName ?? "The owner";
+  // What comes back without a yes: 80% of the consent request fee (Consent keeps 20%).
+  const consentRefund = consentLine
+    ? fmtMoney(splitConsentFee(Number(consentLine.amount.toString())).refund, consentLine.currency)
+    : null;
   // A way back that doesn't pay. Unpaid lines are reused when the request is
   // submitted again, so leaving never adds a second charge.
   const [backHref, backLabel] = backLink(payment);
@@ -66,7 +72,7 @@ export default async function MockCheckout({
       await db.payment.deleteMany({ where: { id: spent.id, status: "PENDING" } });
       redirect(`${backLink(p)[0]}?error=${encodeURIComponent(COUPON_GONE)}`);
     }
-    // Settle the consent price first so the earning exists when the
+    // Settle the consent request fee first so the earning exists when the
     // platform-fee settlement flips the request to Submitted.
     for (const row of toSettle.sort((a) => (a.purpose === "CONSENT_PRICE" ? -1 : 1))) {
       await settlePayment(row.id);
@@ -98,18 +104,18 @@ export default async function MockCheckout({
             Request #{payment.request.number} to {payment.request.consenter.displayName}
           </p>
         )}
+        {/* Like KV, but a long owner name wraps instead of pushing the amount off screen. */}
         {lines.map((l) => (
-          <KV
-            key={l.id}
-            k={
-              l.purpose === "CONSENT_PRICE"
-                ? `Consent price → ${payment.request?.consenter.displayName ?? "consenter"}`
+          <div key={l.id} className="flex items-start justify-between gap-4 py-2">
+            <span className="min-w-0 text-xs font-medium uppercase tracking-wider text-ink-faint">
+              {l.purpose === "CONSENT_PRICE"
+                ? `${owner}'s consent request fee`
                 : l.purpose === "PER_REQUEST"
                   ? "Platform fee"
-                  : titleCase(l.purpose)
-            }
-            v={fmtMoney(l.amount.toString(), l.currency)}
-          />
+                  : titleCase(l.purpose)}
+            </span>
+            <span className="shrink-0 text-right text-sm text-ink">{fmtMoney(l.amount.toString(), l.currency)}</span>
+          </div>
         ))}
         {payment.tax && <KV k={payment.taxLabel ?? "Tax"} v={`included: ${fmtMoney(payment.tax.toString(), payment.currency)}`} />}
         {payment.discount && <KV k="Coupon discount" v={`−${fmtMoney(payment.discount.toString(), payment.currency)}`} />}
@@ -117,10 +123,10 @@ export default async function MockCheckout({
           <>
             <Divider />
             <p className="text-xs text-ink-faint">
-              The consent price is set by {payment.request?.consenter.displayName}. Consent holds it
-              until they answer: if they say yes it goes to them; if they decline, or the request ends
-              without a yes, it&apos;s refunded to you. The platform fee is never refunded. Any usage fee
-              agreed after approval is settled directly between you, never through Consent.
+              {owner}&apos;s consent request fee is held until they answer. If they say yes, 80% goes
+              to them; if not, 80% ({consentRefund}) is refunded to you. Consent keeps 20%. The platform
+              fee isn&apos;t refunded. Any usage fee agreed after approval is settled directly between
+              you, never through Consent.
             </p>
           </>
         )}
@@ -164,8 +170,8 @@ async function spentCoupon(rows: Pick<Payment, "id" | "couponCode">[]) {
 /**
  * An old checkout link can be reopened after the draft was changed. Never take
  * money for anything but what the draft now says: send the requester back when
- * the owner's public matrix would deny it once paid, or when the consent-price
- * line no longer matches the price for its intent (or the owner's price moved).
+ * the owner's public matrix would deny it once paid, or when the consent request
+ * fee line no longer matches the price for its intent (or the owner's price moved).
  * Pressing "Pay & submit" again rebuilds the lines.
  */
 async function staleRequestHref(requestId: string | null) {

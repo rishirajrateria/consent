@@ -3,10 +3,11 @@ import { PageHeader, Card, SectionTitle, Alert } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
 import { fmtMoney } from "@/lib/utils";
 import { countryName } from "@/lib/countries";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../fee-shares";
 
 export const metadata = {
   title: "Pricing",
-  description: "Consenters never pay anything. Requesters pay onboarding, a yearly subscription and a small per-request fee.",
+  description: "Consenters never pay anything. Requesters pay onboarding, a yearly subscription and a small platform fee on each request.",
 };
 
 export default async function PricingPage() {
@@ -17,7 +18,7 @@ export default async function PricingPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees, plus an owner's consent price if they set one. Deal fees settle directly between the parties." />
+      <PageHeader kicker="consent." title="Pricing" desc="Consenters never pay anything. Requesters pay platform fees, plus an owner's consent request fee if they set one. Deal fees settle directly between the parties." />
       <div className="grid gap-4 sm:grid-cols-2">
         <Card strong className="space-y-2 p-7">
           <SectionTitle title="Consenters" />
@@ -37,7 +38,7 @@ export default async function PricingPage() {
               <ul className="mt-1 space-y-0.5 text-sm text-ink-soft">
                 <li><strong className="text-ink">{fmtMoney(p.onboardingFee.toString(), p.currency)}</strong> one-time onboarding (after approval)</li>
                 <li><strong className="text-ink">{fmtMoney(p.yearlyFee.toString(), p.currency)}</strong> / year subscription</li>
-                <li><strong className="text-ink">{fmtMoney(p.perRequestFee.toString(), p.currency)}</strong> per consent request</li>
+                <li><strong className="text-ink">{fmtMoney(p.perRequestFee.toString(), p.currency)}</strong> platform fee per request</li>
                 {p.taxRate && Number(p.taxRate) > 0 ? <li className="text-xs">+ {p.taxLabel} {p.taxRate.toString()}%</li> : null}
               </ul>
             </div>
@@ -45,16 +46,17 @@ export default async function PricingPage() {
         </Card>
       </div>
       <Alert>
-        <strong>Owners can also set a consent price</strong> — what it costs just to ask them. It is
-        paid in-app at submission and held until the owner answers. On a yes it goes to the owner,
-        paid out weekly; on a no, or if the request ends without a yes, it is refunded. It filters out
-        careless asks. Any usage fee agreed after approval is settled directly between the parties;
+        <strong>Owners can also set a consent request fee</strong>: what it costs to send them a
+        request. It&apos;s paid when the request is submitted and held until the owner answers. If they
+        say yes, {OWNER_PCT} goes to them, paid out on Fridays. If they decline, or the request ends
+        without a yes, {REFUND_PCT} is refunded to the requester. Consent keeps {CONSENT_PCT}. It filters
+        out careless asks. Any usage fee agreed after approval is settled directly between the parties;
         that money never moves through Consent.
       </Alert>
       <Alert>
-        <strong>The per-request platform fee is non-refundable</strong> in every outcome: approved,
-        denied, closed, withdrawn or unanswered. Consent prices are refunded unless the owner says yes. Lapsed subscriptions keep read access to
-        past grants and certificates.
+        <strong>The platform fee is never refunded</strong>, whatever the outcome: approved, declined,
+        closed, withdrawn or unanswered. Lapsed subscriptions keep read access to past grants and
+        certificates.
       </Alert>
       {note && (
         <Card>

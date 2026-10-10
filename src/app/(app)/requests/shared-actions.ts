@@ -7,7 +7,7 @@ import { storeUpload } from "@/lib/storage";
 import { notifyConsenterTeam, notifyRequesterTeam } from "@/lib/notify";
 import { Prisma } from "@prisma/client";
 import { canSendOffer, COUNTERS_USED_UP, FEE_CHANGED } from "@/lib/negotiation";
-import { syncConsentPrice } from "@/lib/escrow";
+import { syncConsentPrice, YES_STATUSES } from "@/lib/escrow";
 
 /** Resolves which side of a request the current user is on (with membership). */
 export async function resolveSide(requestId: string) {
@@ -228,7 +228,7 @@ export async function acceptOfferAction(formData: FormData) {
     href: `/c-panel/requests/${id}`,
     critical: true,
   });
-  // An agreed deal is a yes: the held ask price goes to the owner.
+  // An agreed deal is a yes: 80% of the held consent request fee goes to the owner.
   await syncConsentPrice(id);
   redirect(path);
 }
@@ -257,13 +257,22 @@ export async function closeNegotiationAction(formData: FormData) {
       data: { requestId: id, type: "closed", actorName: session.user.name, actorSide: side },
     }),
   ]);
+  // Agreement-mode closes come after the owner's yes: their share of the fee stays theirs.
+  const saidYes = YES_STATUSES.includes(request.status);
   const notify = side === "consenter" ? notifyRequesterTeam : notifyConsenterTeam;
   await notify(side === "consenter" ? request.requesterId : request.consenterId, {
     title: `Request #${request.number} closed`,
-    body: "The other side closed the request. The platform fee is not refunded; an ask price still held is refunded to the requester.",
+    body:
+      side === "consenter"
+        ? saidYes
+          ? "The other side closed the request. They had already said yes, so neither a consent request fee nor the platform fee is refunded."
+          : "The other side closed the request. 80% of any consent request fee you paid is refunded to you; Consent keeps 20%. The platform fee isn't refunded."
+        : saidYes
+          ? "The other side closed the request. You had already said yes, so your 80% of any consent request fee stays yours."
+          : "The other side closed the request. 80% of any consent request fee they paid goes back to them; Consent keeps 20%.",
     href: panelPath(side === "consenter" ? "requester" : "consenter", id),
   });
-  // Ended before a yes: the held ask price is refunded (released prices stay with the owner).
+  // Ended before a yes: 80% of the held consent request fee is refunded (a released share stays with the owner).
   await syncConsentPrice(id);
   redirect(path);
 }

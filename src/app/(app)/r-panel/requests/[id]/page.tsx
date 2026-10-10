@@ -13,6 +13,8 @@ import { uploadRequestFileAction, withdrawRequestAction, proceedAppRecordAction 
 import { AgreementPanel } from "@/components/agreement-panel";
 import { TakedownRespondPanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
+import { splitConsentFee } from "@/lib/escrow";
+import { fmtMoney } from "@/lib/utils";
 
 export const metadata = { title: "Request" };
 
@@ -47,6 +49,28 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
   const needsRaw =
     ["APPROVED_IN_PRINCIPLE", "CHANGES_REQUESTED"].includes(request.status) ||
     (request.status === "AGREEMENT_MODE_PENDING" && !request.files.some((f) => f.kind === "RAW_CONTENT"));
+  // The owner's consent request fee, if one was paid: without a yes, 80% comes back.
+  const owner = request.consenter.displayName;
+  const feeLine = request.payments.find(
+    (p) => p.purpose === "CONSENT_PRICE" && (p.status === "PAID" || p.status === "REFUNDED")
+  );
+  const feePaid = feeLine ? Number(feeLine.amount.toString()) : 0;
+  const feeBack = feeLine
+    ? feeLine.refundedAmount != null
+      ? Number(feeLine.refundedAmount.toString())
+      : splitConsentFee(feePaid).refund
+    : 0;
+  const share = feePaid > 0 ? Math.round((feeBack / feePaid) * 100) : 0;
+  const refundNote = feeLine
+    ? `${share}% of ${owner}'s consent request fee (${fmtMoney(feeBack, feeLine.currency)}) is refunded to you${
+        share < 100 ? `; Consent keeps ${100 - share}%` : ""
+      }. The platform fee isn't refunded.`
+    : "The platform fee isn't refunded.";
+  // Closed after the owner's yes: their share was already released, so nothing comes back.
+  const closedNote =
+    feeLine?.status === "PAID"
+      ? `${owner} had already said yes, so their consent request fee isn't refunded, and neither is the platform fee.`
+      : refundNote;
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -60,23 +84,26 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
 
       {request.status === "DENIED" && (
         <Alert tone="warn">
-          <strong>Denied.</strong> {request.denialReason ?? "No reason given."} The owner&apos;s consent
-          price is refunded to you; the platform fee is not. You may submit a fresh request.
+          <strong>Denied.</strong> {request.denialReason ?? "No reason given."} {refundNote} You may
+          submit a fresh request.
         </Alert>
       )}
       {request.status === "EXPIRED_NO_RESPONSE" && (
         <Alert tone="warn">
-          The consenter did not respond within the window. Their consent price is refunded to you;
-          the platform fee is not. You can submit a fresh request any time.
+          The consenter did not respond within the window. {refundNote} You can submit a fresh
+          request any time.
         </Alert>
       )}
       {request.status === "CLOSED" && (
         <Alert tone="warn">
-          This request was closed without a deal. To try again, raise a new request.{" "}
+          This request was closed without a deal. {closedNote} To try again, raise a new request.{" "}
           <Link href={`/r-panel/new?consenter=${request.consenter.slug}`} className="font-medium underline underline-offset-4">
             Raise a new request
           </Link>
         </Alert>
+      )}
+      {request.status === "WITHDRAWN" && (
+        <Alert tone="warn">This request was withdrawn. {refundNote}</Alert>
       )}
       {request.status === "CHANGES_REQUESTED" && (
         <Alert tone="warn">
@@ -156,7 +183,7 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       {canWithdraw && canAct && (
         <form action={withdrawRequestAction}>
           <input type="hidden" name="id" value={request.id} />
-          <ConfirmSubmit confirm="Withdraw this request? The consent price is refunded to you; the platform fee is not." variant="ghost" size="sm">
+          <ConfirmSubmit confirm={`Withdraw this request? ${refundNote}`} variant="ghost" size="sm">
             Withdraw request
           </ConfirmSubmit>
         </form>

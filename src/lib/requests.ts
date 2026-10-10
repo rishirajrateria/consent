@@ -3,8 +3,23 @@ import { getSettings } from "./settings";
 import { evaluateAutoDecision, type Selection } from "./rules";
 import { issueGrant } from "./grants";
 import { notifyConsenterTeam, notifyRequesterTeam, notifyUser } from "./notify";
+import { splitConsentFee } from "./escrow";
+import { fmtMoney } from "./utils";
 
-/** Called when the per-request fee settles: submit + evaluate auto-decision. */
+/**
+ * What a requester is told when a request ends without a yes: 80% of the
+ * owner's consent request fee comes back (Consent keeps 20%); the platform fee never does.
+ */
+export async function noYesRefundNote(requestId: string, owner: string) {
+  const fee = await db.payment.findFirst({
+    where: { requestId, purpose: "CONSENT_PRICE", status: { in: ["PAID", "REFUNDED"] } },
+  });
+  if (!fee) return "The platform fee isn't refunded.";
+  const back = fee.refundedAmount ?? splitConsentFee(Number(fee.amount.toString())).refund;
+  return `80% of ${owner}'s consent request fee (${fmtMoney(back.toString(), fee.currency)}) is refunded to you; Consent keeps 20%. The platform fee isn't refunded.`;
+}
+
+/** Called when the platform fee settles: submit + evaluate auto-decision. */
 export async function onRequestPaid(requestId: string) {
   const request = await db.consentRequest.findUnique({
     where: { id: requestId },
@@ -52,7 +67,7 @@ export async function onRequestPaid(requestId: string) {
     });
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} has a standing rule that declines this kind of request. Their consent price is refunded to you; the platform fee is not.`,
+      body: `${request.consenter.displayName} has a standing rule that declines this kind of request. ${await noYesRefundNote(requestId, request.consenter.displayName)}`,
       href: `/r-panel/requests/${requestId}`,
     });
     return;
@@ -73,7 +88,7 @@ export async function onRequestPaid(requestId: string) {
     });
     await notifyRequesterTeam(request.requesterId, {
       title: `Request #${request.number} denied`,
-      body: `${request.consenter.displayName} never allows this combination. Their consent price is refunded to you; the platform fee is not.`,
+      body: `${request.consenter.displayName} never allows this combination. ${await noYesRefundNote(requestId, request.consenter.displayName)}`,
       href: `/r-panel/requests/${requestId}`,
     });
     return;

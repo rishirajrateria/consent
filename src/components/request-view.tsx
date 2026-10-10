@@ -277,6 +277,22 @@ export function MessagesCard({
   );
 }
 
+/** A timeline line; a refunded consent request fee shows the part that went back. */
+function eventTitle(e: { type: string; detail: Prisma.JsonValue }) {
+  // Refunds logged before the 80/20 split returned the whole fee.
+  if (e.type === "consent_price_refunded") {
+    const d = (e.detail ?? {}) as { amount?: string; currency?: string };
+    const n = Number(d.amount);
+    return n > 0 ? `Consent request fee refunded: ${fmtMoney(n, d.currency)} (100%)` : "Consent request fee refunded";
+  }
+  if (e.type !== "consent_fee_refunded") return titleCase(e.type);
+  const d = (e.detail ?? {}) as { fee?: string; refunded?: string; currency?: string };
+  const fee = Number(d.fee);
+  const back = Number(d.refunded);
+  if (!(fee > 0) || !(back >= 0)) return "Consent request fee refunded";
+  return `Consent request fee refunded: ${fmtMoney(back, d.currency)} (${Math.round((back / fee) * 100)}%) of ${fmtMoney(fee, d.currency)}`;
+}
+
 export function TimelineCard({ request }: { request: FullRequest }) {
   const events = [...request.events].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   if (events.length === 0) return null;
@@ -295,7 +311,7 @@ export function TimelineCard({ request }: { request: FullRequest }) {
         {events.map((e) => (
           <li key={e.id} className="relative border-l border-ink/10 pb-3 pl-4 last:pb-0">
             <span className="absolute -left-[3.5px] top-1.5 size-1.5 rounded-full bg-ink" aria-hidden />
-            <div className="text-sm font-medium">{titleCase(e.type)}</div>
+            <div className="text-sm font-medium">{eventTitle(e)}</div>
             <div className="text-xs text-ink-faint">
               {e.actorName ? `${e.actorName} (${e.actorSide}) · ` : e.actorSide ? `${e.actorSide} · ` : ""}
               {fmtDateTime(e.createdAt)}

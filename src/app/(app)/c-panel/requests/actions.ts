@@ -173,7 +173,7 @@ export async function approveRequestAction(formData: FormData) {
     });
   }
   await recalcConsenterScore(consenter.id, `Responded to request #${request.number}`);
-  // A yes releases the held ask price to the owner.
+  // A yes releases the owner's 80% of the held consent request fee.
   await syncConsentPrice(id);
   redirect(path);
 }
@@ -299,7 +299,7 @@ export async function denyRequestAction(formData: FormData) {
     href: `/r-panel/requests/${id}`,
   });
   await recalcConsenterScore(consenter.id, `Responded to request #${request.number}`);
-  // A no refunds the held ask price to the requester.
+  // A no refunds 80% of the held consent request fee to the requester.
   await syncConsentPrice(id);
   redirect(path);
 }

@@ -9,8 +9,11 @@ documented, verifiable approval before publishing.
 Every approval produces a **tamper-proof consent certificate**: bound to the SHA-256 hashes of the
 exact approved files, signed with the platform's Ed25519 key, verifiable by anyone at a public link.
 
-Consent is **not a payment intermediary** between the two sides — agreed fees are settled directly.
-Consent only charges requesters platform fees (onboarding, yearly subscription, per-request).
+Consent is **not a payment intermediary** between the two sides — agreed usage fees are settled
+directly. Consent charges requesters platform fees (onboarding, yearly subscription, and a platform
+fee on each request). An owner can also set a **consent request fee**: it is held until they answer,
+then 80% goes to the owner on a yes (paid out weekly on Fridays) or 80% is refunded to the requester
+otherwise; Consent keeps 20%. The platform fee is never refunded. See `DECISIONS.md` #25h.
 
 ## Stack
 
@@ -52,9 +55,9 @@ extensions, run `CREATE EXTENSION pg_trgm;` as a superuser once.
 | `pod@demo.consent` | Requester — application pending in the admin queue |
 
 Seeded demo data includes requests in every state (pending with SLA, in negotiation with offers,
-changes requested, deal agreed with revealed contacts, denied, auto-expired with forfeited fee,
-withdrawn) plus one **issued certificate** with a live verification page, an open breach report and
-a raised takedown.
+changes requested, deal agreed with revealed contacts, denied, auto-expired with the platform fee
+kept, withdrawn) plus one **issued certificate** with a live verification page, an open breach
+report and a raised takedown.
 
 **2FA note:** admin access and consenter panels require TOTP 2FA (per spec). On first access you'll
 be walked through a 30-second authenticator setup. **Mock providers:** all email/SMS (including OTP

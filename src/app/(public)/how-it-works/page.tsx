@@ -1,5 +1,6 @@
 import { PageHeader, Card, Divider } from "@/components/ui";
 import { Search, FileUp, Scale, Award, QrCode, ShieldOff, Flag, Users } from "lucide-react";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../fee-shares";
 
 export const metadata = {
   title: "How it works",
@@ -8,7 +9,7 @@ export const metadata = {
 
 const STEPS = [
   [Users, "Verified, once — on both sides", "Every consenter is verified manually — legal documents, official account proof (OAuth or manual), one entity = one account, and a mandatory verification meeting — so a yes is provably from its owner. Requesters are approval-gated with ID or business registration, then pay a one-time onboarding fee and a yearly subscription."],
-  [Search, "Ask for the exact use", "Requesters describe the exact intended use, filled manually — no templates, no duplicates. Platform(s) and format(s), duration in seconds for timed formats, asset types, the exact assets used, the raw final content file, a separate thumbnail if it features the consenter, context, a creative plan with intent category, and the requested validity. A small per-request platform fee is paid at submission and is never refunded. If the owner sets a consent price, it is paid in-app with it and held until they answer: it goes to them on a yes and is refunded otherwise."],
+  [Search, "Ask for the exact use", `Requesters describe the exact intended use, filled manually — no templates, no duplicates. Platform(s) and format(s), duration in seconds for timed formats, asset types, the exact assets used, the raw final content file, a separate thumbnail if it features the consenter, context, a creative plan with intent category, and the requested validity. A small platform fee is paid at submission and is never refunded. If the owner sets a consent request fee, it is paid at the same time and held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to the requester. Consent keeps ${CONSENT_PCT}.`],
   [Scale, "The owner decides — or their terms do", "The terms you wrote answer first: a consent matrix (allow / ask / never per platform × format × asset type) and prioritized standing rules can auto-approve, auto-deny or route requests. Otherwise the team approves (optionally with conditions), requests changes, sets a fee, or denies. A no needs no reason. Unanswered requests auto-expire and hurt the consenter's public Consent Score."],
   [FileUp, "Deal fees are settled directly", "Deal fees never move through Consent. If a fee is wanted, you negotiate it inside Consent — each side can send up to 3 counter-offers. When a deal is agreed, the owner chooses whether to share contact details, and payment happens directly between the parties — Consent never processes, tracks or confirms it."],
   [Award, "You choose how formal the yes is", "The default is the in-app record. Either side can propose a legally binding agreement — platform-generated from jurisdiction templates and signed in-app (typed name + OTP + timestamp + IP), or your own signed contract uploaded and mutually confirmed."],

@@ -12,6 +12,7 @@ import { NoPermission } from "../../no-permission";
 import { fmtDateTime, titleCase, fmtBytes } from "@/lib/utils";
 import { FileText, ExternalLink } from "lucide-react";
 import { safeChannelUrl } from "@/lib/channels";
+import { PURPOSE, refundLine } from "../../payment-labels";
 
 export const metadata = { title: "Review requester" };
 
@@ -155,7 +156,10 @@ export default async function RequesterDetail({ params, searchParams }: PageProp
             <SectionTitle title="Payments" />
             {r.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between gap-2 text-sm">
-                <span>{titleCase(p.purpose)} · {p.currency} {p.amount.toString()} · {fmtDateTime(p.createdAt)}</span>
+                <span>
+                  {PURPOSE[p.purpose]} · {p.currency} {p.amount.toString()} · {fmtDateTime(p.createdAt)}
+                  {p.status === "REFUNDED" && <span className="block text-xs text-ink-soft">{refundLine(p)}</span>}
+                </span>
                 <StatusBadge status={p.status} />
               </div>
             ))}

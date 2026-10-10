@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { PageHeader, Card, SectionTitle } from "@/components/ui";
 import { statusLabel } from "@/lib/utils";
+import { consentKeeps } from "../revenue";
 
 export const metadata = { title: "Analytics" };
 
@@ -26,12 +27,20 @@ export default async function AdminAnalytics() {
   await requireAdmin("analytics", "view");
   const thirtyDaysAgo = daysAgo(30);
 
-  const [signups, byStatus, byPlatform, revenue, topConsenters, topRequesters, responseTimes] =
+  const [signups, byStatus, byPlatform, paid, ownersShare, topConsenters, topRequesters, responseTimes] =
     await Promise.all([
       db.user.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
       db.consentRequest.groupBy({ by: ["status"], _count: true, where: { status: { not: "DRAFT" } } }),
       db.consentRequest.findMany({ where: { status: { not: "DRAFT" } }, select: { selections: true }, take: 500 }),
-      db.payment.aggregate({ _sum: { amount: true }, where: { status: { in: ["PAID", "FORFEITED"] }, paidAt: { gte: thirtyDaysAgo } } }),
+      // Consent's revenue from payments made in the last 30 days: collected, less the refunded 80% and the owners' 80%.
+      db.payment.aggregate({
+        _sum: { amount: true, refundedAmount: true },
+        where: { status: { in: ["PAID", "FORFEITED", "REFUNDED"] }, paidAt: { gte: thirtyDaysAgo } },
+      }),
+      db.earningEntry.aggregate({
+        _sum: { amount: true },
+        where: { status: { in: ["HELD", "PENDING", "SETTLED"] }, payment: { paidAt: { gte: thirtyDaysAgo } } },
+      }),
       db.consenterProfile.findMany({ orderBy: { score: "desc" }, take: 5, where: { status: "APPROVED" } }),
       db.requesterProfile.findMany({ orderBy: { score: "desc" }, take: 5, where: { status: "APPROVED" } }),
       db.consentRequest.findMany({
@@ -63,7 +72,7 @@ export default async function AdminAnalytics() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ["Signups (30d)", signups],
-          ["Revenue (30d)", `$${Number(revenue._sum.amount ?? 0).toFixed(0)}`],
+          ["Revenue (30d)", `$${consentKeeps(paid._sum, ownersShare._sum).toFixed(0)}`],
           ["Avg response time", avgResponseH != null ? `${avgResponseH}h` : "—"],
           ["Requests total", statusRows.reduce((a, [, v]) => a + v, 0)],
         ].map(([label, value]) => (

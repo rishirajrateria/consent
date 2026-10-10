@@ -7,6 +7,7 @@ import { titleCase, fmtMoney } from "@/lib/utils";
 import { storage } from "@/lib/storage";
 import { TipOffForm } from "@/components/tipoff-form";
 import { Check, X, CircleDashed } from "lucide-react";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../../fee-shares";
 import type { Metadata } from "next";
 
 export async function generateMetadata({ params }: PageProps<"/c/[slug]">): Promise<Metadata> {
@@ -46,6 +47,7 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
     ? (await db.requesterMember.count({ where: { userId: session.userId } })) > 0
     : false;
   const askPath = `/r-panel/new?consenter=${c.slug}`;
+  const hasConsentFee = Number(c.consentPrice ?? 0) > 0 || c.priceTiers.some((t) => Number(t.amount) > 0);
 
   const [decided, expired, decidedTimes] = await Promise.all([
     db.consentRequest.count({ where: { consenterId: c.id, decidedAt: { not: null } } }),
@@ -133,16 +135,22 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
           {medianHours != null && <span>Median response <strong className="text-ink">{medianHours < 48 ? `${medianHours}h` : `${Math.round(medianHours / 24)}d`}</strong></span>}
           <span><strong className="text-ink">{decided}</strong> requests decided</span>
           <span>
-            Consent price{" "}
-            <strong className="text-ink">
-              {c.priceTiers.length > 0
-                ? "varies by intent"
-                : c.consentPrice
-                  ? fmtMoney(c.consentPrice.toString(), c.consentPriceCurrency)
-                  : "none"}
-            </strong>
-            {" · plus the "}
-            <Link href="/pricing" className="underline underline-offset-4">platform request fee</Link>
+            {c.priceTiers.length > 0 || c.consentPrice ? (
+              <>
+                Consent request fee{" "}
+                <strong className="text-ink">
+                  {c.priceTiers.length > 0
+                    ? "varies by intent"
+                    : fmtMoney(c.consentPrice!.toString(), c.consentPriceCurrency)}
+                </strong>
+                {" · plus the "}
+              </>
+            ) : (
+              <>
+                <strong className="text-ink">No</strong> consent request fee{" · just the "}
+              </>
+            )}
+            <Link href="/pricing" className="underline underline-offset-4">platform fee</Link>
           </span>
         </div>
         {/* Review first: point at the terms, the ask button comes after them. */}
@@ -154,8 +162,8 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
       {c.priceTiers.length > 0 && (
         <Card className="space-y-2" id="terms">
           <SectionTitle
-            title="Consent price by intent"
-            desc="What it costs to ask, depending on why. Paid in-app when a request is submitted and held until the owner answers: theirs on a yes, refunded otherwise."
+            title="Consent request fee by intent"
+            desc={`What it costs to send them a request, depending on why. It's held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to you. Consent keeps ${CONSENT_PCT}.`}
           />
           <div className="flex flex-wrap gap-1.5">
             {c.priceTiers
@@ -212,11 +220,15 @@ export default async function PublicConsenterPage({ params, searchParams }: Page
         </p>
       </Card>
 
-      {/* Decide last: the ask comes after the prices and the allowed / never terms. */}
+      {/* Decide last: the ask comes after the fees and the allowed / never terms. */}
       <Card strong className="space-y-3" id="ask">
         <SectionTitle
           title="Ready to ask?"
-          desc="You pay the request fee and any consent price when you submit. The request fee isn't refunded. The consent price is held until they answer: theirs on a yes, refunded otherwise. Uses marked never allowed are declined automatically."
+          desc={
+            hasConsentFee
+              ? `You pay the platform fee and ${c.priceTiers.length > 0 ? `any consent request fee ${c.displayName} charges for your intent` : `${c.displayName}'s consent request fee`} when you submit. The consent request fee is held until they answer. If they say yes, ${OWNER_PCT} goes to them; if not, ${REFUND_PCT} is refunded to you. Consent keeps ${CONSENT_PCT}. The platform fee isn't refunded. Uses marked never allowed are declined automatically.`
+              : "You pay the platform fee when you submit. It isn't refunded. Uses marked never allowed are declined automatically."
+          }
         />
         {!session ? (
           <p className="text-sm text-ink-soft">

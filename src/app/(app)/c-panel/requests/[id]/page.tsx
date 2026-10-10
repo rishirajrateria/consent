@@ -14,11 +14,15 @@ import { DecisionPanel } from "./decision-panel";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
-import { fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
+import { fmtDate, fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
 import { ChannelLinks } from "@/components/channel-links";
 import { canSendOffer } from "@/lib/negotiation";
 import type { Selection } from "@/lib/rules";
+import type { Prisma } from "@prisma/client";
 import { Timer } from "lucide-react";
+import {
+  OWNER_PCT, REFUND_PCT, CONSENT_PCT, grossOf, refundedOf, shareOf, nextPayoutDay, fmtPayoutDay,
+} from "../fee-split";
 
 export const metadata = { title: "Review request" };
 
@@ -61,7 +65,14 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       : null;
   const decidable = ["PENDING", "IN_NEGOTIATION", "CHANGES_REQUESTED"].includes(request.status);
   const selections = request.selections as Selection[];
-  const denialReasons = await db.denialReason.findMany({ where: { active: true } });
+  const [denialReasons, earning] = await Promise.all([
+    db.denialReason.findMany({ where: { active: true } }),
+    db.earningEntry.findUnique({ where: { requestId: request.id }, include: { payment: true, settlement: true } }),
+  ]);
+  const lastPayout =
+    earning?.status === "PENDING"
+      ? await db.settlement.findFirst({ where: { consenterId: consenter.id }, orderBy: { createdAt: "desc" } })
+      : null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
@@ -111,6 +122,13 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       <FilesCard request={request} watermark />
       <MessagesCard request={request} side="consenter" />
       <ContactsCard request={request} />
+      {earning && (
+        <ConsentFeeCard
+          earning={earning}
+          requesterName={request.requester.displayName}
+          payoutDay={fmtPayoutDay(nextPayoutDay(lastPayout?.createdAt))}
+        />
+      )}
       <TimelineCard request={request} />
       <ReportPanel request={request} side="consenter" />
 
@@ -183,5 +201,48 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
 
       {request.grant && <RevokePanel request={request} canDecide={canDecide} />}
     </div>
+  );
+}
+
+/** What the requester paid to ask, and where the owner's share of it stands. */
+function ConsentFeeCard({
+  earning: e,
+  requesterName,
+  payoutDay,
+}: {
+  earning: Prisma.EarningEntryGetPayload<{ include: { payment: true; settlement: true } }>;
+  requesterName: string;
+  payoutDay: string;
+}) {
+  const gross = grossOf(e);
+  const share = Number(e.amount.toString());
+  const refunded = e.status === "REFUNDED" ? refundedOf(e) : 0;
+  const [line, amount] =
+    e.status === "HELD"
+      ? [`You'd get (${shareOf(share, gross)}) if you say yes`, share]
+      : e.status === "PENDING"
+        ? [`Yours (${shareOf(share, gross)}) · paid out ${payoutDay}`, share]
+        : e.status === "SETTLED"
+          ? [`Paid out to you (${shareOf(share, gross)})${e.settlement ? ` · ${fmtDate(e.settlement.createdAt)}` : ""}`, share]
+          : e.status === "REFUNDED"
+            ? [`Refunded to ${requesterName} (${shareOf(refunded, gross)})`, refunded]
+            : ["Not paid to you", share];
+  return (
+    <Card className="space-y-2">
+      <SectionTitle
+        title="Money"
+        desc={`The consent request fee is held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}.`}
+      />
+      <dl className="text-sm">
+        <div className="flex items-start justify-between gap-4 py-2">
+          <dt className="min-w-0 text-ink-soft">Consent request fee</dt>
+          <dd className="shrink-0 tabular-nums">{fmtMoney(gross, e.currency)}</dd>
+        </div>
+        <div className="flex items-start justify-between gap-4 border-t hairline py-2">
+          <dt className="min-w-0">{line}</dt>
+          <dd className="shrink-0 font-semibold tabular-nums">{fmtMoney(amount, e.currency)}</dd>
+        </div>
+      </dl>
+    </Card>
   );
 }

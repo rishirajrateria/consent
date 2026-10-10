@@ -55,7 +55,7 @@ export default async function AdminSettings() {
           <Card className="space-y-3">
             <SectionTitle title="SLA & limits" />
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Request SLA (days)" hint="Unanswered requests auto-expire: platform fee kept, consent price refunded, consenter penalised.">
+              <Field label="Request SLA (days)" hint="Unanswered requests auto-expire: platform fee kept, 80% of the consent request fee refunded, consenter penalised.">
                 <Input name="slaDays" type="number" min={1} defaultValue={s.slaDays} />
               </Field>
               <Field label="Negotiation idle timeout (days)">

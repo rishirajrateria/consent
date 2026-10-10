@@ -12,6 +12,7 @@ import { NoPermission } from "../no-permission";
 import { fmtDateTime, cn } from "@/lib/utils";
 import { Inbox } from "lucide-react";
 import { syncConsentPrice } from "@/lib/escrow";
+import { noYesRefundNote } from "@/lib/requests";
 
 export const metadata = { title: "Requests & grants" };
 
@@ -27,12 +28,12 @@ async function adminRequestAction(formData: FormData) {
   const back = (key: "error" | "done", msg: string) => redirect(`/admin/requests?${key}=${encodeURIComponent(msg)}`);
   if (op === "close") {
     if (!note) back("error", "Add a reason to close this request. Both sides will see it.");
-    const r = await db.consentRequest.findUnique({ where: { id } });
+    const r = await db.consentRequest.findUnique({ where: { id }, include: { consenter: true } });
     if (!r) return back("error", "That request no longer exists.");
     if (FINISHED.includes(r.status)) back("error", `Request #${r.number} is already finished.`);
     // CLOSED, not EXPIRED_NO_RESPONSE: that status is kept for the SLA job and
     // counts against the owner as "ignored". As on every close, the platform
-    // fee stays; an ask price still held (no yes yet) is refunded.
+    // fee stays; 80% of a consent request fee still held (no yes yet) is refunded.
     await db.$transaction([
       db.consentRequest.update({ where: { id }, data: { status: "CLOSED", closedReason: `Closed by Consent: ${note}` } }),
       db.requestEvent.create({
@@ -43,10 +44,11 @@ async function adminRequestAction(formData: FormData) {
     // End the admin's reason with a full stop so the next sentence doesn't run into it.
     const reason = `Reason: ${/[.!?]$/.test(note) ? note : `${note}.`}`;
     await notifyConsenterTeam(r.consenterId, { title, body: reason, href: `/c-panel/requests/${id}` });
-    await syncConsentPrice(id);
+    // Only a fee still held (no yes yet) is refunded; a released fee stays with the owner.
+    const outcome = await syncConsentPrice(id);
     await notifyRequesterTeam(r.requesterId, {
       title,
-      body: `${reason} The platform fee isn't refunded. If the owner hadn't said yes, their ask price is refunded to you.`,
+      body: `${reason} ${outcome === "refund" ? await noYesRefundNote(id, r.consenter.displayName) : "The platform fee isn't refunded."}`,
       href: `/r-panel/requests/${id}`,
     });
     await audit({ actorId: session.userId, actorName: session.user.name, action: "request_closed_by_admin", module: "requests", targetId: id, reason: note });

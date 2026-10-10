@@ -291,8 +291,9 @@ export async function submitRequestAction(formData: FormData) {
     fail(path, "Upload the exact assets (images/clips) you will use — required unless the only asset type is Name");
   if (request.thumbnailUsed && !request.files.some((f) => f.kind === "THUMBNAIL"))
     fail(path, "You indicated a thumbnail uses the consenter — upload it separately");
-  // Never take the non-refundable fees for a request the owner's public matrix
-  // would deny the moment it is paid.
+  // Never take fees that don't fully come back (the platform fee, 20% of a
+  // consent request fee) for a request the owner's public matrix would deny
+  // the moment it is paid.
   const blocked = await blockedCombinations({
     consenterId: request.consenterId,
     requester,
@@ -356,7 +357,7 @@ export async function withdrawRequestAction(formData: FormData) {
   await db.requestEvent.create({
     data: { requestId: id, type: "withdrawn", actorName: session.user.name, actorSide: "requester" },
   });
-  // Withdrawn before a yes: the held ask price is refunded.
+  // Withdrawn before a yes: 80% of the held consent request fee is refunded.
   await syncConsentPrice(id);
   redirect(`/r-panel/requests/${id}`);
 }

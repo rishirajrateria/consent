@@ -65,9 +65,15 @@ export async function AgreementPanel({
   const open = agreement.status !== "COMPLETED" && agreement.status !== "CANCELLED";
   // After a decline, closing is already one of the proposer's two choices.
   const showClose = canAct && open && !(agreement.status === "DECLINED" && proposedByMe);
+  // The owner already said yes, so a consent request fee paid is theirs (80%) and Consent's (20%).
+  const paidFee = request.payments.some((p) => p.purpose === "CONSENT_PRICE" && p.status === "PAID");
   const closeConfirm =
     side === "requester"
-      ? "Close this request for good? You won't get a certificate. The owner already said yes, so the consent price stays with them, and the platform fee isn't refunded."
+      ? `Close this request for good? You won't get a certificate. ${
+          paidFee
+            ? "The owner already said yes, so neither their consent request fee nor the platform fee is refunded."
+            : "The platform fee isn't refunded."
+        }`
       : "Close this request for good? No certificate is issued and it can't be reopened.";
 
   return (

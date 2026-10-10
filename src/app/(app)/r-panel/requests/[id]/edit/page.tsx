@@ -14,6 +14,7 @@ import {
   discardDraftAction,
 } from "../../actions";
 import { priceFor, consentPriceFor, withTax } from "@/lib/payments";
+import { splitConsentFee } from "@/lib/escrow";
 import { blockedCombinations, blockedPayNote } from "@/lib/precheck";
 import { getSettings } from "@/lib/settings";
 import { fmtMoney, fmtBytes, fmtDate } from "@/lib/utils";
@@ -63,9 +64,12 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
     selections,
     assetTypeIds: request.assetTypeIds,
   });
-  // Consent price resolved by intent tier (falls back to the base price).
+  // Consent request fee resolved by intent tier (falls back to the base price).
   const askPrice = consentPriceFor(request.consenter, request.intentCategoryId);
   const askCurrency = request.consenter.consentPriceCurrency;
+  const askText = askPrice ? fmtMoney(askPrice.toString(), askCurrency) : null;
+  // What comes back if the owner doesn't say yes (80%; Consent keeps 20%).
+  const askRefund = askPrice ? fmtMoney(splitConsentFee(Number(askPrice.toString())).refund, askCurrency) : null;
   const intentPrices = new Map(intents.map((i) => [i.id, consentPriceFor(request.consenter, i.id)]));
   const showIntentPrices = [...intentPrices.values()].some(Boolean);
   // Platform fee with tax added, the same total checkout charges.
@@ -236,7 +240,9 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
                     return (
                       <option key={i.id} value={i.id}>
                         {i.name}
-                        {showIntentPrices ? ` — ${p ? fmtMoney(p.toString(), askCurrency) : "free"}` : ""}
+                        {showIntentPrices
+                          ? ` — ${p ? `${fmtMoney(p.toString(), askCurrency)} consent request fee` : "no consent request fee"}`
+                          : ""}
                       </option>
                     );
                   })}
@@ -272,13 +278,14 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
         <Card strong className="space-y-4" id="review">
           <SectionTitle
             title="4 · Review & submit"
-            desc={`Platform fee: ${feeText}${taxNote}${
-              askPrice
-                ? ` + ${name}'s consent price: ${fmtMoney(askPrice.toString(), askCurrency)}, held until they answer: theirs if they say yes, refunded to you otherwise`
-                : ""
-            }. The platform fee is non-refundable in every outcome.`}
+            desc={`Platform fee: ${feeText}${taxNote}${askText ? ` + ${name}'s consent request fee: ${askText}` : ""}.`}
           />
-          {/* Sent back from an old checkout whose consent price no longer matched. */}
+          <p className="text-sm text-ink-soft">
+            {askText
+              ? `${name}'s consent request fee is held until they answer. If they say yes, 80% goes to them; if not, 80% (${askRefund}) is refunded to you. Consent keeps 20%. The platform fee isn't refunded.`
+              : "The platform fee isn't refunded in any outcome."}
+          </p>
+          {/* Sent back from an old checkout whose consent request fee no longer matched. */}
           {sp.changed && (
             <Alert tone="warn">
               Your request changed after checkout opened. Check the total and press Pay &amp; submit again.
@@ -358,12 +365,13 @@ export default async function EditRequestPage({ params, searchParams }: PageProp
                 I accept the terms, including the <strong>mandatory consent-link rule</strong>: the
                 verification link or badge must appear in the published content&apos;s
                 description/caption/notes. I understand Consent never processes fees between parties and
-                the platform fee is non-refundable. The consent price is refunded unless the owner says yes.
+                the platform fee is non-refundable.
+                {askText ? ` If ${name} doesn't say yes, 80% of their consent request fee is refunded to me; Consent keeps 20%.` : ""}
               </span>
             </label>
             <PayButton reason={payReason}>
               Pay {feeText}
-              {askPrice ? ` + ${fmtMoney(askPrice.toString(), askCurrency)}` : ""} & submit
+              {askText ? ` + ${askText}` : ""} & submit
             </PayButton>
           </form>
           <form action={discardDraftAction} data-skip-unsaved-check>

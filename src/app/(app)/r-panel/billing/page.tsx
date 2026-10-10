@@ -6,6 +6,8 @@ import { ErrorNote, SuccessNote } from "@/components/error-note";
 import { payRenewalAction } from "@/app/(app)/onboarding/actions";
 import { requesterActive, priceFor } from "@/lib/payments";
 import { fmtDate, fmtDateTime, fmtMoney, titleCase } from "@/lib/utils";
+import { splitConsentFee } from "@/lib/escrow";
+import type { Payment } from "@prisma/client";
 
 export const metadata = { title: "Billing" };
 
@@ -78,20 +80,20 @@ export default async function BillingPage({ searchParams }: PageProps<"/r-panel/
         <Card className="space-y-2">
           <SectionTitle
             title="Payment history"
-            desc="Platform fees and owners' consent prices. A consent price is held until the owner answers and refunded to you unless they say yes. Consent never handles fees agreed between you and owners."
+            desc="Platform fees and owners' consent request fees. A consent request fee is held until the owner answers. If they say yes, 80% goes to them; if not, 80% is refunded to you. Consent keeps 20%. The platform fee isn't refunded. Consent never handles fees agreed between you and owners."
           />
           {payments.length === 0 && <p className="text-sm text-ink-faint">No payments yet.</p>}
           {payments.map((p) => (
             <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 border-t hairline py-2 text-sm first:border-t-0">
               <div>
                 <div className="font-medium">
-                  {p.purpose === "PER_REQUEST" ? "Platform fee" : titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}
+                  {PURPOSE_LABEL[p.purpose] ?? titleCase(p.purpose)} · {fmtMoney(p.amount.toString(), p.currency)}
                 </div>
                 <div className="text-xs text-ink-faint">
                   {fmtDateTime(p.createdAt)}
                   {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ""}
                   {p.taxLabel && p.tax ? ` · incl. ${p.taxLabel} ${fmtMoney(p.tax.toString(), p.currency)}` : ""}
-                  {p.refundedAt ? ` · refunded ${fmtDateTime(p.refundedAt)}` : ""}
+                  {p.refundedAt ? ` · ${refundText(p)} on ${fmtDateTime(p.refundedAt)}` : ""}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -108,4 +110,17 @@ export default async function BillingPage({ searchParams }: PageProps<"/r-panel/
       </div>
     </div>
   );
+}
+
+const PURPOSE_LABEL: Partial<Record<Payment["purpose"], string>> = {
+  PER_REQUEST: "Platform fee",
+  CONSENT_PRICE: "Consent request fee",
+};
+
+/** "refunded $8.00 (80%)": what actually came back, and its share of the fee paid. */
+function refundText(p: Pick<Payment, "amount" | "currency" | "refundedAmount">) {
+  const paid = Number(p.amount.toString());
+  const back = p.refundedAmount != null ? Number(p.refundedAmount.toString()) : splitConsentFee(paid).refund;
+  const share = paid > 0 ? ` (${Math.round((back / paid) * 100)}%)` : "";
+  return `refunded ${fmtMoney(back, p.currency)}${share}`;
 }

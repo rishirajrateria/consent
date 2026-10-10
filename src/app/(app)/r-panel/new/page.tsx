@@ -20,7 +20,7 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
   const preselect = typeof sp.consenter === "string" ? sp.consenter : "";
   const results = await searchConsenters(q || preselect);
   const active = requesterActive(requester);
-  // The consent price can depend on what the request is for (per-intent tiers),
+  // The consent request fee can depend on what the request is for (per-intent tiers),
   // so show its range rather than only the base price.
   const [tiers, intents] = results.length
     ? await Promise.all([
@@ -94,10 +94,10 @@ export default async function NewRequestPage({ searchParams }: PageProps<"/r-pan
                 <div className="mt-1 text-xs text-ink-soft">
                   {asks.get(c.id)?.price ? (
                     <>
-                      Ask price <strong className="text-ink">{asks.get(c.id)?.price}</strong>
+                      Consent request fee <strong className="text-ink">{asks.get(c.id)?.price}</strong>
                     </>
                   ) : (
-                    "No ask price"
+                    "No consent request fee"
                   )}
                   {asks.get(c.id)?.note}
                 </div>

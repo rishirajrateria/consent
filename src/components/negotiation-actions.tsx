@@ -145,7 +145,7 @@ export function NegotiationActions({
           <input type="hidden" name="id" value={requestId} />
           <p className="text-sm text-ink-soft">
             {side === "requester"
-              ? "This closes the request without a deal. The consent price is refunded to you if the owner hasn't said yes; the platform fee isn't. You can raise a new request any time."
+              ? "This closes the request without a deal. If the owner hasn't said yes, 80% of any consent request fee you paid is refunded to you; Consent keeps 20%. The platform fee isn't refunded. You can raise a new request any time."
               : `This closes the request without a deal. ${otherName} can raise a new request if they want to try again.`}
           </p>
           <ConfirmSubmit confirm="End this request without a deal?" variant="danger" className="w-full sm:w-auto">

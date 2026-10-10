@@ -2,7 +2,7 @@ import { db } from "./db";
 import { paymentProviderFor } from "./providers";
 import type { PaymentPurpose } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { syncConsentPrice } from "./escrow";
+import { syncConsentPrice, splitConsentFee } from "./escrow";
 
 export async function priceFor(country: string) {
   const row =
@@ -19,7 +19,7 @@ export function withTax(amount: number, taxRate: { toString(): string } | null |
 }
 
 /**
- * The consenter's consent price for an intent: a per-intent tier wins over the
+ * The owner's consent request fee for an intent: a per-intent tier wins over the
  * base price (e.g. News free, Promotion $250). Null when asking is free.
  */
 export function consentPriceFor<T extends { toString(): string }>(
@@ -44,6 +44,14 @@ export function couponOpen(
     (coupon.maxUses == null || coupon.usedCount < coupon.maxUses)
   );
 }
+
+/** What the provider's checkout says the charge is for. */
+const CHECKOUT_DESCRIPTION: Record<PaymentPurpose, string> = {
+  ONBOARDING: "Consent onboarding fee",
+  SUBSCRIPTION: "Consent yearly subscription",
+  PER_REQUEST: "Consent platform fee",
+  CONSENT_PRICE: "Consent request fee",
+};
 
 /** Creates a platform-fee payment and a provider checkout URL (mock in dev). */
 export async function createPlatformPayment(opts: {
@@ -74,9 +82,9 @@ export async function createPlatformPayment(opts: {
   }
   const { tax, total } = withTax(amount, price.taxRate);
 
-  // Consenter-set consent price: collected in-app alongside the platform fee,
-  // credited to the consenter's balance and settled weekly. Deal fees after
-  // approval still never move through Consent.
+  // The owner's consent request fee: collected in-app alongside the platform
+  // fee and held until they answer (80% to them on a yes, settled weekly; 80%
+  // refunded otherwise). Deal fees after approval never move through Consent.
   if (opts.purpose === "PER_REQUEST" && opts.requestId) {
     const request = await db.consentRequest.findUnique({
       where: { id: opts.requestId },
@@ -149,7 +157,7 @@ export async function createPlatformPayment(opts: {
     paymentId: payment.id,
     amount: total.toFixed(2),
     currency: price.currency,
-    description: `Consent ${opts.purpose.toLowerCase()} fee`,
+    description: CHECKOUT_DESCRIPTION[opts.purpose],
     returnTo: opts.returnTo,
   });
   await db.payment.update({ where: { id: payment.id }, data: { providerRef } });
@@ -206,19 +214,21 @@ export async function settlePayment(paymentId: string) {
           consenterId: request.consenterId,
           requestId: payment.requestId,
           paymentId: payment.id,
-          amount: payment.amount,
+          // Held until the owner answers: 80% is theirs on a yes, 80% is refunded otherwise.
+          amount: splitConsentFee(Number(payment.amount.toString())).owner.toFixed(2),
+          grossAmount: payment.amount,
           currency: payment.currency,
         },
       });
     }
   }
-  // The ask price is held until the owner answers; if the request already has
+  // The consent request fee is held until the owner answers; if the request already has
   // an answer (auto-approved or auto-declined on payment), settle it now.
   if (payment.requestId) await syncConsentPrice(payment.requestId);
   return updated;
 }
 
-/** All payments a submission checkout must cover (platform fee + consent price). */
+/** All payments a submission checkout must cover (platform fee + consent request fee). */
 export async function pendingPaymentsForRequest(requestId: string) {
   return db.payment.findMany({
     where: { requestId, status: "PENDING" },

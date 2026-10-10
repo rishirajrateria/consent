@@ -5,6 +5,7 @@ import { PageHeader, Card, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/form";
 import { runSweeps } from "@/lib/jobs";
 import { revalidatePath } from "next/cache";
+import { consentKeeps } from "./revenue";
 
 export const metadata = { title: "Overview" };
 
@@ -18,7 +19,7 @@ async function runJobsAction() {
 export default async function AdminOverview({ searchParams }: PageProps<"/admin">) {
   await requireAdmin();
   const sp = await searchParams;
-  const [pendingRequesters, pendingConsenters, openReports, pendingRequests, activeGrants, users, paidRevenue, openTakedowns] =
+  const [pendingRequesters, pendingConsenters, openReports, pendingRequests, activeGrants, users, paid, ownersShare, openTakedowns] =
     await Promise.all([
       db.requesterProfile.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
       db.consenterProfile.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
@@ -26,7 +27,9 @@ export default async function AdminOverview({ searchParams }: PageProps<"/admin"
       db.consentRequest.count({ where: { status: "PENDING" } }),
       db.grant.count({ where: { status: "ACTIVE" } }),
       db.user.count(),
-      db.payment.aggregate({ _sum: { amount: true }, where: { status: { in: ["PAID", "FORFEITED"] } } }),
+      // Consent's revenue: everything collected, less the refunded 80% and the owners' 80%.
+      db.payment.aggregate({ _sum: { amount: true, refundedAmount: true }, where: { status: { in: ["PAID", "FORFEITED", "REFUNDED"] } } }),
+      db.earningEntry.aggregate({ _sum: { amount: true }, where: { status: { in: ["HELD", "PENDING", "SETTLED"] } } }),
       db.takedownRequest.count({ where: { status: { in: ["RAISED", "MARKED_DOWN"] } } }),
     ]);
 
@@ -38,7 +41,7 @@ export default async function AdminOverview({ searchParams }: PageProps<"/admin"
     ["Pending requests", pendingRequests, "/admin/requests"],
     ["Active grants", activeGrants, "/admin/requests?tab=grants"],
     ["Users", users, "/admin/users"],
-    ["Revenue (all time)", `$${Number(paidRevenue._sum.amount ?? 0).toFixed(0)}`, "/admin/payments"],
+    ["Revenue (all time)", `$${consentKeeps(paid._sum, ownersShare._sum).toFixed(0)}`, "/admin/payments"],
   ];
 
   return (

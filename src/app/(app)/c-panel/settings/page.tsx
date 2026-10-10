@@ -7,6 +7,7 @@ import { SuccessNote } from "@/components/error-note";
 import { audit } from "@/lib/audit";
 import { redirect } from "next/navigation";
 import { Grid3x3, Zap, Ban, Users, Wallet, Megaphone } from "lucide-react";
+import { OWNER_PCT, REFUND_PCT, CONSENT_PCT } from "../requests/fee-split";
 
 export const metadata = { title: "Profile settings" };
 
@@ -36,7 +37,7 @@ async function saveAction(formData: FormData) {
       ...(isOwner ? { payoutDetails: String(formData.get("payoutDetails") ?? "").trim() || null } : {}),
     },
   });
-  // Per-intent price tiers: empty field = fall back to the base price.
+  // Per-intent consent request fees: empty field = fall back to the base fee.
   const intents = await db.intentCategory.findMany({ where: { active: true } });
   for (const intent of intents) {
     const raw = String(formData.get(`tier_${intent.id}`) ?? "").trim();
@@ -142,11 +143,11 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
 
           <Card className="space-y-4">
             <SectionTitle
-              title="Your consent price"
-              desc="What it costs to ask you. Paid in-app when a request is submitted and held until you answer. If you say yes it's yours, paid out weekly; if you decline, or the request ends without a yes, it goes back to them. It filters out careless asks. Leave empty to let anyone ask for free."
+              title="Your consent request fee"
+              desc={`What someone pays to send you a request. It's held until you answer. If you say yes, ${OWNER_PCT} is yours, paid out on Fridays. If you decline, or the request ends without a yes, ${REFUND_PCT} goes back to them. Consent keeps ${CONSENT_PCT}. It filters out careless asks. Leave empty to let anyone ask for free.`}
             />
             <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Price per request" hint="0 or empty = free to ask.">
+              <Field label="Consent request fee" hint="0 or empty = free to ask.">
                 <Input
                   name="consentPrice"
                   type="number"
@@ -176,11 +177,11 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
             </Field>
             <div className="space-y-2 border-t hairline pt-3">
               <div className="text-xs font-semibold uppercase tracking-wider text-ink-soft">
-                Price by intent
+                Fee by intent
               </div>
               <p className="text-xs text-ink-faint">
                 Charge differently by why they&apos;re asking — e.g. News 0 (free), Promotion 250.
-                Empty = your base price above. 0 = free for that intent.
+                Empty = your consent request fee above. 0 = free for that intent.
               </p>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {intents.map((i) => (
@@ -194,16 +195,16 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
                       defaultValue={tierFor.get(i.id) ?? ""}
                       placeholder="base"
                       className="py-1.5 text-xs"
-                      aria-label={`Consent price for ${i.name}`}
+                      aria-label={`Consent request fee for ${i.name}`}
                     />
                   </label>
                 ))}
               </div>
             </div>
             <p className="text-xs text-ink-faint">
-              An unanswered request that auto-expires is refunded to the requester, so silence never
-              pays. Any usage fee you negotiate after approval is still settled directly between you and
-              the requester, never through Consent. Track everything under{" "}
+              If a request auto-expires unanswered, {REFUND_PCT} of the consent request fee is refunded
+              to the requester, so silence never pays. Any usage fee you negotiate after approval is still
+              settled directly between you and the requester, never through Consent. Track everything under{" "}
               <Link href="/c-panel/earnings" className="underline underline-offset-4">Earnings & settlements</Link>.
             </p>
           </Card>

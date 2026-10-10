@@ -3,6 +3,7 @@ import { getSettings } from "./settings";
 import { notifyConsenterTeam, notifyRequesterTeam } from "./notify";
 import { recalcConsenterScore, recalcRequesterScore } from "./score";
 import { syncConsentPrice, escrowSweep } from "./escrow";
+import { noYesRefundNote } from "./requests";
 
 /**
  * Background sweeps (DB-backed scheduler). Run periodically by:
@@ -20,19 +21,27 @@ export async function runSweeps(): Promise<Record<string, number>> {
   out.grantsExpired = await grantExpire();
   out.takedownsIgnored = await takedownIgnored();
   out.subscriptionReminders = await subscriptionReminders();
-  // Settle held ask prices first so anything released this run is paid out.
+  // Settle held consent request fees first so anything released this run is paid out.
   out.askPricesSettled = await escrowSweep();
   out.settlements = await settlementSweep();
   return out;
 }
 
 /**
- * Weekly settlements: for each consenter with pending consent-price earnings
- * whose last settlement is at least 7 days old (or who has never been
- * settled), batch all pending earnings per currency into one settlement and
- * mark them paid out. Payout itself is the mock provider in dev.
+ * Weekly settlements, on Fridays: for each consenter with pending earnings
+ * (their 80% of consent request fees) who hasn't been paid out yet this week
+ * (since last Saturday), batch all pending earnings per currency into one
+ * settlement and mark them paid out. This is the day nextPayoutDay() shows
+ * owners. Payout itself is the mock provider in dev.
  */
 async function settlementSweep(): Promise<number> {
+  const now = new Date();
+  if (now.getDay() !== 5) return 0; // payouts go out on Fridays
+  // Start of this payout week: last Saturday, 00:00. One payout per week.
+  const weekStart = new Date(now);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - 6);
+
   const pending = await db.earningEntry.groupBy({
     by: ["consenterId", "currency"],
     where: { status: "PENDING" },
@@ -45,9 +54,8 @@ async function settlementSweep(): Promise<number> {
       where: { consenterId: group.consenterId },
       orderBy: { createdAt: "desc" },
     });
-    const weekMs = 7 * 86400_000;
+    if (last && last.createdAt >= weekStart) continue; // already paid out this week
     const anchor = last?.createdAt ?? group._min.createdAt!;
-    if (Date.now() - anchor.getTime() < weekMs) continue;
 
     const entries = await db.earningEntry.findMany({
       where: { consenterId: group.consenterId, currency: group.currency, status: "PENDING" },
@@ -60,7 +68,7 @@ async function settlementSweep(): Promise<number> {
         amount: amount.toFixed(2),
         currency: group.currency,
         periodStart: anchor,
-        periodEnd: new Date(),
+        periodEnd: now,
         reference: `SETTLE-${group.consenterId.slice(-6).toUpperCase()}-${entries.length}x`,
       },
     });
@@ -70,7 +78,7 @@ async function settlementSweep(): Promise<number> {
     });
     await notifyConsenterTeam(group.consenterId, {
       title: `Weekly settlement: ${group.currency} ${amount.toFixed(2)} paid out`,
-      body: `${entries.length} consent-price earning${entries.length > 1 ? "s" : ""} settled (ref ${settlement.reference}). Track details under Earnings.`,
+      body: `Your 80% of ${entries.length} consent request fee${entries.length > 1 ? "s" : ""} (ref ${settlement.reference}). Track details under Earnings.`,
       href: "/c-panel/earnings",
     });
     created++;
@@ -130,17 +138,17 @@ async function slaExpire(): Promise<number> {
           detail: { feeForfeited: true },
         },
       }),
-      // Per-request fee is forfeited — no refund, no credit.
+      // The platform fee is forfeited — no refund, no credit.
       db.payment.updateMany({
         where: { requestId: r.id, status: "PAID", purpose: "PER_REQUEST" },
         data: { status: "FORFEITED" },
       }),
     ]);
-    // No reward for silence: the held ask price goes back to the requester.
+    // No reward for silence: 80% of the held consent request fee goes back to the requester.
     await syncConsentPrice(r.id);
     await notifyRequesterTeam(r.requesterId, {
       title: `Request #${r.number} expired unanswered`,
-      body: `${r.consenter.displayName} did not respond within the window. Their ask price is refunded to you; the platform fee is not. You can raise a new request any time.`,
+      body: `${r.consenter.displayName} did not respond within the window. ${await noYesRefundNote(r.id, r.consenter.displayName)} You can raise a new request any time.`,
       href: `/r-panel/requests/${r.id}`,
     });
     await recalcConsenterScore(r.consenterId, `Request #${r.number} auto-expired unanswered`);
