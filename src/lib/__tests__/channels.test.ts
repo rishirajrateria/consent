@@ -23,12 +23,16 @@ describe("channelKind", () => {
     expect(channelKind("LinkedIn", "https://linkedin.com/company/acme")).toBe("linkedin");
     expect(channelKind("Facebook", "https://m.facebook.com/acme")).toBe("facebook");
     expect(channelKind("Spotify", "https://open.spotify.com/show/x")).toBe("spotify");
-    expect(channelKind("TikTok", "https://acme.example/tiktok")).toBe("tiktok");
     expect(channelKind("Blog", "https://acme.example")).toBe("web");
+    expect(channelKind("YouTube", "")).toBe("youtube");
   });
-  it("does not trust look-alike hosts", () => {
+  it("never puts a brand on a link to another site, whatever name was typed", () => {
+    expect(channelKind("TikTok", "https://acme.example/tiktok")).toBe("web");
+    expect(channelKind("YouTube", "https://youtube-verify.example/login")).toBe("web");
+    expect(channelKind("Instagram", "https://instagram.com.evil.example/x")).toBe("web");
+    expect(channelKind("ig", "https://phish.example")).toBe("web");
+    expect(channelKind("Instagram", "https://xn--tube-45d3a.com")).toBe("web");
     expect(channelKind("Blog", "https://notyoutube.com/x")).toBe("web");
-    expect(channelKind("Blog", "https://youtube.com.evil.example/x")).toBe("web");
   });
 });
 

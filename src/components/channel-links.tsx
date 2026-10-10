@@ -1,5 +1,5 @@
 import { Globe } from "lucide-react";
-import { BRAND_PATHS, CHANNEL_LABELS, compactCount, parseChannels, type ChannelKind } from "@/lib/channels";
+import { BRAND_PATHS, CHANNEL_LABELS, channelHost, compactCount, parseChannels, type ChannelKind } from "@/lib/channels";
 import { cn } from "@/lib/utils";
 
 /** Monochrome brand mark (fills with the current text colour). */
@@ -24,7 +24,8 @@ export function ChannelLinks({ channels, owner, className }: { channels: unknown
   return (
     <ul className={cn("flex flex-wrap gap-2", className)} aria-label={`${owner}'s channels`}>
       {list.map((c, i) => {
-        const label = c.kind === "web" && c.platform ? c.platform : CHANNEL_LABELS[c.kind];
+        // Website pills name the real destination, never the typed platform.
+        const label = c.kind === "web" ? channelHost(c.href) : CHANNEL_LABELS[c.kind];
         const count = compactCount(c.followers);
         return (
           <li key={`${c.href}-${i}`}>
@@ -37,7 +38,8 @@ export function ChannelLinks({ channels, owner, className }: { channels: unknown
               className="glass-subtle inline-flex h-10 items-center gap-2 px-3 text-xs font-medium text-ink transition-all hover:bg-white hover:shadow-glass focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ink/10"
             >
               <BrandIcon kind={c.kind} className="size-[18px] shrink-0" />
-              <span className="tabular-nums">{count || label}</span>
+              {c.kind === "web" && <span className="max-w-40 truncate">{label}</span>}
+              {(count || c.kind !== "web") && <span className="tabular-nums">{count || label}</span>}
             </a>
           </li>
         );

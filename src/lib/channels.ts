@@ -72,15 +72,26 @@ export function safeChannelUrl(input: string | null | undefined): string | null 
   }
 }
 
-/** Which platform a channel is on: the link's host wins, the typed name is the fallback. */
+/**
+ * Which platform a channel is on. A brand icon is a trust signal, so when
+ * there is a link only its real host decides: typing "YouTube" next to a link
+ * to some other site gets a plain website pill, never the YouTube mark. The
+ * typed name is used only when there is no usable link at all.
+ */
 export function channelKind(platform: string, url: string): ChannelKind {
   const safe = safeChannelUrl(url);
   if (safe) {
-    const host = new URL(safe).hostname.toLowerCase().replace(/^www\.|^m\./, "");
+    const host = channelHost(safe);
     for (const [re, kind] of HOSTS) if (re.test(host)) return kind;
+    return "web";
   }
   for (const [re, kind] of NAMES) if (re.test(platform.trim())) return kind;
   return "web";
+}
+
+/** The link's real host, e.g. "twitch.tv", shown on website pills. */
+export function channelHost(href: string): string {
+  return new URL(href).hostname.toLowerCase().replace(/^(www|m)\./, "");
 }
 
 /** 220000 → "220K", 1800000 → "1.8M". */

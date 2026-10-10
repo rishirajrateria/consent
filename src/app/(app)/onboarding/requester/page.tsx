@@ -150,12 +150,15 @@ export default async function RequesterOnboarding({ searchParams }: PageProps<"/
         </Card>
 
         <Card className="space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Channels & handles</h2>
-          <p className="text-xs text-ink-faint">At least one. You can prove ownership via OAuth after submitting.</p>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">Your channels</h2>
+          <p className="text-xs text-ink-faint">
+            At least one. Paste the full link to each channel, like https://youtube.com/@yourchannel. Owners
+            tap these to see who&apos;s asking. You can prove ownership via OAuth after submitting.
+          </p>
           {[0, 1, 2].map((i) => (
             <div key={i} className="grid gap-2 sm:grid-cols-[1fr_2fr_90px]">
               <Input name="channelPlatform" placeholder="YouTube" aria-label={`Channel ${i + 1} platform`} />
-              <Input name="channelUrl" placeholder="https://youtube.com/@acme" aria-label={`Channel ${i + 1} URL`} />
+              <Input name="channelUrl" placeholder="https://youtube.com/@acme" aria-label={`Channel ${i + 1} link`} />
               <Input name="channelFollowers" type="number" min={0} placeholder="Followers" aria-label={`Channel ${i + 1} followers`} />
             </div>
           ))}

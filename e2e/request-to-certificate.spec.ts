@@ -22,14 +22,15 @@ test("negotiated request ends in a verified certificate", async ({ browser }) =>
   });
   await expect(clips.getByText("Pending", { exact: true }).first()).toBeVisible();
 
-  // ── Show owner sets a fee: Mark as paid $500 ────────────────
+  // ── Show owner reads the request, then sets a fee of $500 ───
   // Note: this action redirects to the same path plus a #hash, which the
   // app router treats as a hash-only navigation (no re-render), so the
   // state change is awaited in the DB and the page reloaded.
   const show = await pageFor(browser, "show");
   await visit(show, `/c-panel/requests/${requestId}`);
+  await show.getByRole("radio", { name: "Set a fee" }).click();
   await show.fill('input[name="amount"]', "500");
-  await show.getByRole("button", { name: /Mark as paid/ }).click();
+  await show.getByRole("button", { name: "Send fee" }).click();
   await expect
     .poll(async () => (await db.consentRequest.findUnique({ where: { id: requestId } }))!.status)
     .toBe("IN_NEGOTIATION");

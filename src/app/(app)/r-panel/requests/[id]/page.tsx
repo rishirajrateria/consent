@@ -69,13 +69,50 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       )}
       {request.status === "CHANGES_REQUESTED" && (
         <Alert tone="warn">
-          The consenter asked for changes — check the timeline and messages, then upload a revised
-          final file below to resubmit for review.
+          The consenter asked for changes. Read their note in the history and messages below, then
+          upload a revised final file at the bottom of this page to resubmit for review.
         </Alert>
       )}
 
+      {/* Outcome first when there is one, then the request itself, and what you
+          need to do last. */}
       <GrantCard request={request} />
+
+      <ScopeCard request={request} />
+      <FilesCard request={request} />
+      <MessagesCard request={request} side="requester" />
+      <ContactsCard request={request} />
+      <TimelineCard request={request} />
+      <ReportPanel request={request} side="requester" />
+
+      {/* ── Your next steps ── */}
       <TakedownRespondPanel request={request} />
+      <NegotiationCard request={request} side="requester" />
+      {!request.contactsRevealed && request.isPaid && request.agreedAmount && (
+        <Alert>
+          {request.consenter.displayName} hasn&apos;t shared contact details yet. Use the messages
+          above to arrange payment of the agreed fee.
+        </Alert>
+      )}
+
+      {request.status === "APPROVED_IN_PRINCIPLE" && (
+        <Alert>
+          <strong>Approved in principle.</strong> Upload the raw final content file below — the
+          certificate is issued once it&apos;s in place (approval binds to its hash).
+        </Alert>
+      )}
+
+      {needsRaw && (
+        <Card className="space-y-3">
+          <SectionTitle title="Upload final content file" desc="Uploading a new version restarts review if changes were requested." />
+          <form action={uploadRequestFileAction} className="flex flex-wrap items-center gap-2">
+            <input type="hidden" name="id" value={request.id} />
+            <input type="hidden" name="kind" value="RAW_CONTENT" />
+            <Input name="file" type="file" required className={fileInputCls} aria-label="Upload final content" />
+            <SubmitButton variant="secondary" size="sm">Upload</SubmitButton>
+          </form>
+        </Card>
+      )}
 
       {request.status === "AGREEMENT_MODE_PENDING" && (
         <Card strong className="space-y-3">
@@ -94,39 +131,6 @@ export default async function RequesterRequestDetail({ params, searchParams }: P
       )}
 
       {request.status === "LEGAL_AGREEMENT_PENDING" && <AgreementPanel request={request} side="requester" />}
-
-      {request.status === "APPROVED_IN_PRINCIPLE" && (
-        <Alert>
-          <strong>Approved in principle.</strong> Upload the raw final content file below — the
-          certificate is issued once it&apos;s in place (approval binds to its hash).
-        </Alert>
-      )}
-
-      {needsRaw && (
-        <Card className="space-y-3">
-          <SectionTitle title="Upload final content file" desc="Uploading a new version restarts review if changes were requested." />
-          <form action={uploadRequestFileAction} className="flex items-center gap-2">
-            <input type="hidden" name="id" value={request.id} />
-            <input type="hidden" name="kind" value="RAW_CONTENT" />
-            <Input name="file" type="file" required className={fileInputCls} aria-label="Upload final content" />
-            <SubmitButton variant="secondary" size="sm">Upload</SubmitButton>
-          </form>
-        </Card>
-      )}
-
-      <ContactsCard request={request} />
-      {!request.contactsRevealed && request.isPaid && request.agreedAmount && (
-        <Alert>
-          {request.consenter.displayName} hasn&apos;t shared contact details yet. Use the messages
-          below to arrange payment of the agreed fee.
-        </Alert>
-      )}
-      <NegotiationCard request={request} side="requester" />
-      <ScopeCard request={request} />
-      <FilesCard request={request} />
-      <MessagesCard request={request} side="requester" />
-      <ReportPanel request={request} side="requester" />
-      <TimelineCard request={request} />
 
       {canWithdraw && (
         <form action={withdrawRequestAction}>

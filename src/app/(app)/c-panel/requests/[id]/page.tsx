@@ -2,17 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, StatusBadge, SectionTitle, Alert, Field, Input, Textarea, Select, ScoreRing } from "@/components/ui";
-import { SubmitButton, ConfirmSubmit } from "@/components/form";
+import { PageHeader, Card, StatusBadge, SectionTitle, Alert, ScoreRing } from "@/components/ui";
+import { SubmitButton } from "@/components/form";
 import { ErrorNote } from "@/components/error-note";
 import {
   ScopeCard, FilesCard, NegotiationCard, ContactsCard, MessagesCard, TimelineCard, GrantCard,
   type FullRequest,
 } from "@/components/request-view";
-import {
-  approveRequestAction, requestChangesAction, markPaidAction, denyRequestAction, consenterProceedAppRecordAction,
-  shareContactsAction,
-} from "../actions";
+import { consenterProceedAppRecordAction, shareContactsAction } from "../actions";
+import { DecisionPanel } from "./decision-panel";
 import { AgreementPanel } from "@/components/agreement-panel";
 import { RevokePanel } from "@/components/takedown-panels";
 import { ReportPanel } from "@/components/report-panel";
@@ -71,8 +69,37 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       />
       <ErrorNote error={sp.error as string | undefined} />
 
+      {/* Outcome first when there is one, then everything needed to judge the
+          request, and the decision last: review first, decide last. */}
       <GrantCard request={request} />
-      {request.grant && <RevokePanel request={request} canDecide={canDecide} />}
+
+      <Card className="space-y-4">
+        <SectionTitle title="Who's asking" />
+        <div className="flex items-center gap-4">
+          <ScoreRing score={request.requester.score} size={52} />
+          <div className="min-w-0">
+            <Link href={`/r/${request.requester.slug}`} className="font-semibold underline-offset-4 hover:underline">
+              {request.requester.displayName}
+            </Link>
+            <div className="text-xs text-ink-faint">
+              {titleCase(request.requester.type)} · {request.requester.country}
+            </div>
+          </div>
+        </div>
+        {request.requester.description && (
+          <p className="text-sm leading-relaxed text-ink-soft">{request.requester.description}</p>
+        )}
+        <ChannelLinks channels={request.requester.channels} owner={request.requester.displayName} />
+      </Card>
+      <ScopeCard request={request} />
+      <FilesCard request={request} watermark />
+      <MessagesCard request={request} side="consenter" />
+      <ContactsCard request={request} />
+      <TimelineCard request={request} />
+      <ReportPanel request={request} side="consenter" />
+
+      {/* ── Decisions and actions ── */}
+      <NegotiationCard request={request} side="consenter" />
 
       {request.status === "AGREEMENT_MODE_PENDING" && (
         <Card strong className="space-y-3">
@@ -95,130 +122,22 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
       {request.status === "LEGAL_AGREEMENT_PENDING" && <AgreementPanel request={request} side="consenter" />}
 
       {decidable && canDecide && (
-        <Card strong className="space-y-5">
-          <SectionTitle title="Decide" desc="Approve as asked, apply conditions, ask for changes, set a fee, or deny." />
-
-          {/* Approve (with optional conditions) */}
-          <form action={approveRequestAction} className="space-y-3">
-            <input type="hidden" name="id" value={request.id} />
-            <details className="group">
-              <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-ink">
-                Conditions (optional) — reduce scope, cap duration, remove thumbnail, shorten validity
-              </summary>
-              <div className="mt-3 space-y-3 border-l-2 border-ink/10 pl-4">
-                <div className="space-y-1.5">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-ink-faint">Keep only these formats</div>
-                  {selections.map((s) => (
-                    <label key={s.formatId} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" name="keepFormat" value={s.formatId} defaultChecked className="size-4 accent-black" />
-                      {s.platformName} → {s.formatName}
-                      {s.durationSec ? (
-                        <span className="flex items-center gap-1 text-xs text-ink-soft">
-                          ({s.durationSec}s asked — cap at
-                          <input type="number" name={`cap_${s.formatId}`} min={1} max={s.durationSec} placeholder={String(s.durationSec)} className="w-16 rounded-lg border border-ink/10 bg-white/70 px-1.5 py-0.5 text-xs" aria-label={`Cap duration for ${s.formatName}`} />
-                          s)
-                        </span>
-                      ) : null}
-                    </label>
-                  ))}
-                </div>
-                {request.thumbnailUsed && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" name="removeThumbnail" className="size-4 accent-black" />
-                    Don&apos;t allow the thumbnail
-                  </label>
-                )}
-                <Field label="Shorten validity to (end date)">
-                  <Input name="validUntil" type="date" />
-                </Field>
-                <Field label="Written condition">
-                  <Textarea name="conditionsNote" placeholder="e.g. No use in political contexts; credit @janecarter on screen." className="min-h-16" />
-                </Field>
-              </div>
-            </details>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" name="proposeLegal" defaultChecked={request.isPaid && consenter.defaultRequireLegalAgreementForPaid} className="size-4 accent-black" />
-              Also propose a legally binding agreement (requester must accept)
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" name="shareContacts" defaultChecked={request.isPaid} className="size-4 accent-black" />
-              Also share my contact details with {request.requester.displayName}
-            </label>
-            <p className="text-xs text-ink-faint">
-              Leave it unticked to just approve. You can share your details later from this page.
-            </p>
-            <SubmitButton>Approve{request.isPaid ? " (deal agreed)" : ""}</SubmitButton>
-          </form>
-
-          <div className="border-t hairline" />
-
-          {/* Request changes */}
-          <form action={requestChangesAction} className="flex flex-wrap items-end gap-2">
-            <input type="hidden" name="id" value={request.id} />
-            <div className="min-w-56 flex-1">
-              <Field label="Request changes" hint="Asks the requester to upload a revised file.">
-                <Input name="note" placeholder="e.g. Trim the clip to 15 seconds and remove the last scene." required />
-              </Field>
-            </div>
-            <SubmitButton variant="secondary">Request changes</SubmitButton>
-          </form>
-
-          {/* Mark as paid */}
-          {request.status !== "IN_NEGOTIATION" && (
-            <>
-              <div className="border-t hairline" />
-              <form action={markPaidAction} className="flex flex-wrap items-end gap-2">
-                <input type="hidden" name="id" value={request.id} />
-                <div className="w-28">
-                  <Field label="Fee amount" required>
-                    <Input name="amount" type="number" step="0.01" min="1" required placeholder="500" />
-                  </Field>
-                </div>
-                <div className="w-24">
-                  <Field label="Currency" required>
-                    <Input name="currency" defaultValue="USD" maxLength={3} required />
-                  </Field>
-                </div>
-                <div className="min-w-40 flex-1">
-                  <Field label="Note">
-                    <Input name="scopeNote" placeholder="optional" />
-                  </Field>
-                </div>
-                <SubmitButton variant="secondary">Mark as paid — open negotiation</SubmitButton>
-              </form>
-            </>
-          )}
-
-          <div className="border-t hairline" />
-
-          {/* Deny */}
-          <form action={denyRequestAction} className="flex flex-wrap items-end gap-2">
-            <input type="hidden" name="id" value={request.id} />
-            <div className="w-56">
-              <Field label="Denial reason">
-                <Select name="reasonId" defaultValue="">
-                  <option value="">— pick a reason (optional)</option>
-                  {denialReasons.map((d) => (
-                    <option key={d.id} value={d.id}>{d.label}</option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <div className="min-w-40 flex-1">
-              <Field label="Details">
-                <Input name="freeText" placeholder="optional free text" />
-              </Field>
-            </div>
-            <ConfirmSubmit confirm="Deny this request?" variant="danger">Deny</ConfirmSubmit>
-          </form>
-        </Card>
+        <DecisionPanel
+          requestId={request.id}
+          requesterName={request.requester.displayName}
+          selections={selections}
+          thumbnailUsed={request.thumbnailUsed}
+          isPaid={request.isPaid}
+          inNegotiation={request.status === "IN_NEGOTIATION"}
+          proposeLegalByDefault={request.isPaid && consenter.defaultRequireLegalAgreementForPaid}
+          denialReasons={denialReasons.map((d) => ({ id: d.id, label: d.label }))}
+        />
       )}
 
       {decidable && !canDecide && (
         <Alert>You can view this request, but approving/denying requires the approve permission.</Alert>
       )}
 
-      <ContactsCard request={request} />
       {!request.contactsRevealed &&
         ["DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING", "APPROVED_IN_PRINCIPLE", "APPROVED"].includes(request.status) &&
         (member.role === "OWNER" || member.canApprove || member.canNegotiate) && (
@@ -231,39 +150,17 @@ export default async function ConsenterRequestDetail({ params, searchParams }: P
                   : `You approved without sharing your contact details. Share them if you'd like ${request.requester.displayName} to be able to reach you directly.`
               }
             />
+            <p className="text-xs text-ink-faint">
+              Which details are shared (email, phone, manager) is set in your profile settings.
+            </p>
             <form action={shareContactsAction}>
               <input type="hidden" name="id" value={request.id} />
               <SubmitButton variant="secondary">Share my contact details</SubmitButton>
             </form>
-            <p className="text-xs text-ink-faint">
-              Which details are shared (email, phone, manager) is set in your profile settings.
-            </p>
           </Card>
         )}
-      <NegotiationCard request={request} side="consenter" />
-      <Card className="space-y-4">
-        <SectionTitle title="Who's asking" />
-        <div className="flex items-center gap-4">
-          <ScoreRing score={request.requester.score} size={52} />
-          <div className="min-w-0">
-            <Link href={`/r/${request.requester.slug}`} className="font-semibold underline-offset-4 hover:underline">
-              {request.requester.displayName}
-            </Link>
-            <div className="text-xs text-ink-faint">
-              {titleCase(request.requester.type)} · {request.requester.country}
-            </div>
-          </div>
-        </div>
-        {request.requester.description && (
-          <p className="text-sm leading-relaxed text-ink-soft">{request.requester.description}</p>
-        )}
-        <ChannelLinks channels={request.requester.channels} owner={request.requester.displayName} />
-      </Card>
-      <ScopeCard request={request} />
-      <FilesCard request={request} watermark />
-      <MessagesCard request={request} side="consenter" />
-      <ReportPanel request={request} side="consenter" />
-      <TimelineCard request={request} />
+
+      {request.grant && <RevokePanel request={request} canDecide={canDecide} />}
     </div>
   );
 }

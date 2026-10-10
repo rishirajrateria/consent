@@ -41,9 +41,10 @@ test("revoked grant with confirmed takedown shows on the public page", async ({ 
 
   // ── Jane raises a takedown with a live link ─────────────────
   await jane.getByText("Raise a takedown request", { exact: true }).click();
-  await jane.fill('input[name="reason"]', takedownReason);
-  await jane.fill('textarea[name="links"]', `https://example.com/e2e-live-${stamp}`);
-  await jane.getByRole("button", { name: "Send takedown request" }).click();
+  const takedownForm = jane.locator("form", { has: jane.getByRole("button", { name: "Send takedown request" }) });
+  await takedownForm.locator('input[name="reason"]').fill(takedownReason);
+  await takedownForm.locator('textarea[name="links"]').fill(`https://example.com/e2e-live-${stamp}`);
+  await takedownForm.getByRole("button", { name: "Send takedown request" }).click();
   await expect(jane.getByText(takedownReason)).toBeVisible();
   await expect(jane.getByText("Raised", { exact: true })).toBeVisible();
 
