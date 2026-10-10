@@ -834,6 +834,7 @@ model Payment {
   paidAt      DateTime?
   refundedAt  DateTime?
   refundRef   String?
+  refundedAmount Decimal?      @db.Decimal(14, 2) // the part returned (80% of a consent request fee)
   createdAt   DateTime         @default(now())
   earning     EarningEntry?
 
@@ -858,7 +859,8 @@ model EarningEntry {
   request     ConsentRequest   @relation(fields: [requestId], references: [id])
   paymentId   String           @unique
   payment     Payment          @relation(fields: [paymentId], references: [id])
-  amount      Decimal          @db.Decimal(14, 2)
+  amount      Decimal          @db.Decimal(14, 2) // the owner's share (80% of the fee), what a yes pays out
+  grossAmount Decimal?         @db.Decimal(14, 2) // the full consent request fee the requester paid
   currency    String
   status      EarningStatus    @default(HELD)
   reversedReason String?
