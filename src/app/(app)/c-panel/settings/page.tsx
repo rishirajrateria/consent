@@ -98,6 +98,7 @@ export default async function ConsenterSettingsPage({ searchParams }: PageProps<
   ]);
   const tierFor = new Map(tiers.map((t) => [t.intentCategoryId, t.amount.toString()]));
 
+  // The matrix is no longer in the bottom nav (Find took its place), so keep it the first shortcut.
   const shortcuts = [
     ["/c-panel/matrix", "Consent matrix", Grid3x3],
     ["/c-panel/rules", "Standing rules", Zap],

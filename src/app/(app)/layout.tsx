@@ -30,7 +30,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     items = [
       { href: "/c-panel", label: "Home", icon: "home" },
       { href: "/c-panel/requests", label: "Requests", icon: "inbox" },
-      { href: "/c-panel/matrix", label: "Matrix", icon: "grid" },
+      // Find (search people to ask) took Matrix's place; the matrix is the first shortcut in Settings and on Home.
+      { href: "/find", label: "Find", icon: "search" },
       { href: "/c-panel/settings", label: "Settings", icon: "settings" },
       { href: "/notifications", label: "Alerts", icon: "bell", badge: unread },
     ];

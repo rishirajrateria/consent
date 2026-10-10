@@ -73,13 +73,17 @@ test("Ask and answer, approve sharing only email, and a meeting in both calendar
   expect(snap.consenter.email).toBe("licensing@nightwatch.example");
   expect(snap.consenter.manager).toBeNull();
 
+  // The meeting is booked just after the contacts are shared, so wait for it too.
+  await expect
+    .poll(async () => db.requestMeeting.count({ where: { requestId, status: "SCHEDULED" } }))
+    .toBe(1);
   const meeting = await db.requestMeeting.findFirst({ where: { requestId, status: "SCHEDULED" } });
   expect(meeting).toBeTruthy();
 
   // ── Each side gets its own invite that lists only them ───────
-  const invites = await db.outboxMessage.findMany({
-    where: { body: { contains: `UID:${meeting!.id}@consent.app` } },
-  });
+  const inviteWhere = { body: { contains: `UID:${meeting!.id}@consent.app` } };
+  await expect.poll(async () => db.outboxMessage.count({ where: inviteWhere })).toBeGreaterThanOrEqual(2);
+  const invites = await db.outboxMessage.findMany({ where: inviteWhere });
   const ownerInvite = invites.find((m) => m.to === "licensing@nightwatch.example");
   const clipsInvite = invites.find((m) => m.to === "casey@acmeclips.example");
   expect(ownerInvite).toBeTruthy();

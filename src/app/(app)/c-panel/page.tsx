@@ -4,9 +4,11 @@ import { db } from "@/lib/db";
 import { PageHeader, Card, ScoreRing, StatusBadge, VerifiedBadge, Alert, ButtonLink } from "@/components/ui";
 import { fmtDateTime } from "@/lib/utils";
 import type { RequestStatus } from "@prisma/client";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Search } from "lucide-react";
 import { requestCapacity } from "@/lib/capacity";
 import { OpensAgain } from "./settings/request-limits";
+import { ASKER_MOVE, actingFor, askerStep, askingSeats, madeBy, seatsQuery, sentInclude } from "./requests/sent-step";
+import { SentLink, StepLine } from "./requests/sent-list";
 
 export const metadata = { title: "Consenter panel" };
 
@@ -15,10 +17,10 @@ const NEEDS_ACTION: RequestStatus[] = ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE
 
 export default async function ConsenterHome({ searchParams }: PageProps<"/c-panel">) {
   const sp = await searchParams;
-  const { consenter } = await requireConsenter();
+  const { consenter, session } = await requireConsenter();
   // Only requests actually sent to this profile, matching /c-panel/requests.
   const sent = { consenterId: consenter.id, submittedAt: { not: null } };
-  const [pending, inNegotiation, activeGrants, matrixCount, recent, capacity] = await Promise.all([
+  const [pending, inNegotiation, activeGrants, matrixCount, recent, capacity, madeRecent, yourMove, seats, drafts] = await Promise.all([
     db.consentRequest.count({ where: { ...sent, status: { in: NEEDS_ACTION } } }),
     db.consentRequest.count({ where: { ...sent, status: "IN_NEGOTIATION" } }),
     // Same filter as the "Grants" tab on /c-panel/requests.
@@ -32,7 +34,20 @@ export default async function ConsenterHome({ searchParams }: PageProps<"/c-pane
     }),
     // The owner's request limits: are new requests paused right now?
     requestCapacity(consenter.id),
+    // Requests this person made from any of their requester profiles, matching the "Sent" tab.
+    db.consentRequest.findMany({
+      where: { ...madeBy(session.userId), status: { not: "DRAFT" } },
+      orderBy: { updatedAt: "desc" },
+      take: 3,
+      include: sentInclude,
+    }),
+    // Only profiles where this person can act, matching the count on the "Sent" tab.
+    db.consentRequest.count({ where: { ...actingFor(session.userId), ...ASKER_MOVE } }),
+    db.requesterMember.findMany(seatsQuery(session.userId)),
+    // Unfinished requests, matching the "Drafts" list on the "Sent" tab.
+    db.consentRequest.count({ where: { ...actingFor(session.userId), status: "DRAFT" } }),
   ]);
+  const { manyProfiles, viewOnly } = askingSeats(seats);
 
   return (
     <div className="space-y-6">
@@ -118,23 +133,86 @@ export default async function ConsenterHome({ searchParams }: PageProps<"/c-pane
         </Card>
       )}
 
-      <Card className="space-y-1 p-0 sm:p-0">
-        <div className="px-5 pt-5 text-sm font-semibold">Recent activity</div>
-        {recent.length === 0 && <div className="px-5 pb-5 pt-2 text-sm text-ink-faint">No requests yet.</div>}
-        <div className="divide-y divide-ink/5">
-          {recent.map((r) => (
-            <Link key={r.id} href={`/c-panel/requests/${r.id}`} className="flex items-center gap-3 px-5 py-3.5 hover:bg-ink/[0.03]">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">
-                  #{r.number} · {r.requester.displayName}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="space-y-1 p-0 sm:p-0">
+          <div className="flex items-baseline justify-between gap-3 px-5 pt-5">
+            <h2 className="text-sm font-semibold">Requests you&apos;ve received</h2>
+            {recent.length > 0 && (
+              <Link href="/c-panel/requests?tab=All" className="text-xs font-medium text-ink-soft underline underline-offset-4 hover:text-ink">
+                See all
+              </Link>
+            )}
+          </div>
+          {recent.length === 0 && <div className="px-5 pb-5 pt-2 text-sm text-ink-faint">No requests yet.</div>}
+          <div className="divide-y divide-ink/5">
+            {recent.map((r) => (
+              <Link key={r.id} href={`/c-panel/requests/${r.id}`} className="flex items-center gap-3 px-5 py-3.5 hover:bg-ink/[0.03]">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    #{r.number} · {r.requester.displayName}
+                  </div>
+                  <div className="text-xs text-ink-faint">{fmtDateTime(r.updatedAt)}</div>
                 </div>
-                <div className="text-xs text-ink-faint">{fmtDateTime(r.updatedAt)}</div>
-              </div>
-              <StatusBadge status={r.status} />
-            </Link>
-          ))}
-        </div>
-      </Card>
+                <StatusBadge status={r.status} />
+              </Link>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="flex flex-col p-0 sm:p-0">
+          <div className="flex items-baseline justify-between gap-3 px-5 pt-5">
+            <div>
+              <h2 className="text-sm font-semibold">Requests you&apos;ve made</h2>
+              {yourMove > 0 && <div className="text-xs font-medium text-ink">{yourMove} waiting on you</div>}
+            </div>
+            {madeRecent.length > 0 && (
+              <Link href="/c-panel/requests?tab=Sent" className="text-xs font-medium text-ink-soft underline underline-offset-4 hover:text-ink">
+                See all
+              </Link>
+            )}
+          </div>
+          {madeRecent.length === 0 && drafts === 0 && (
+            <div className="px-5 pt-2 text-sm text-ink-faint">
+              You haven&apos;t asked anyone yet. Search for someone by name, then ask for their permission.
+            </div>
+          )}
+          {madeRecent.length === 0 && drafts > 0 && (
+            <div className="px-5 pt-2 text-sm text-ink-faint">Nothing sent yet. Finish your draft and send it.</div>
+          )}
+          <div className="mt-1 divide-y divide-ink/5">
+            {madeRecent.map((r) => (
+              <SentLink
+                key={r.id}
+                request={r}
+                label={`Open request #${r.number} to ${r.consenter.displayName}`}
+                className="flex items-center gap-3 px-5 py-3.5 hover:bg-ink/[0.03]"
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="truncate text-sm font-medium">
+                    #{r.number} · {r.consenter.displayName}
+                  </div>
+                  <StepLine step={askerStep(r)} canAct={!viewOnly.has(r.requesterId)} />
+                  {manyProfiles && <div className="text-xs text-ink-faint">as {r.requester.displayName}</div>}
+                </div>
+                <StatusBadge status={r.status} />
+              </SentLink>
+            ))}
+          </div>
+          {drafts > 0 && (
+            <div className="px-5 pt-3 text-sm">
+              <Link href="/c-panel/requests?tab=Sent#drafts-title" className="font-medium underline underline-offset-4">
+                {drafts === 1 ? "1 unfinished request" : `${drafts} unfinished requests`}
+              </Link>
+              <span className="text-ink-faint"> · nobody sees these until you send them</span>
+            </div>
+          )}
+          <div className="mt-auto px-5 pb-5 pt-3">
+            <ButtonLink href="/find" className="w-full sm:w-auto">
+              <Search className="size-4" aria-hidden /> Find someone to ask
+            </ButtonLink>
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }

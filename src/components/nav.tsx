@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Home, Inbox, Bell, Menu, Plus, Award, Compass, LayoutGrid, Settings, Shield,
+  Home, Inbox, Bell, Menu, Plus, Award, Compass, LayoutGrid, Settings, Shield, Search,
   type LucideIcon,
 } from "lucide-react";
 
@@ -19,6 +19,7 @@ const ICONS: Record<string, LucideIcon> = {
   grid: LayoutGrid,
   settings: Settings,
   shield: Shield,
+  search: Search,
 };
 
 export type NavItem = {

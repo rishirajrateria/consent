@@ -1,18 +1,21 @@
 import Link from "next/link";
 import { requireConsenter } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PageHeader, Card, StatusBadge, EmptyState } from "@/components/ui";
+import { PageHeader, Card, StatusBadge, EmptyState, ButtonLink } from "@/components/ui";
 import { LocalTime } from "@/components/local-time";
 import { fmtDateTime, cn } from "@/lib/utils";
 import { getSettings } from "@/lib/settings";
 import { OPEN_STATUSES, requestWindows } from "@/lib/request-window";
 import type { Prisma } from "@prisma/client";
-import { Inbox, Timer } from "lucide-react";
+import { Inbox, Search, Send, Timer } from "lucide-react";
+import { ASKER_MOVE, actingFor, askerStep, askingSeats, madeBy, seatsQuery, sentInclude, type SentRequest } from "./sent-step";
+import { SentLink, StepLine } from "./sent-list";
 
-export const metadata = { title: "Incoming requests" };
+export const metadata = { title: "Requests" };
 
-// Each tab adds its own filter on top of "sent to this profile". Drafts the
-// requester never sent (no submittedAt) are never shown to the owner.
+// "Received" sub-filters. Each adds its own filter on top of "sent to this
+// profile". Drafts the requester never sent (no submittedAt) are never shown
+// to the owner.
 const TABS: [string, Prisma.ConsentRequestWhereInput][] = [
   ["Needs action", { status: { in: ["PENDING", "DEAL_AGREED", "AGREEMENT_MODE_PENDING", "LEGAL_AGREEMENT_PENDING"] } }],
   ["Negotiation", { status: "IN_NEGOTIATION" }],
@@ -22,38 +25,101 @@ const TABS: [string, Prisma.ConsentRequestWhereInput][] = [
   ["All", { status: { not: "DRAFT" } }],
 ];
 
+// ?tab=Sent shows the requests this person made; any other tab is a "Received" filter.
+const SENT_TAB = "Sent";
+
 export default async function ConsenterRequests({ searchParams }: PageProps<"/c-panel/requests">) {
   const sp = await searchParams;
-  const { consenter } = await requireConsenter();
+  const { consenter, session } = await requireConsenter();
   const wanted = typeof sp.tab === "string" ? sp.tab.trim().toLowerCase() : "";
-  const [tab, tabWhere] = TABS.find(([t]) => t.toLowerCase() === wanted) ?? TABS[0];
-  const [rows, settings] = await Promise.all([
-    db.consentRequest.findMany({
-      where: {
-        consenterId: consenter.id,
-        submittedAt: { not: null },
-        ...tabWhere,
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 100,
-      include: { requester: true },
-    }),
+  const showSent = wanted === SENT_TAB.toLowerCase();
+  const received = { consenterId: consenter.id, submittedAt: { not: null } };
+
+  const [needsAction, yourMove, settings] = await Promise.all([
+    // Same count as the "Needs action" tile on the owner home.
+    db.consentRequest.count({ where: { ...received, ...TABS[0][1] } }),
+    // Only profiles where this person can act: a view-only seat never has a move.
+    db.consentRequest.count({ where: { ...actingFor(session.userId), ...ASKER_MOVE } }),
     getSettings(),
   ]);
-  // Each open request expires a set number of days after its last action from either side.
-  const windows = await requestWindows(
-    rows.filter((r) => OPEN_STATUSES.includes(r.status)),
-    settings.slaDays,
-  );
+
+  const sent = showSent ? await loadSent(session.userId, settings.slaDays) : null;
+  const inbox = showSent ? null : await loadReceived(consenter.id, wanted, settings.slaDays);
+
+  const views = [
+    { label: "Received", href: "/c-panel/requests", count: needsAction, note: "need action", active: !showSent },
+    { label: SENT_TAB, href: `/c-panel/requests?tab=${SENT_TAB}`, count: yourMove, note: "waiting on you", active: showSent },
+  ];
 
   return (
     <div className="space-y-6">
       <PageHeader
         kicker={consenter.displayName}
-        title="Incoming requests"
-        desc={`Each open request expires ${settings.slaDays} days after its last action from either side. If it expires waiting for your answer, your Consent Score drops.`}
+        title="Requests"
+        desc={
+          sent
+            ? `Requests you've made to other people. Each open request expires ${settings.slaDays} days after its last action from either side.`
+            : `Each open request expires ${settings.slaDays} days after its last action from either side. If it expires waiting for your answer, your Consent Score drops.`
+        }
+        action={
+          sent && sent.rows.length > 0 ? (
+            <ButtonLink href="/find" size="sm">
+              <Search className="size-4" aria-hidden /> Find someone to ask
+            </ButtonLink>
+          ) : undefined
+        }
       />
-      <div className="flex gap-1 overflow-x-auto">
+
+      <nav aria-label="Requests" className="flex gap-6 border-b hairline">
+        {views.map((v) => (
+          <Link
+            key={v.label}
+            href={v.href}
+            aria-current={v.active ? "page" : undefined}
+            className={cn(
+              "-mb-px flex items-center gap-2 border-b-2 px-1 pb-2.5 text-sm font-semibold transition-colors",
+              v.active ? "border-ink text-ink" : "border-transparent text-ink-soft hover:text-ink",
+            )}
+          >
+            {v.label}
+            {v.count > 0 && (
+              <span className="rounded-full bg-ink/10 px-1.5 py-0.5 text-[11px] font-semibold leading-none tabular-nums text-ink">
+                {v.count}
+                <span className="sr-only"> {v.note}</span>
+              </span>
+            )}
+          </Link>
+        ))}
+      </nav>
+
+      {inbox && <ReceivedList {...inbox} />}
+      {sent && <SentList {...sent} />}
+    </div>
+  );
+}
+
+// ── Received: requests sent to this owner profile ──────────────
+
+async function loadReceived(consenterId: string, wanted: string, slaDays: number) {
+  const [tab, tabWhere] = TABS.find(([t]) => t.toLowerCase() === wanted) ?? TABS[0];
+  const rows = await db.consentRequest.findMany({
+    where: { consenterId, submittedAt: { not: null }, ...tabWhere },
+    orderBy: { updatedAt: "desc" },
+    take: 100,
+    include: { requester: true },
+  });
+  // Each open request expires a set number of days after its last action from either side.
+  const windows = await requestWindows(
+    rows.filter((r) => OPEN_STATUSES.includes(r.status)),
+    slaDays,
+  );
+  return { tab, rows, windows };
+}
+
+function ReceivedList({ tab, rows, windows }: Awaited<ReturnType<typeof loadReceived>>) {
+  return (
+    <>
+      <nav aria-label="Filter received requests" className="flex gap-1 overflow-x-auto">
         {TABS.map(([t]) => (
           <Link
             key={t}
@@ -64,7 +130,7 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
             {t}
           </Link>
         ))}
-      </div>
+      </nav>
       {rows.length === 0 ? (
         <EmptyState icon={Inbox} title="Nothing here" />
       ) : (
@@ -81,20 +147,134 @@ export default async function ConsenterRequests({ searchParams }: PageProps<"/c-
                     {r.assetTypeNames.slice(0, 3).join(", ")} · {fmtDateTime(r.updatedAt)}
                   </div>
                 </div>
-                {windows.has(r.id) && (
-                  <span className="flex items-center gap-1 text-xs text-ink-soft">
-                    <Timer className="size-3.5 shrink-0" aria-hidden />
-                    <span>
-                      Expires <LocalTime iso={windows.get(r.id)!.expiresAt.toISOString()} />
-                    </span>
-                  </span>
-                )}
+                <Expiry at={windows.get(r.id)?.expiresAt} />
                 <StatusBadge status={r.status} />
               </Card>
             </Link>
           ))}
         </div>
       )}
-    </div>
+    </>
+  );
+}
+
+// ── Sent: requests this person made from any of their requester profiles ──
+
+async function loadSent(userId: string, slaDays: number) {
+  const [rows, drafts, seats] = await Promise.all([
+    // Everything sent from any profile this person is on, view-only seats included.
+    db.consentRequest.findMany({
+      where: { ...madeBy(userId), status: { not: "DRAFT" } },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      include: sentInclude,
+    }),
+    // Drafts only from profiles where this person can finish and send them.
+    db.consentRequest.findMany({
+      where: { ...actingFor(userId), status: "DRAFT" },
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+      include: sentInclude,
+    }),
+    db.requesterMember.findMany(seatsQuery(userId)),
+  ]);
+  const windows = await requestWindows(
+    rows.filter((r) => OPEN_STATUSES.includes(r.status)),
+    slaDays,
+  );
+  return { rows, drafts, windows, ...askingSeats(seats) };
+}
+
+function SentList({ rows, drafts, windows, manyProfiles, viewOnly }: Awaited<ReturnType<typeof loadSent>>) {
+  return (
+    <>
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={Send}
+          title={drafts.length > 0 ? "Nothing sent yet." : "You haven't asked anyone yet."}
+          desc={
+            drafts.length > 0
+              ? "Finish a draft below and send it, or find someone else to ask."
+              : "Search for someone by name, then ask for their permission."
+          }
+          action={
+            <ButtonLink href="/find">
+              <Search className="size-4" aria-hidden /> Find someone to ask
+            </ButtonLink>
+          }
+        />
+      ) : (
+        <div className="space-y-2">
+          {rows.map((r) => (
+            <SentRow
+              key={r.id}
+              r={r}
+              manyProfiles={manyProfiles}
+              canAct={!viewOnly.has(r.requesterId)}
+              expiresAt={windows.get(r.id)?.expiresAt}
+            />
+          ))}
+        </div>
+      )}
+      {drafts.length > 0 && (
+        <section aria-labelledby="drafts-title" className="space-y-2">
+          <div>
+            <h2 id="drafts-title" className="text-sm font-semibold">Drafts</h2>
+            <p className="text-xs text-ink-faint">Nobody sees these until you send them.</p>
+          </div>
+          {drafts.map((r) => (
+            <SentRow key={r.id} r={r} manyProfiles={manyProfiles} canAct />
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
+function SentRow({
+  r,
+  manyProfiles,
+  canAct,
+  expiresAt,
+}: {
+  r: SentRequest;
+  manyProfiles: boolean;
+  canAct: boolean;
+  expiresAt?: Date;
+}) {
+  const owner = r.consenter.displayName;
+  return (
+    <SentLink request={r} label={`Open request #${r.number} to ${owner}`}>
+      <Card className="flex flex-wrap items-center gap-3 py-4 transition-all group-hover:shadow-glass-lg">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-ink/5 font-semibold">{owner.charAt(0)}</div>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="truncate text-sm font-medium">#{r.number} · {owner}</div>
+          <StepLine step={askerStep(r)} canAct={canAct} />
+          <div className="text-xs text-ink-faint">
+            {[
+              r.assetTypeNames.slice(0, 3).join(", "),
+              fmtDateTime(r.updatedAt),
+              manyProfiles ? `as ${r.requester.displayName}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+        <Expiry at={expiresAt} />
+        <StatusBadge status={r.status} />
+      </Card>
+    </SentLink>
+  );
+}
+
+function Expiry({ at }: { at?: Date }) {
+  if (!at) return null;
+  return (
+    <span className="flex items-center gap-1 text-xs text-ink-soft">
+      <Timer className="size-3.5 shrink-0" aria-hidden />
+      <span>
+        Expires <LocalTime iso={at.toISOString()} />
+      </span>
+    </span>
   );
 }
